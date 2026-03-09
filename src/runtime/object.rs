@@ -196,7 +196,7 @@ impl ObjectHeader {
     #[inline]
     pub fn mtag(&self) -> MemoryTag {
         // Safety: We only store valid MemoryTag values
-        unsafe { std::mem::transmute(((self.header_bits >> 1) & 0x7) as u8) }
+        unsafe { core::mem::transmute(((self.header_bits >> 1) & 0x7) as u8) }
     }
 }
 
@@ -241,7 +241,7 @@ impl JSObject {
         if id >= ClassId::User as u8 {
             ClassId::User
         } else {
-            unsafe { std::mem::transmute::<u8, ClassId>(id) }
+            unsafe { core::mem::transmute::<u8, ClassId>(id) }
         }
     }
 

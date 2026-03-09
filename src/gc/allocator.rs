@@ -19,6 +19,8 @@
 //!
 //! All allocations are word-aligned and have a memory tag in the first word.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use crate::value::WORD_SIZE;
 
 /// Memory block tags - stored in the first few bits of each block header
@@ -92,7 +94,7 @@ impl BlockHeader {
     #[inline]
     pub const fn tag(&self) -> MemoryTag {
         // SAFETY: We only store valid MemoryTag values
-        unsafe { std::mem::transmute(((self.bits >> 1) & 0x7) as u8) }
+        unsafe { core::mem::transmute(((self.bits >> 1) & 0x7) as u8) }
     }
 
     /// Get the block size in words (excluding header)
@@ -224,7 +226,7 @@ impl Heap {
 
         // Zero the data portion (header is already set)
         unsafe {
-            std::ptr::write_bytes(ptr, 0, size);
+            core::ptr::write_bytes(ptr, 0, size);
         }
 
         Some(ptr)

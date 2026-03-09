@@ -6,6 +6,7 @@ use crate::runtime::FunctionBytecode;
 use crate::value::Value;
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::Stack;
+use alloc::{string::String, vec::Vec, vec, format, string::ToString};
 
 // Native function implementations and format helpers (defined in natives.rs)
 use super::natives::*;
@@ -33,6 +34,7 @@ impl Interpreter {
             for_in_iterators: Vec::new(),
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
+            global_vars: Vec::new(),
             error_objects: Vec::new(),
             regex_objects: Vec::new(),
             typed_arrays: Vec::new(),
@@ -42,6 +44,7 @@ impl Interpreter {
             timers: Vec::new(),
             next_timer_id: 1,
             gc_count: 0,
+            random_seed: 12345,
         };
         interp.register_builtins();
         interp
@@ -61,6 +64,7 @@ impl Interpreter {
             for_in_iterators: Vec::new(),
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
+            global_vars: Vec::new(),
             error_objects: Vec::new(),
             regex_objects: Vec::new(),
             typed_arrays: Vec::new(),
@@ -70,6 +74,7 @@ impl Interpreter {
             timers: Vec::new(),
             next_timer_id: 1,
             gc_count: 0,
+            random_seed: 12345,
         };
         interp.register_builtins();
         interp
@@ -824,10 +829,10 @@ impl Interpreter {
                     frame.pc += 2;
 
                     // Set the captured variable in the closure
-                    if let Some(closure_idx) = frame.closure_idx
-                        && let Some(closure) = self.get_closure_mut(closure_idx as u32)
-                    {
-                        closure.set_var(idx, val);
+                    if let Some(closure_idx) = frame.closure_idx {
+                        if let Some(closure) = self.get_closure_mut(closure_idx as u32) {
+                            closure.set_var(idx, val);
+                        }
                     }
                 }
 
@@ -1279,10 +1284,10 @@ impl Interpreter {
                     }
 
                     // Check if we've reached the target depth for a nested call_value
-                    if let Some(target_depth) = self.nested_call_target_depth
-                        && self.call_stack.len() == target_depth
-                    {
-                        return Ok(final_result);
+                    if let Some(target_depth) = self.nested_call_target_depth {
+                        if self.call_stack.len() == target_depth {
+                            return Ok(final_result);
+                        }
                     }
 
                     // Otherwise, push the result for the caller and continue the loop (no recursion!)
@@ -1315,10 +1320,10 @@ impl Interpreter {
                     }
 
                     // Check if we've reached the target depth for a nested call_value
-                    if let Some(target_depth) = self.nested_call_target_depth
-                        && self.call_stack.len() == target_depth
-                    {
-                        return Ok(final_result);
+                    if let Some(target_depth) = self.nested_call_target_depth {
+                        if self.call_stack.len() == target_depth {
+                            return Ok(final_result);
+                        }
                     }
 
                     // Otherwise, push the result for the caller and continue the loop (no recursion!)
@@ -1553,7 +1558,8 @@ impl Interpreter {
                             continue;
                         }
 
-                        // Check if this is the RegExp constructor
+                        // Check if this is the RegExp constructor (requires std/regex)
+                        #[cfg(feature = "std")]
                         if builtin_idx == BUILTIN_REGEXP {
                             // Get pattern from first argument
                             let pattern = if let Some(pattern_val) = args.first() {
@@ -1665,15 +1671,16 @@ impl Interpreter {
                             let mut typed_arr = TypedArrayObject::new(kind, length);
 
                             // If created from an array, copy values
-                            if let Some(src_val) = args.first()
-                                && let Some(arr_idx) = src_val.to_array_idx()
-                                && let Some(arr) = self.arrays.get(arr_idx as usize)
-                            {
-                                for (i, v) in arr.iter().enumerate() {
-                                    if i >= length {
-                                        break;
+                            if let Some(src_val) = args.first() {
+                                if let Some(arr_idx) = src_val.to_array_idx() {
+                                    if let Some(arr) = self.arrays.get(arr_idx as usize) {
+                                        for (i, v) in arr.iter().enumerate() {
+                                            if i >= length {
+                                                break;
+                                            }
+                                            typed_arr.set(i, *v);
+                                        }
                                     }
-                                    typed_arr.set(i, *v);
                                 }
                             }
 
@@ -1949,6 +1956,7 @@ impl Interpreter {
                         "[object]".to_string()
                     };
 
+                    #[cfg(feature = "std")]
                     println!("{}", output);
                 }
 
@@ -2024,6 +2032,11 @@ impl Interpreter {
                         _ => self.get_native_func(name),
                     };
 
+                    let val = val.or_else(|| {
+                        // Check user-defined globals (set via SetGlobal / top-level function decls)
+                        self.global_vars.iter().rev().find(|(n, _)| n == name).map(|(_, v)| *v)
+                    });
+
                     if let Some(v) = val {
                         self.stack.push(v);
                     } else {
@@ -2031,6 +2044,48 @@ impl Interpreter {
                             "{} is not defined",
                             name
                         )));
+                    }
+                }
+
+                // SetGlobal - store top-level variable by name (16-bit constant index)
+                op if op == OpCode::SetGlobal as u8 => {
+                    let frame = self.call_stack.last_mut().unwrap();
+                    let bytecode = unsafe { &*frame.bytecode };
+                    let bc = &bytecode.bytecode;
+                    let name_idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]);
+                    frame.pc += 2;
+
+                    let name = bytecode
+                        .constants
+                        .get(name_idx as usize)
+                        .and_then(|v| {
+                            if v.is_string() {
+                                let str_idx = v.to_string_idx()?;
+                                bytecode
+                                    .string_constants
+                                    .get(str_idx as usize)
+                                    .map(|s| s.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .ok_or_else(|| {
+                            InterpreterError::InternalError(format!(
+                                "invalid global name constant: {}",
+                                name_idx
+                            ))
+                        })?;
+
+                    // Peek at stack top (SetGlobal does NOT consume the value;
+                    // PutLoc follows and consumes it)
+                    let val = self.stack.peek().unwrap_or_default();
+
+                    // Update or insert into global_vars
+                    let name_owned = String::from(name);
+                    if let Some(entry) = self.global_vars.iter_mut().find(|(n, _)| *n == name_owned) {
+                        entry.1 = val;
+                    } else {
+                        self.global_vars.push((name_owned, val));
                     }
                 }
 

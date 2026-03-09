@@ -3,11 +3,16 @@
 //! The Context is the main entry point for the JavaScript engine.
 //! It owns all memory and provides the API for evaluating JavaScript code.
 
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 use crate::gc::Heap;
 use crate::parser::compiler::{CompileError, Compiler};
 use crate::runtime::FunctionBytecode;
 use crate::value::Value;
 use crate::vm::Interpreter;
+use crate::vm::types::NativeFn;
 
 /// JavaScript execution context
 ///
@@ -25,6 +30,11 @@ pub struct Context {
 
     /// Whether we're in the process of handling out-of-memory
     in_out_of_memory: bool,
+
+    /// All bytecodes evaluated so far, kept alive to prevent dangling pointers.
+    /// FClosure emits raw pointers into FunctionBytecode.inner_functions; those
+    /// pointers must remain valid for the lifetime of the Context.
+    bytecodes: Vec<Box<FunctionBytecode>>,
 }
 
 /// Error from JavaScript evaluation
@@ -36,16 +46,14 @@ pub enum EvalError {
     RuntimeError(String),
 }
 
-impl std::fmt::Display for EvalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for EvalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             EvalError::CompileError(e) => write!(f, "Compile error: {}", e),
             EvalError::RuntimeError(msg) => write!(f, "Runtime error: {}", msg),
         }
     }
 }
-
-impl std::error::Error for EvalError {}
 
 impl From<CompileError> for EvalError {
     fn from(e: CompileError) -> Self {
@@ -101,6 +109,7 @@ impl Context {
             interpreter: Interpreter::new(),
             current_exception: Value::undefined(),
             in_out_of_memory: false,
+            bytecodes: Vec::new(),
         }
     }
 
@@ -115,13 +124,16 @@ impl Context {
         // Compile the source code
         let compiled = Compiler::new(source).compile()?;
 
-        // Convert to FunctionBytecode for the interpreter
-        let bytecode = Self::compiled_to_bytecode(compiled);
-
-        // Execute the bytecode
-        self.interpreter
-            .execute(&bytecode)
-            .map_err(|e| EvalError::RuntimeError(e.to_string()))
+        // Convert to FunctionBytecode for the interpreter and box it so it has
+        // a stable heap address.  FClosure stores raw pointers into
+        // inner_functions; those pointers must remain valid for as long as the
+        // Context lives, so we keep every bytecode we execute in self.bytecodes.
+        let bytecode = Box::new(Self::compiled_to_bytecode(compiled));
+        let result = self.interpreter
+            .execute(&*bytecode)
+            .map_err(|e| EvalError::RuntimeError(e.to_string()));
+        self.bytecodes.push(bytecode);
+        result
     }
 
     /// Convert CompiledFunction to FunctionBytecode (recursive for inner functions)
@@ -198,6 +210,37 @@ impl Context {
             regex_objects: interp_stats.regex_objects,
             typed_arrays: interp_stats.typed_arrays,
         }
+    }
+
+    /// Register a native function callable from JavaScript
+    ///
+    /// # Arguments
+    /// * `name` - Function name as it will appear in JavaScript
+    /// * `func` - The native function implementation
+    /// * `arity` - Expected number of arguments
+    ///
+    /// # Returns
+    /// The index of the registered function
+    pub fn register_native(&mut self, name: &'static str, func: NativeFn, arity: u8) -> u32 {
+        self.interpreter.register_native(name, func, arity)
+    }
+
+    /// Reset user-defined state (global vars, closures, bytecodes) while keeping
+    /// native function registrations intact.  Call this before loading a new script
+    /// into the same Context to avoid OOM from accumulating bytecodes.
+    pub fn reset_user_state(&mut self) {
+        self.interpreter.global_vars.clear();
+        self.interpreter.closures.clear();
+        self.interpreter.arrays.clear();
+        self.interpreter.objects.clear();
+        self.interpreter.runtime_strings.clear();
+        self.interpreter.error_objects.clear();
+        self.interpreter.timers.clear();
+        self.interpreter.stack.clear();
+        self.interpreter.call_stack.clear();
+        self.interpreter.exception_handlers.clear();
+        self.bytecodes.clear();
+        self.current_exception = Value::undefined();
     }
 
     /// Get the current exception (if any)

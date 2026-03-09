@@ -4,7 +4,8 @@
 
 use super::interpreter::*;
 use crate::runtime::FunctionBytecode;
-use crate::value::Value;
+use crate::value::{Float, Value, float_to_value, format_float};
+use alloc::{string::String, vec::Vec, vec, format, string::ToString};
 
 // =============================================================================
 // Native function implementations
@@ -721,12 +722,13 @@ pub(crate) fn native_array_flat(
     fn flatten_recursive(interp: &Interpreter, arr: &[Value], depth: usize) -> Vec<Value> {
         let mut result = Vec::new();
         for elem in arr {
-            if depth > 0
-                && let Some(nested_idx) = elem.to_array_idx()
-                && let Some(nested) = interp.arrays.get(nested_idx as usize)
-            {
-                result.extend(flatten_recursive(interp, nested, depth - 1));
-                continue;
+            if depth > 0 {
+                if let Some(nested_idx) = elem.to_array_idx() {
+                    if let Some(nested) = interp.arrays.get(nested_idx as usize) {
+                        result.extend(flatten_recursive(interp, nested, depth - 1));
+                        continue;
+                    }
+                }
             }
             result.push(*elem);
         }
@@ -795,7 +797,7 @@ pub(crate) fn native_array_fill(
 
 /// parseInt - parse string to integer
 pub(crate) fn native_parse_int(
-    _interp: &mut Interpreter,
+    interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
@@ -803,9 +805,25 @@ pub(crate) fn native_parse_int(
 
     if let Some(n) = val.to_i32() {
         Ok(Value::int(n))
+    } else if let Some(f) = val.to_f32() {
+        if f.is_nan() || f.is_infinite() {
+            Ok(Value::nan())
+        } else {
+            Ok(Value::int(f as i32))
+        }
+    } else if let Some(str_idx) = val.to_string_idx() {
+        if let Some(s) = interp.get_string_by_idx(str_idx) {
+            let s = s.trim();
+            if let Ok(n) = s.parse::<i32>() {
+                Ok(Value::int(n))
+            } else {
+                Ok(Value::nan())
+            }
+        } else {
+            Ok(Value::nan())
+        }
     } else {
-        // Return NaN for non-parseable values (use 0 for now since we don't have NaN)
-        Ok(Value::int(0))
+        Ok(Value::nan())
     }
 }
 
@@ -817,16 +835,17 @@ pub(crate) fn native_is_nan(
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
 
-    // We don't have real NaN support yet, so just check if it's a number
     if val.to_i32().is_some() {
         Ok(Value::bool(false))
+    } else if let Some(f) = val.to_f32() {
+        Ok(Value::bool(f.is_nan()))
     } else {
+        // Non-numbers: ToNumber would produce NaN
         Ok(Value::bool(true))
     }
 }
 
-/// parseFloat - parse a string to a number
-/// Since we only have integers, this works like parseInt
+/// parseFloat - parse a string to a float
 pub(crate) fn native_parse_float(
     interp: &mut Interpreter,
     _this: Value,
@@ -834,51 +853,23 @@ pub(crate) fn native_parse_float(
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
 
-    // If it's already a number, return it
-    if let Some(n) = val.to_i32() {
-        return Ok(Value::int(n));
+    if val.is_int() || val.is_float() {
+        return Ok(val);
     }
 
-    // Try to parse as string
-    if let Some(str_idx) = val.to_string_idx()
-        && let Some(s) = interp.get_string_by_idx(str_idx)
-    {
-        // Parse leading numeric portion, treating decimal point
-        let s = s.trim();
-        let mut result = 0i32;
-        let mut negative = false;
-        let mut chars = s.chars().peekable();
-
-        if chars.peek() == Some(&'-') {
-            negative = true;
-            chars.next();
-        } else if chars.peek() == Some(&'+') {
-            chars.next();
-        }
-
-        // Parse integer part
-        while let Some(&c) = chars.peek() {
-            if c.is_ascii_digit() {
-                result = result
-                    .saturating_mul(10)
-                    .saturating_add((c as i32) - ('0' as i32));
-                chars.next();
-            } else if c == '.' {
-                // Skip decimal part (we only have integers)
-                break;
-            } else {
-                break;
+    if let Some(str_idx) = val.to_string_idx() {
+        if let Some(s) = interp.get_string_by_idx(str_idx) {
+            let s = s.trim();
+            if s.is_empty() {
+                return Ok(Value::nan());
+            }
+            if let Ok(f) = s.parse::<Float>() {
+                return Ok(float_to_value(f));
             }
         }
-
-        if negative {
-            result = -result;
-        }
-        return Ok(Value::int(result));
     }
 
-    // Return 0 for non-parseable values (NaN would be proper but we don't have it)
-    Ok(Value::int(0))
+    Ok(Value::nan())
 }
 
 /// isFinite - check if value is finite
@@ -889,9 +880,10 @@ pub(crate) fn native_is_finite(
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
 
-    // Since we only have 31-bit integers, all our numbers are finite
     if val.to_i32().is_some() {
         Ok(Value::bool(true))
+    } else if let Some(f) = val.to_f32() {
+        Ok(Value::bool(f.is_finite()))
     } else {
         Ok(Value::bool(false))
     }
@@ -917,13 +909,14 @@ pub(crate) fn native_number_to_string(
             _ => n.to_string(),
         };
         Ok(interp.create_runtime_string(s))
+    } else if let Some(f) = this.to_f32() {
+        Ok(interp.create_runtime_string(format_float(f)))
     } else {
         Err("toString called on non-number".to_string())
     }
 }
 
 /// Number.prototype.toFixed - format number with fixed decimal places
-/// Since we only have integers, this just pads with zeros
 pub(crate) fn native_number_to_fixed(
     interp: &mut Interpreter,
     this: Value,
@@ -931,12 +924,8 @@ pub(crate) fn native_number_to_fixed(
 ) -> Result<Value, String> {
     let digits = args.first().and_then(|v| v.to_i32()).unwrap_or(0) as usize;
 
-    if let Some(n) = this.to_i32() {
-        let s = if digits > 0 {
-            format!("{}.{}", n, "0".repeat(digits))
-        } else {
-            n.to_string()
-        };
+    if let Some(f) = this.to_number_f32() {
+        let s = format!("{:.prec$}", f, prec = digits);
         Ok(interp.create_runtime_string(s))
     } else {
         Err("toFixed called on non-number".to_string())
@@ -949,18 +938,9 @@ pub(crate) fn native_number_to_exponential(
     this: Value,
     _args: &[Value],
 ) -> Result<Value, String> {
-    if let Some(n) = this.to_i32() {
-        // Simple exponential format for integers
-        if n == 0 {
-            Ok(interp.create_runtime_string("0e+0".to_string()))
-        } else {
-            let abs_n = n.abs();
-            let exp = (abs_n as f64).log10().floor() as i32;
-            let sign = if n < 0 { "-" } else { "" };
-            let mantissa = abs_n / 10_i32.pow(exp as u32);
-            let s = format!("{}{}e+{}", sign, mantissa, exp);
-            Ok(interp.create_runtime_string(s))
-        }
+    if let Some(f) = this.to_number_f32() {
+        let s = format!("{:e}", f);
+        Ok(interp.create_runtime_string(s))
     } else {
         Err("toExponential called on non-number".to_string())
     }
@@ -972,11 +952,11 @@ pub(crate) fn native_number_to_precision(
     this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let _precision = args.first().and_then(|v| v.to_i32()).unwrap_or(1) as usize;
+    let precision = args.first().and_then(|v| v.to_i32()).unwrap_or(1) as usize;
 
-    if let Some(n) = this.to_i32() {
-        // For integers, just return the string representation
-        Ok(interp.create_runtime_string(n.to_string()))
+    if let Some(f) = this.to_number_f32() {
+        let s = format!("{:.prec$}", f, prec = precision.saturating_sub(1));
+        Ok(interp.create_runtime_string(s))
     } else {
         Err("toPrecision called on non-number".to_string())
     }
@@ -1018,11 +998,12 @@ pub(crate) fn native_math_abs(
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
-
     if let Some(n) = val.to_i32() {
-        Ok(Value::int(n.abs()))
+        Ok(Value::int(n.wrapping_abs()))
+    } else if let Some(f) = val.to_f32() {
+        Ok(float_to_value(libm::fabsf(f)))
     } else {
-        Err("Math.abs requires a number".to_string())
+        Ok(Value::nan())
     }
 }
 
@@ -1033,11 +1014,12 @@ pub(crate) fn native_math_floor(
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
-
     if let Some(n) = val.to_i32() {
-        Ok(Value::int(n)) // Already an integer
+        Ok(Value::int(n))
+    } else if let Some(f) = val.to_f32() {
+        Ok(float_to_value(libm::floorf(f)))
     } else {
-        Err("Math.floor requires a number".to_string())
+        Ok(Value::nan())
     }
 }
 
@@ -1048,11 +1030,12 @@ pub(crate) fn native_math_ceil(
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
-
     if let Some(n) = val.to_i32() {
-        Ok(Value::int(n)) // Already an integer
+        Ok(Value::int(n))
+    } else if let Some(f) = val.to_f32() {
+        Ok(float_to_value(libm::ceilf(f)))
     } else {
-        Err("Math.ceil requires a number".to_string())
+        Ok(Value::nan())
     }
 }
 
@@ -1063,20 +1046,22 @@ pub(crate) fn native_math_max(
     args: &[Value],
 ) -> Result<Value, String> {
     if args.is_empty() {
-        return Ok(Value::int(i32::MIN)); // -Infinity for no args
+        return Ok(Value::neg_infinity());
     }
-
-    let mut max = i32::MIN;
+    let mut max = Float::NEG_INFINITY;
     for arg in args {
-        if let Some(n) = arg.to_i32() {
-            if n > max {
-                max = n;
+        if let Some(f) = arg.to_number_f32() {
+            if f.is_nan() {
+                return Ok(Value::nan());
+            }
+            if f > max {
+                max = f;
             }
         } else {
-            return Err("Math.max requires numbers".to_string());
+            return Ok(Value::nan());
         }
     }
-    Ok(Value::int(max))
+    Ok(float_to_value(max))
 }
 
 /// Math.min - minimum of values
@@ -1086,20 +1071,22 @@ pub(crate) fn native_math_min(
     args: &[Value],
 ) -> Result<Value, String> {
     if args.is_empty() {
-        return Ok(Value::int(i32::MAX)); // Infinity for no args
+        return Ok(Value::infinity());
     }
-
-    let mut min = i32::MAX;
+    let mut min = Float::INFINITY;
     for arg in args {
-        if let Some(n) = arg.to_i32() {
-            if n < min {
-                min = n;
+        if let Some(f) = arg.to_number_f32() {
+            if f.is_nan() {
+                return Ok(Value::nan());
+            }
+            if f < min {
+                min = f;
             }
         } else {
-            return Err("Math.min requires numbers".to_string());
+            return Ok(Value::nan());
         }
     }
-    Ok(Value::int(min))
+    Ok(float_to_value(min))
 }
 
 /// Math.round - round to nearest integer
@@ -1109,35 +1096,30 @@ pub(crate) fn native_math_round(
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
-
     if let Some(n) = val.to_i32() {
-        Ok(Value::int(n)) // Already an integer
+        Ok(Value::int(n))
+    } else if let Some(f) = val.to_f32() {
+        Ok(float_to_value(libm::roundf(f)))
     } else {
-        Err("Math.round requires a number".to_string())
+        Ok(Value::nan())
     }
 }
 
-/// Math.sqrt - square root (integer approximation for now)
+/// Math.sqrt - square root
 pub(crate) fn native_math_sqrt(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
-
-    if let Some(n) = val.to_i32() {
-        if n < 0 {
-            Ok(Value::int(0)) // NaN for negative (return 0 for now)
-        } else {
-            // Integer square root
-            Ok(Value::int((n as f64).sqrt() as i32))
-        }
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::sqrtf(f)))
     } else {
-        Err("Math.sqrt requires a number".to_string())
+        Ok(Value::nan())
     }
 }
 
-/// Math.pow - power function (integer only for now)
+/// Math.pow - power function
 pub(crate) fn native_math_pow(
     _interp: &mut Interpreter,
     _this: Value,
@@ -1145,20 +1127,10 @@ pub(crate) fn native_math_pow(
 ) -> Result<Value, String> {
     let base = args.first().copied().unwrap_or_default();
     let exp = args.get(1).copied().unwrap_or_default();
-
-    if let (Some(b), Some(e)) = (base.to_i32(), exp.to_i32()) {
-        if e < 0 {
-            Ok(Value::int(0)) // Integer division for negative exponents
-        } else if e == 0 {
-            Ok(Value::int(1))
-        } else {
-            let result = (b as i64).pow(e as u32);
-            Ok(Value::int(
-                result.min(i32::MAX as i64).max(i32::MIN as i64) as i32
-            ))
-        }
+    if let (Some(b), Some(e)) = (base.to_number_f32(), exp.to_number_f32()) {
+        Ok(float_to_value(libm::powf(b, e)))
     } else {
-        Err("Math.pow requires numbers".to_string())
+        Ok(Value::nan())
     }
 }
 
@@ -1168,9 +1140,8 @@ pub(crate) fn native_math_imul(
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let a = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    let b = args.get(1).and_then(|v| v.to_i32()).unwrap_or(0);
-    // Perform 32-bit multiplication with wrapping
+    let a = args.first().and_then(|v| v.to_number_f32()).unwrap_or(0.0) as i32;
+    let b = args.get(1).and_then(|v| v.to_number_f32()).unwrap_or(0.0) as i32;
     let result = (a as i64 * b as i64) as i32;
     Ok(Value::int(result))
 }
@@ -1181,20 +1152,23 @@ pub(crate) fn native_math_clz32(
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
+    let n = args.first().and_then(|v| v.to_number_f32()).unwrap_or(0.0) as i32;
     let result = (n as u32).leading_zeros() as i32;
     Ok(Value::int(result))
 }
 
-/// Math.fround - round to nearest 32-bit float (integer approximation)
+/// Math.fround - round to nearest 32-bit float
 pub(crate) fn native_math_fround(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    // For integer-only engine, just return the value
-    Ok(Value::int(n))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(Value::float(f)) // Already f32, fround is identity
+    } else {
+        Ok(Value::nan())
+    }
 }
 
 /// Math.trunc - truncate to integer (remove fractional part)
@@ -1203,46 +1177,41 @@ pub(crate) fn native_math_trunc(
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    // For integer-only engine, value is already truncated
-    Ok(Value::int(n))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(n) = val.to_i32() {
+        Ok(Value::int(n))
+    } else if let Some(f) = val.to_f32() {
+        Ok(float_to_value(libm::truncf(f)))
+    } else {
+        Ok(Value::nan())
+    }
 }
 
-/// Math.log2 - base-2 logarithm (integer approximation)
+/// Math.log2 - base-2 logarithm
 pub(crate) fn native_math_log2(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    if n <= 0 {
-        // Return a special value for non-positive
-        Ok(Value::int(-1))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::log2f(f)))
     } else {
-        // Count bits - log2(n) = position of highest set bit
-        let result = 31 - (n as u32).leading_zeros() as i32;
-        Ok(Value::int(result))
+        Ok(Value::nan())
     }
 }
 
-/// Math.log10 - base-10 logarithm (integer approximation)
+/// Math.log10 - base-10 logarithm
 pub(crate) fn native_math_log10(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    if n <= 0 {
-        Ok(Value::int(-1))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::log10f(f)))
     } else {
-        // Approximate log10 by counting decimal digits - 1
-        let mut temp = n;
-        let mut digits = 0;
-        while temp >= 10 {
-            temp /= 10;
-            digits += 1;
-        }
-        Ok(Value::int(digits))
+        Ok(Value::nan())
     }
 }
 
@@ -1252,233 +1221,154 @@ pub(crate) fn native_math_sign(
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    Ok(Value::int(if n > 0 {
-        1
-    } else if n < 0 {
-        -1
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        if f.is_nan() {
+            Ok(Value::nan())
+        } else if f > 0.0 {
+            Ok(Value::int(1))
+        } else if f < 0.0 {
+            Ok(Value::int(-1))
+        } else {
+            Ok(Value::int(0))
+        }
     } else {
-        0
-    }))
+        Ok(Value::nan())
+    }
 }
 
-/// Math.sin - returns sine of a number (approximation for integers)
+/// Math.sin - returns sine of a number (radians)
 pub(crate) fn native_math_sin(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    // Simple approximation: sin is periodic and bounded [-1, 1]
-    // For integers, return 0 for multiples of ~3 (pi), else approximate
-    let n = n % 360; // Treat as degrees roughly
-    if n == 0 || n == 180 || n == -180 {
-        Ok(Value::int(0))
-    } else if n == 90 {
-        Ok(Value::int(1))
-    } else if n == -90 || n == 270 {
-        Ok(Value::int(-1))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::sinf(f)))
     } else {
-        Ok(Value::int(0)) // Simplified
+        Ok(Value::nan())
     }
 }
 
-/// Math.cos - returns cosine of a number (approximation for integers)
+/// Math.cos - returns cosine of a number (radians)
 pub(crate) fn native_math_cos(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    let n = n % 360;
-    if n == 0 {
-        Ok(Value::int(1))
-    } else if n == 90 || n == -90 || n == 270 {
-        Ok(Value::int(0))
-    } else if n == 180 || n == -180 {
-        Ok(Value::int(-1))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::cosf(f)))
     } else {
-        Ok(Value::int(0)) // Simplified
+        Ok(Value::nan())
     }
 }
 
-/// Math.tan - returns tangent of a number (approximation for integers)
+/// Math.tan - returns tangent of a number (radians)
 pub(crate) fn native_math_tan(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    let n = n % 180;
-    if n == 0 {
-        Ok(Value::int(0))
-    } else if n == 45 {
-        Ok(Value::int(1))
-    } else if n == -45 || n == 135 {
-        Ok(Value::int(-1))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::tanf(f)))
     } else {
-        Ok(Value::int(0)) // Simplified for 90 degrees (undefined)
+        Ok(Value::nan())
     }
 }
 
-/// Math.exp - returns e^x (approximation for integers)
+/// Math.exp - returns e^x
 pub(crate) fn native_math_exp(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    if n < 0 {
-        Ok(Value::int(0)) // e^-x < 1
-    } else if n == 0 {
-        Ok(Value::int(1))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::expf(f)))
     } else {
-        // Approximate e^n using integer math
-        let mut result: i32 = 1;
-        for _ in 0..n.min(20) {
-            result = result.saturating_mul(3); // e ≈ 2.718
-        }
-        Ok(Value::int(result))
+        Ok(Value::nan())
     }
 }
 
-/// Math.log - returns natural logarithm (approximation for integers)
+/// Math.log - returns natural logarithm
 pub(crate) fn native_math_log(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let n = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    if n <= 0 {
-        Ok(Value::int(-1)) // NaN or -Infinity
-    } else if n == 1 {
-        Ok(Value::int(0))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::logf(f)))
     } else {
-        // Approximate log by counting powers of e (≈3)
-        let mut temp = n;
-        let mut result = 0;
-        while temp >= 3 {
-            temp /= 3;
-            result += 1;
-        }
-        Ok(Value::int(result))
+        Ok(Value::nan())
     }
 }
 
-/// Math.random - returns a pseudo-random number
+/// Math.random - returns a pseudo-random number in [0, 1)
 pub(crate) fn native_math_random(
-    _interp: &mut Interpreter,
+    interp: &mut Interpreter,
     _this: Value,
     _args: &[Value],
 ) -> Result<Value, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    // Simple pseudo-random using time
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-
-    // Return a value between 0 and 1000 (representing 0.000 to 0.999)
-    // Since we don't have floats, caller can divide by 1000
-    let random = (now % 1000) as i32;
-    Ok(Value::int(random))
+    // Simple LCG PRNG that works in no_std
+    interp.random_seed = interp.random_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let random = ((interp.random_seed >> 33) as u32 % 1_000_000) as Float / 1_000_000.0;
+    Ok(Value::float(random))
 }
 
-/// Math.atan2 - returns arctangent of y/x
+/// Math.atan2 - returns arctangent of y/x (radians)
 pub(crate) fn native_math_atan2(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let y = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    let x = args.get(1).and_then(|v| v.to_i32()).unwrap_or(0);
-
-    // Simplified atan2 returning approximate degrees
-    if x == 0 {
-        if y > 0 {
-            Ok(Value::int(90))
-        } else if y < 0 {
-            Ok(Value::int(-90))
-        } else {
-            Ok(Value::int(0))
-        }
-    } else if y == 0 {
-        if x > 0 {
-            Ok(Value::int(0))
-        } else {
-            Ok(Value::int(180))
-        }
-    } else if x > 0 && y > 0 {
-        Ok(Value::int(45)) // First quadrant
-    } else if x < 0 && y > 0 {
-        Ok(Value::int(135)) // Second quadrant
-    } else if x < 0 && y < 0 {
-        Ok(Value::int(-135)) // Third quadrant
-    } else {
-        Ok(Value::int(-45)) // Fourth quadrant
-    }
+    let y = args.first().and_then(|v| v.to_number_f32()).unwrap_or(0.0);
+    let x = args.get(1).and_then(|v| v.to_number_f32()).unwrap_or(0.0);
+    Ok(float_to_value(libm::atan2f(y, x)))
 }
 
-/// Math.asin - returns arcsine of a number (approximation for integers)
-/// Returns degrees: -90 to 90
+/// Math.asin - returns arcsine (radians)
 pub(crate) fn native_math_asin(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let x = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    // asin only defined for -1 to 1, but with integers we approximate
-    if x <= -1 {
-        Ok(Value::int(-90))
-    } else if x >= 1 {
-        Ok(Value::int(90))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::asinf(f)))
     } else {
-        Ok(Value::int(0))
-    } // asin(0) = 0
+        Ok(Value::nan())
+    }
 }
 
-/// Math.acos - returns arccosine of a number (approximation for integers)
-/// Returns degrees: 0 to 180
+/// Math.acos - returns arccosine (radians)
 pub(crate) fn native_math_acos(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let x = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    // acos only defined for -1 to 1, but with integers we approximate
-    if x <= -1 {
-        Ok(Value::int(180))
-    } else if x >= 1 {
-        Ok(Value::int(0))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::acosf(f)))
     } else {
-        Ok(Value::int(90))
-    } // acos(0) = 90
+        Ok(Value::nan())
+    }
 }
 
-/// Math.atan - returns arctangent of a number (approximation for integers)
-/// Returns degrees: -90 to 90
+/// Math.atan - returns arctangent (radians)
 pub(crate) fn native_math_atan(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
-    let x = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-    // Simplified approximation
-    if x == 0 {
-        Ok(Value::int(0))
-    } else if x >= 10 {
-        Ok(Value::int(84))
-    }
-    // Approaches 90
-    else if x >= 1 {
-        Ok(Value::int(45))
-    } else if x <= -10 {
-        Ok(Value::int(-84))
-    } else if x <= -1 {
-        Ok(Value::int(-45))
+    let val = args.first().copied().unwrap_or_default();
+    if let Some(f) = val.to_number_f32() {
+        Ok(float_to_value(libm::atanf(f)))
     } else {
-        Ok(Value::int(0))
+        Ok(Value::nan())
     }
 }
 
@@ -1589,10 +1479,10 @@ pub(crate) fn native_string_from_char_code(
 ) -> Result<Value, String> {
     let mut result = String::new();
     for arg in args {
-        if let Some(code) = arg.to_i32()
-            && let Some(ch) = char::from_u32(code as u32)
-        {
-            result.push(ch);
+        if let Some(code) = arg.to_i32() {
+            if let Some(ch) = char::from_u32(code as u32) {
+                result.push(ch);
+            }
         }
     }
     let new_idx = interp.runtime_strings.len() as u16 + Interpreter::RUNTIME_STRING_OFFSET;
@@ -2195,6 +2085,7 @@ pub(crate) fn native_string_includes(
 }
 
 /// String.prototype.match - match string against a RegExp
+#[cfg(feature = "std")]
 pub(crate) fn native_string_match(
     interp: &mut Interpreter,
     this: Value,
@@ -2209,10 +2100,8 @@ pub(crate) fn native_string_match(
         .ok_or_else(|| "invalid string".to_string())?
         .to_string();
 
-    // Get the RegExp argument
     let regex_arg = args.first().copied().unwrap_or_default();
 
-    // Check if it's a RegExp object
     if let Some(regex_idx) = regex_arg.to_regexp_object_idx() {
         let re = interp
             .regex_objects
@@ -2221,7 +2110,6 @@ pub(crate) fn native_string_match(
             .clone();
 
         if re.global {
-            // Global match - return array of all matches
             let matches: Vec<String> = re
                 .regex
                 .find_iter(&s)
@@ -2232,7 +2120,6 @@ pub(crate) fn native_string_match(
                 return Ok(Value::null());
             }
 
-            // Create array of matched strings
             let mut result_arr: Vec<Value> = Vec::with_capacity(matches.len());
             for matched in matches {
                 let str_idx =
@@ -2245,7 +2132,6 @@ pub(crate) fn native_string_match(
             interp.arrays.push(result_arr);
             Ok(Value::array_idx(arr_idx))
         } else {
-            // Non-global match - return first match with groups (like exec)
             if let Some(m) = re.regex.find(&s) {
                 let matched = m.as_str().to_string();
                 let str_idx =
@@ -2260,7 +2146,6 @@ pub(crate) fn native_string_match(
             }
         }
     } else if let Some(pattern_idx) = regex_arg.to_string_idx() {
-        // String argument - convert to RegExp
         let pattern = interp
             .get_string_by_idx(pattern_idx)
             .ok_or_else(|| "invalid pattern string".to_string())?
@@ -2288,7 +2173,17 @@ pub(crate) fn native_string_match(
     }
 }
 
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_string_match(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Ok(Value::null())
+}
+
 /// String.prototype.search - search for a match and return index
+#[cfg(feature = "std")]
 pub(crate) fn native_string_search(
     interp: &mut Interpreter,
     this: Value,
@@ -2303,10 +2198,8 @@ pub(crate) fn native_string_search(
         .ok_or_else(|| "invalid string".to_string())?
         .to_string();
 
-    // Get the RegExp argument
     let regex_arg = args.first().copied().unwrap_or_default();
 
-    // Check if it's a RegExp object
     if let Some(regex_idx) = regex_arg.to_regexp_object_idx() {
         let re = interp
             .regex_objects
@@ -2320,7 +2213,6 @@ pub(crate) fn native_string_search(
             Ok(Value::int(-1))
         }
     } else if let Some(pattern_idx) = regex_arg.to_string_idx() {
-        // String argument - convert to RegExp
         let pattern = interp
             .get_string_by_idx(pattern_idx)
             .ok_or_else(|| "invalid pattern string".to_string())?
@@ -2339,6 +2231,15 @@ pub(crate) fn native_string_search(
     } else {
         Ok(Value::int(-1))
     }
+}
+
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_string_search(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Ok(Value::int(-1))
 }
 
 /// String.prototype.codePointAt - get Unicode code point at position
@@ -2449,41 +2350,36 @@ pub(crate) fn native_number_is_integer(
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
-
-    // In our implementation, all numbers are integers (32-bit signed)
     if val.to_i32().is_some() {
         Ok(Value::bool(true))
+    } else if let Some(f) = val.to_f32() {
+        Ok(Value::bool(f.is_finite() && (f - libm::truncf(f)) == 0.0))
     } else {
         Ok(Value::bool(false))
     }
 }
 
-/// Number.isNaN - check if value is NaN
+/// Number.isNaN - check if value is NaN (strict: no type coercion)
 pub(crate) fn native_number_is_nan(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
-
-    // NaN is represented as a special value in our implementation
-    // For now, we don't have true NaN representation, so nothing is NaN
-    // undefined/null are not NaN per spec, integers are finite, booleans are not NaN
-    let _ = val; // Mark as intentionally unused
-    Ok(Value::bool(false))
+    Ok(Value::bool(val.is_nan_value()))
 }
 
-/// Number.isFinite - check if value is a finite number
+/// Number.isFinite - check if value is a finite number (strict: no type coercion)
 pub(crate) fn native_number_is_finite(
     _interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
-
-    // All our integers are finite (we don't have Infinity representation yet)
     if val.to_i32().is_some() {
         Ok(Value::bool(true))
+    } else if let Some(f) = val.to_f32() {
+        Ok(Value::bool(f.is_finite()))
     } else {
         Ok(Value::bool(false))
     }
@@ -2494,6 +2390,7 @@ pub(crate) fn native_number_is_finite(
 // =============================================================================
 
 /// console.log - print values to stdout
+#[cfg(feature = "std")]
 pub(crate) fn native_console_log(
     interp: &mut Interpreter,
     _this: Value,
@@ -2504,7 +2401,18 @@ pub(crate) fn native_console_log(
     Ok(Value::undefined())
 }
 
+/// console.log - no-op in no_std
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_console_log(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Ok(Value::undefined())
+}
+
 /// console.error - print values to stderr
+#[cfg(feature = "std")]
 pub(crate) fn native_console_error(
     interp: &mut Interpreter,
     _this: Value,
@@ -2515,7 +2423,18 @@ pub(crate) fn native_console_error(
     Ok(Value::undefined())
 }
 
+/// console.error - no-op in no_std
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_console_error(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Ok(Value::undefined())
+}
+
 /// console.warn - print values to stderr with warning
+#[cfg(feature = "std")]
 pub(crate) fn native_console_warn(
     interp: &mut Interpreter,
     _this: Value,
@@ -2523,6 +2442,16 @@ pub(crate) fn native_console_warn(
 ) -> Result<Value, String> {
     let output = format_console_args(interp, args);
     eprintln!("{}", output);
+    Ok(Value::undefined())
+}
+
+/// console.warn - no-op in no_std
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_console_warn(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
     Ok(Value::undefined())
 }
 
@@ -2538,6 +2467,8 @@ pub(crate) fn format_console_args(interp: &Interpreter, args: &[Value]) -> Strin
 pub(crate) fn format_value(interp: &Interpreter, val: Value) -> String {
     if let Some(n) = val.to_i32() {
         n.to_string()
+    } else if let Some(f) = val.to_f32() {
+        format_float(f)
     } else if let Some(b) = val.to_bool() {
         b.to_string()
     } else if val.is_null() {
@@ -2607,6 +2538,13 @@ pub(crate) fn native_json_stringify(
 fn json_stringify_value(interp: &Interpreter, val: Value) -> String {
     if let Some(n) = val.to_i32() {
         n.to_string()
+    } else if let Some(f) = val.to_f32() {
+        // JSON spec: NaN and Infinity serialize as null
+        if f.is_nan() || f.is_infinite() {
+            "null".to_string()
+        } else {
+            format_float(f)
+        }
     } else if let Some(b) = val.to_bool() {
         b.to_string()
     } else if val.is_null() {
@@ -2805,11 +2743,12 @@ impl<'a> JsonParser<'a> {
                                     if c.is_ascii_hexdigit() { Some(c) } else { None }
                                 })
                                 .collect();
-                            if hex.len() == 4
-                                && let Ok(code) = u32::from_str_radix(&hex, 16)
-                                && let Some(c) = char::from_u32(code)
-                            {
-                                result.push(c);
+                            if hex.len() == 4 {
+                                if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                                    if let Some(c) = char::from_u32(code) {
+                                        result.push(c);
+                                    }
+                                }
                             }
                         }
                         _ => result.push(escaped),
@@ -2857,12 +2796,10 @@ impl<'a> JsonParser<'a> {
 
         let num_str = &self.input[start..self.pos];
 
-        // Parse as integer (truncating decimals)
         if let Ok(n) = num_str.parse::<i32>() {
             Ok(Value::int(n))
-        } else if let Ok(f) = num_str.parse::<f64>() {
-            // Truncate to integer
-            Ok(Value::int(f as i32))
+        } else if let Ok(f) = num_str.parse::<Float>() {
+            Ok(float_to_value(f))
         } else {
             Err(format!("Invalid number in JSON: {}", num_str))
         }
@@ -3013,8 +2950,7 @@ impl<'a> JsonParser<'a> {
 // ===========================================
 
 /// Date.now - returns current timestamp in milliseconds
-/// Note: Due to 31-bit integer limitation, we return milliseconds modulo 2^30
-/// This allows for relative timing within ~12 day windows
+#[cfg(feature = "std")]
 pub(crate) fn native_date_now(
     _interp: &mut Interpreter,
     _this: Value,
@@ -3026,15 +2962,24 @@ pub(crate) fn native_date_now(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Time error: {}", e))?;
 
-    // Return milliseconds modulo 2^30 (about 12.4 days worth)
-    // This fits in 31-bit signed range and allows relative timing
     let millis = now.as_millis() as i64;
-    let max_val = 1 << 30; // 2^30 = 1073741824
+    let max_val = 1 << 30;
 
     Ok(Value::int((millis % max_val) as i32))
 }
 
+/// Date.now - stub for no_std (returns 0)
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_date_now(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Ok(Value::int(0))
+}
+
 /// performance.now - high-resolution time in milliseconds
+#[cfg(feature = "std")]
 pub(crate) fn native_performance_now(
     _interp: &mut Interpreter,
     _this: Value,
@@ -3046,12 +2991,20 @@ pub(crate) fn native_performance_now(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Time error: {}", e))?;
 
-    // Return milliseconds modulo 2^30 (about 12.4 days worth)
-    // This fits in 31-bit signed range and allows relative timing
     let millis = now.as_millis() as i64;
-    let max_val = 1 << 30; // 2^30 = 1073741824
+    let max_val = 1 << 30;
 
     Ok(Value::int((millis % max_val) as i32))
+}
+
+/// performance.now - stub for no_std (returns 0)
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_performance_now(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Ok(Value::int(0))
 }
 
 // ===========================================
@@ -3059,6 +3012,7 @@ pub(crate) fn native_performance_now(
 // ===========================================
 
 /// RegExp.prototype.test - tests if the regex matches the string
+#[cfg(feature = "std")]
 pub(crate) fn native_regexp_test(
     interp: &mut Interpreter,
     this: Value,
@@ -3094,6 +3048,7 @@ pub(crate) fn native_regexp_test(
 }
 
 /// RegExp.prototype.exec - executes the regex and returns match result
+#[cfg(feature = "std")]
 pub(crate) fn native_regexp_exec(
     interp: &mut Interpreter,
     this: Value,
@@ -3550,15 +3505,15 @@ pub(crate) fn native_error_to_string(
     this: Value,
     _args: &[Value],
 ) -> Result<Value, String> {
-    if let Some(err_idx) = this.to_error_object_idx()
-        && let Some(err) = interp.error_objects.get(err_idx as usize).cloned()
-    {
-        let result = if err.message.is_empty() {
-            err.name.clone()
-        } else {
-            format!("{}: {}", err.name, err.message)
-        };
-        return Ok(interp.create_runtime_string(result));
+    if let Some(err_idx) = this.to_error_object_idx() {
+        if let Some(err) = interp.error_objects.get(err_idx as usize).cloned() {
+            let result = if err.message.is_empty() {
+                err.name.clone()
+            } else {
+                format!("{}: {}", err.name, err.message)
+            };
+            return Ok(interp.create_runtime_string(result));
+        }
     }
     // Fallback
     Ok(interp.create_runtime_string("Error".to_string()))
@@ -3581,12 +3536,12 @@ pub(crate) fn native_array_to_string(
     this: Value,
     _args: &[Value],
 ) -> Result<Value, String> {
-    if let Some(arr_idx) = this.to_array_idx()
-        && let Some(arr) = interp.arrays.get(arr_idx as usize).cloned()
-    {
-        let parts: Vec<String> = arr.iter().map(|v| format_value(interp, *v)).collect();
-        let result = parts.join(",");
-        return Ok(interp.create_runtime_string(result));
+    if let Some(arr_idx) = this.to_array_idx() {
+        if let Some(arr) = interp.arrays.get(arr_idx as usize).cloned() {
+            let parts: Vec<String> = arr.iter().map(|v| format_value(interp, *v)).collect();
+            let result = parts.join(",");
+            return Ok(interp.create_runtime_string(result));
+        }
     }
     Ok(interp.create_runtime_string(String::new()))
 }
@@ -3687,6 +3642,7 @@ pub(crate) fn native_gc(
 }
 
 /// load(filename) - load and execute a JavaScript file
+#[cfg(feature = "std")]
 pub(crate) fn native_load(
     interp: &mut Interpreter,
     _this: Value,
@@ -3747,6 +3703,7 @@ pub(crate) fn native_load(
 }
 
 /// setTimeout(callback, delay) - schedule callback after delay (returns timer ID)
+#[cfg(feature = "std")]
 pub(crate) fn native_set_timeout(
     interp: &mut Interpreter,
     _this: Value,
@@ -3786,7 +3743,18 @@ pub(crate) fn native_set_timeout(
     Ok(Value::int(timer_id as i32))
 }
 
+/// setTimeout - stub for no_std (not supported)
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_set_timeout(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Err("setTimeout not available in no_std".to_string())
+}
+
 /// clearTimeout(id) - cancel a scheduled timeout
+#[cfg(feature = "std")]
 pub(crate) fn native_clear_timeout(
     interp: &mut Interpreter,
     _this: Value,
@@ -4005,9 +3973,12 @@ impl Interpreter {
         self.register_native("Date.now", native_date_now, 0);
         self.register_native("performance.now", native_performance_now, 0);
 
-        // RegExp methods
-        self.register_native("RegExp.prototype.test", native_regexp_test, 1);
-        self.register_native("RegExp.prototype.exec", native_regexp_exec, 1);
+        // RegExp methods (require regex crate, std only)
+        #[cfg(feature = "std")]
+        {
+            self.register_native("RegExp.prototype.test", native_regexp_test, 1);
+            self.register_native("RegExp.prototype.exec", native_regexp_exec, 1);
+        }
 
         // Object static methods
         self.register_native("Object.keys", native_object_keys, 1);
@@ -4043,8 +4014,10 @@ impl Interpreter {
 
         // Global utility functions
         self.register_native("gc", native_gc, 0);
+        #[cfg(feature = "std")]
         self.register_native("load", native_load, 1);
         self.register_native("setTimeout", native_set_timeout, 2);
+        #[cfg(feature = "std")]
         self.register_native("clearTimeout", native_clear_timeout, 1);
     }
 }

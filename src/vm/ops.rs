@@ -2,6 +2,7 @@
 //
 //! All op_* methods are pure computations on Value types.
 
+use alloc::string::ToString;
 use super::interpreter::{Interpreter, InterpreterError, InterpreterResult};
 use crate::value::{Float, Value, float_to_value};
 

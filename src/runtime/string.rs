@@ -4,7 +4,8 @@
 //! This module provides the JSString type and string operations.
 
 use crate::gc::MemoryTag;
-use std::hash::{Hash, Hasher};
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// Memory tag bits for header
 const MTAG_BITS: u32 = 4;
@@ -127,7 +128,7 @@ impl JSString {
     pub unsafe fn as_bytes(&self) -> &[u8] {
         unsafe {
             let ptr = (self as *const Self).add(1) as *const u8;
-            std::slice::from_raw_parts(ptr, self.len())
+            core::slice::from_raw_parts(ptr, self.len())
         }
     }
 
@@ -139,7 +140,7 @@ impl JSString {
     pub unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
         unsafe {
             let ptr = (self as *mut Self).add(1) as *mut u8;
-            std::slice::from_raw_parts_mut(ptr, self.len())
+            core::slice::from_raw_parts_mut(ptr, self.len())
         }
     }
 
@@ -149,7 +150,7 @@ impl JSString {
     /// Caller must ensure the string buffer contains valid UTF-8.
     #[inline]
     pub unsafe fn as_str(&self) -> &str {
-        unsafe { std::str::from_utf8_unchecked(self.as_bytes()) }
+        unsafe { core::str::from_utf8_unchecked(self.as_bytes()) }
     }
 
     /// Get pointer to string buffer
@@ -167,7 +168,7 @@ impl JSString {
     /// Calculate the total allocation size needed for a string
     #[inline]
     pub fn alloc_size(len: usize) -> usize {
-        std::mem::size_of::<Self>() + len + 1 // +1 for null terminator
+        core::mem::size_of::<Self>() + len + 1 // +1 for null terminator
     }
 
     /// Compare two strings for equality
@@ -185,10 +186,13 @@ impl JSString {
     ///
     /// # Safety
     /// String must be properly initialized.
-    pub unsafe fn hash_content(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        unsafe { self.as_bytes().hash(&mut hasher) };
-        hasher.finish()
+    pub fn hash_content(bytes: &[u8]) -> u64 {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for &byte in bytes {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
     }
 }
 

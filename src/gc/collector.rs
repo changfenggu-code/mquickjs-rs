@@ -7,9 +7,10 @@
 //! This design eliminates memory fragmentation and allows for smaller object headers
 //! compared to reference counting.
 
+use alloc::vec::Vec;
 use super::allocator::{BlockHeader, Heap, MemoryTag};
 use crate::value::Value;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 /// A GC-safe reference to a value
 ///
@@ -113,10 +114,10 @@ fn mark_object(heap: &mut Heap, ptr: *mut u8) {
                 let values = ptr as *mut Value;
                 for i in 0..size_words {
                     let val = *values.add(i);
-                    if val.is_ptr()
-                        && let Some(child_ptr) = val.to_ptr::<u8>()
-                    {
-                        mark_object(heap, child_ptr);
+                    if val.is_ptr() {
+                        if let Some(child_ptr) = val.to_ptr::<u8>() {
+                            mark_object(heap, child_ptr);
+                        }
                     }
                 }
             }
@@ -174,7 +175,7 @@ fn compact(heap: &mut Heap) {
                 let dst = heap.base().add(*new_offset);
                 let header = &*(src as *const BlockHeader);
                 let size = header.size_bytes();
-                std::ptr::copy(src, dst, size);
+                core::ptr::copy(src, dst, size);
             }
         }
     }

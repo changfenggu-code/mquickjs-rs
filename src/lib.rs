@@ -19,7 +19,13 @@
 //! assert_eq!(result.to_i32(), Some(3));
 //! ```
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![allow(dead_code)] // During development
+
+extern crate alloc;
+
+#[cfg(feature = "std")]
+extern crate std;
 
 // Core modules
 pub mod context;
@@ -47,3 +53,4 @@ pub mod util;
 pub use context::{Context, MemoryStats};
 pub use runtime::FunctionBytecode;
 pub use value::Value;
+pub use vm::types::NativeFn;

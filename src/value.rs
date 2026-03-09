@@ -9,13 +9,22 @@
 //! - Bits 0-2 = 011: Special values (null, undefined, bool, exception, etc.)
 //! - Bits 0-2 = 101: Short float (limited range, no allocation needed)
 
-use std::fmt;
+use core::fmt;
+use alloc::string::{String, ToString};
+use alloc::format;
 
-/// Size of a word in bytes (matches pointer size)
+/// The floating-point type used by the engine.
+/// Using f32 for embedded/MCU targets; change to f64 if needed.
+pub type Float = f32;
+
+/// Size of a machine word in bytes (matches pointer size, used for GC alignment)
 #[cfg(target_pointer_width = "64")]
 pub const WORD_SIZE: usize = 8;
 #[cfg(target_pointer_width = "32")]
 pub const WORD_SIZE: usize = 4;
+
+/// Size of a Value word in bytes (always 8 for consistent encoding across platforms)
+pub const VALUE_WORD_SIZE: usize = 8;
 
 /// Tag values for value encoding
 #[repr(u8)]
@@ -27,8 +36,7 @@ pub enum Tag {
     Ptr = 1,
     /// Special value marker (2 bits tag)
     Special = 3,
-    /// Short float - only on 64-bit (3 bits tag)
-    #[cfg(target_pointer_width = "64")]
+    /// Short float (3 bits tag, f32 bits stored inline in u64)
     ShortFloat = 5,
 }
 
@@ -87,10 +95,10 @@ pub const TYPED_ARRAY_MARKER: i32 = 1 << 18;
 /// When bit 17 is set, it's an ArrayBuffer object index
 pub const ARRAY_BUFFER_MARKER: i32 = 1 << 17;
 
-/// Raw value representation - a single word
+/// Raw value representation - always 64-bit for consistent encoding across platforms
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct RawValue(pub usize);
+pub struct RawValue(pub u64);
 
 impl RawValue {
     /// Number of bits used for special value tag
@@ -100,31 +108,31 @@ impl RawValue {
     #[inline]
     pub const fn from_i32(val: i32) -> Self {
         // Shift left by 1 to make room for tag bit 0
-        RawValue(((val as i64) << 1) as usize)
+        RawValue(((val as i64) << 1) as u64)
     }
 
     /// Create a new special value
     #[inline]
     pub const fn make_special(tag: u8, val: i32) -> Self {
-        RawValue((tag as usize) | ((val as usize) << Self::SPECIAL_TAG_BITS))
+        RawValue((tag as u64) | ((val as u64) << Self::SPECIAL_TAG_BITS))
     }
 
     /// Check if this is an integer
     #[inline]
     pub const fn is_int(self) -> bool {
-        (self.0 & 1) == Tag::Int as usize
+        (self.0 & 1) == Tag::Int as u64
     }
 
     /// Check if this is a pointer
     #[inline]
     pub const fn is_ptr(self) -> bool {
-        (self.0 & (WORD_SIZE - 1)) == Tag::Ptr as usize
+        (self.0 & (VALUE_WORD_SIZE as u64 - 1)) == Tag::Ptr as u64
     }
 
     /// Check if this is a special value
     #[inline]
     pub const fn is_special(self) -> bool {
-        (self.0 & 0x3) == Tag::Special as usize
+        (self.0 & 0x3) == Tag::Special as u64
     }
 
     /// Get integer value (assumes is_int() is true)
@@ -145,16 +153,35 @@ impl RawValue {
         (self.0 >> Self::SPECIAL_TAG_BITS) as i32
     }
 
+    /// Create a float value (f32 bits stored inline, 3-bit tag)
+    #[inline]
+    pub fn from_float(val: Float) -> Self {
+        let bits = val.to_bits() as u64;
+        RawValue((bits << 3) | Tag::ShortFloat as u64)
+    }
+
+    /// Check if this is a float
+    #[inline]
+    pub const fn is_float(self) -> bool {
+        (self.0 & 0x7) == Tag::ShortFloat as u64
+    }
+
+    /// Get float value (assumes is_float() is true)
+    #[inline]
+    pub fn get_float(self) -> Float {
+        Float::from_bits((self.0 >> 3) as u32)
+    }
+
     /// Get pointer value (assumes is_ptr() is true)
     #[inline]
     pub fn get_ptr<T>(self) -> *mut T {
-        (self.0 - 1) as *mut T
+        (self.0 as usize - 1) as *mut T
     }
 
     /// Create from pointer
     #[inline]
     pub fn from_ptr<T>(ptr: *mut T) -> Self {
-        RawValue((ptr as usize) + 1)
+        RawValue((ptr as usize as u64) + 1)
     }
 
     // Common special values
@@ -182,6 +209,8 @@ impl fmt::Debug for RawValue {
             write!(f, "Exception")
         } else if self.is_ptr() {
             write!(f, "Ptr({:?})", self.get_ptr::<()>())
+        } else if self.is_float() {
+            write!(f, "Float({})", self.get_float())
         } else {
             write!(f, "RawValue(0x{:x})", self.0)
         }
@@ -240,6 +269,30 @@ impl Value {
     #[inline]
     pub const fn uninitialized() -> Self {
         Value(RawValue::UNINITIALIZED)
+    }
+
+    /// Create a float value
+    #[inline]
+    pub fn float(val: Float) -> Self {
+        Value(RawValue::from_float(val))
+    }
+
+    /// NaN value
+    #[inline]
+    pub fn nan() -> Self {
+        Value::float(Float::NAN)
+    }
+
+    /// Positive infinity
+    #[inline]
+    pub fn infinity() -> Self {
+        Value::float(Float::INFINITY)
+    }
+
+    /// Negative infinity
+    #[inline]
+    pub fn neg_infinity() -> Self {
+        Value::float(Float::NEG_INFINITY)
     }
 
     /// Create a function value from a bytecode pointer
@@ -361,6 +414,18 @@ impl Value {
     #[inline]
     pub const fn is_int(self) -> bool {
         self.0.is_int()
+    }
+
+    /// Check if this is a float
+    #[inline]
+    pub const fn is_float(self) -> bool {
+        self.0.is_float()
+    }
+
+    /// Check if this value is a number (int or float)
+    #[inline]
+    pub const fn is_number(self) -> bool {
+        self.is_int() || self.is_float()
     }
 
     /// Check if this is a pointer to a GC object
@@ -492,6 +557,41 @@ impl Value {
     pub const unsafe fn to_i32_unchecked(self) -> i32 {
         debug_assert!(self.is_int());
         self.0.get_int()
+    }
+
+    /// Get float value, returns None if not a float
+    #[inline]
+    pub fn to_f32(self) -> Option<Float> {
+        if self.is_float() {
+            Some(self.0.get_float())
+        } else {
+            None
+        }
+    }
+
+    /// Convert to Float regardless of whether int or float.
+    /// Returns None if neither.
+    #[inline]
+    pub fn to_number_f32(self) -> Option<Float> {
+        if self.is_float() {
+            Some(self.0.get_float())
+        } else if self.is_int() {
+            Some(self.0.get_int() as Float)
+        } else {
+            None
+        }
+    }
+
+    /// Check if this value is NaN
+    #[inline]
+    pub fn is_nan_value(self) -> bool {
+        self.to_f32().is_some_and(|f| f.is_nan())
+    }
+
+    /// Check if this value is infinite
+    #[inline]
+    pub fn is_infinite_value(self) -> bool {
+        self.to_f32().is_some_and(|f| f.is_infinite())
     }
 
     /// Get raw pointer, returns None if not a pointer
@@ -758,6 +858,8 @@ impl fmt::Display for Value {
             write!(f, "{}", b)
         } else if let Some(i) = self.to_i32() {
             write!(f, "{}", i)
+        } else if let Some(fv) = self.to_f32() {
+            write!(f, "{}", format_float(fv))
         } else if self.is_exception() {
             write!(f, "[exception]")
         } else if self.is_array() {
@@ -775,6 +877,33 @@ impl PartialEq for Value {
 }
 
 impl Eq for Value {}
+
+/// Format a float for JavaScript output.
+/// Integers print without decimal (3.0 → "3"), NaN/Infinity handled.
+pub fn format_float(val: Float) -> String {
+    if val.is_nan() {
+        return "NaN".to_string();
+    }
+    if val.is_infinite() {
+        return if val > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if (val - libm::truncf(val)) == 0.0 && libm::fabsf(val) < (i32::MAX as Float) {
+        format!("{}", val as i32)
+    } else {
+        format!("{}", val)
+    }
+}
+
+/// Convert a float result to Value, normalizing whole-number floats to int.
+pub fn float_to_value(f: Float) -> Value {
+    if f.is_nan() || f.is_infinite() {
+        Value::float(f)
+    } else if (f - libm::truncf(f)) == 0.0 && f >= (i32::MIN as Float) && f <= (i32::MAX as Float) {
+        Value::int(f as i32)
+    } else {
+        Value::float(f)
+    }
+}
 
 /// Short integer range constants
 pub const SHORT_INT_MIN: i32 = -(1 << 30);
@@ -887,5 +1016,97 @@ mod tests {
         assert_eq!(format!("{:?}", RawValue::UNDEFINED), "Undefined");
         assert_eq!(format!("{:?}", RawValue::TRUE), "Bool(true)");
         assert_eq!(format!("{:?}", RawValue::from_i32(42)), "Int(42)");
+    }
+
+    #[test]
+    fn test_float_basic() {
+        let v = Value::float(3.14);
+        assert!(v.is_float());
+        assert!(!v.is_int());
+        assert!(v.is_number());
+        let f = v.to_f32().unwrap();
+        assert!((f - 3.14).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_float_nan() {
+        let v = Value::nan();
+        assert!(v.is_float());
+        assert!(v.is_nan_value());
+        assert!(!v.is_infinite_value());
+        assert!(v.to_f32().unwrap().is_nan());
+    }
+
+    #[test]
+    fn test_float_infinity() {
+        let v = Value::infinity();
+        assert!(v.is_float());
+        assert!(v.is_infinite_value());
+        assert!(!v.is_nan_value());
+
+        let v2 = Value::neg_infinity();
+        assert!(v2.is_infinite_value());
+        assert!(v2.to_f32().unwrap() < 0.0);
+    }
+
+    #[test]
+    fn test_float_no_collision() {
+        // Float values must not be confused with other types
+        let f = Value::float(42.0);
+        assert!(!f.is_null());
+        assert!(!f.is_undefined());
+        assert!(!f.is_bool());
+        assert!(!f.is_exception());
+        assert!(!f.is_ptr());
+        assert!(!f.is_string());
+        assert!(!f.is_func());
+    }
+
+    #[test]
+    fn test_is_number() {
+        assert!(Value::int(42).is_number());
+        assert!(Value::float(3.14).is_number());
+        assert!(!Value::null().is_number());
+        assert!(!Value::bool(true).is_number());
+    }
+
+    #[test]
+    fn test_to_number_f32() {
+        assert_eq!(Value::int(42).to_number_f32(), Some(42.0));
+        let f = Value::float(3.14).to_number_f32().unwrap();
+        assert!((f - 3.14).abs() < 0.001);
+        assert_eq!(Value::null().to_number_f32(), None);
+    }
+
+    #[test]
+    fn test_float_to_value_normalization() {
+        // Whole-number float normalizes to int
+        let v = float_to_value(3.0);
+        assert!(v.is_int());
+        assert_eq!(v.to_i32(), Some(3));
+
+        // Non-whole float stays as float
+        let v = float_to_value(3.14);
+        assert!(v.is_float());
+
+        // NaN stays as float
+        let v = float_to_value(Float::NAN);
+        assert!(v.is_float());
+        assert!(v.is_nan_value());
+
+        // Infinity stays as float
+        let v = float_to_value(Float::INFINITY);
+        assert!(v.is_float());
+        assert!(v.is_infinite_value());
+    }
+
+    #[test]
+    fn test_format_float() {
+        assert_eq!(format_float(3.14), "3.14");
+        assert_eq!(format_float(3.0), "3");
+        assert_eq!(format_float(-0.5), "-0.5");
+        assert_eq!(format_float(Float::NAN), "NaN");
+        assert_eq!(format_float(Float::INFINITY), "Infinity");
+        assert_eq!(format_float(Float::NEG_INFINITY), "-Infinity");
     }
 }

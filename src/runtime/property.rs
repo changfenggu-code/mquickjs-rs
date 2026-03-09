@@ -3,6 +3,8 @@
 //! JavaScript objects store properties in a hash table for fast lookup.
 //! This module implements the property storage and access operations.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use crate::runtime::object::{Property, PropertyType};
 use crate::value::Value;
 

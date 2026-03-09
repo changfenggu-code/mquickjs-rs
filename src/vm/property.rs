@@ -1,5 +1,6 @@
 //! Property access dispatch for built-in types
 
+use alloc::format;
 use super::interpreter::{
     BUILTIN_ARRAY, BUILTIN_ARRAY_BUFFER, BUILTIN_BOOLEAN, BUILTIN_CONSOLE, BUILTIN_DATE,
     BUILTIN_ERROR, BUILTIN_FLOAT32_ARRAY, BUILTIN_FLOAT64_ARRAY, BUILTIN_GLOBAL_THIS,
@@ -16,10 +17,10 @@ impl Interpreter {
         match prop_name {
             "length" => {
                 // Return the array length
-                if let Some(arr_idx) = arr.to_array_idx()
-                    && let Some(arr_data) = self.arrays.get(arr_idx as usize)
-                {
-                    return Value::int(arr_data.len() as i32);
+                if let Some(arr_idx) = arr.to_array_idx() {
+                    if let Some(arr_data) = self.arrays.get(arr_idx as usize) {
+                        return Value::int(arr_data.len() as i32);
+                    }
                 }
                 Value::undefined()
             }
@@ -104,10 +105,10 @@ impl Interpreter {
         match prop_name {
             "length" => {
                 // Get string length
-                if let Some(str_idx) = str_val.to_string_idx()
-                    && let Some(s) = self.get_string_by_idx(str_idx)
-                {
-                    return Value::int(s.len() as i32);
+                if let Some(str_idx) = str_val.to_string_idx() {
+                    if let Some(s) = self.get_string_by_idx(str_idx) {
+                        return Value::int(s.len() as i32);
+                    }
                 }
                 Value::int(0)
             }
@@ -339,15 +340,15 @@ impl Interpreter {
                     "asin" => self.get_native_func("Math.asin").unwrap_or_default(),
                     "acos" => self.get_native_func("Math.acos").unwrap_or_default(),
                     "atan" => self.get_native_func("Math.atan").unwrap_or_default(),
-                    // Math constants (integer approximations until proper float support)
-                    "PI" => Value::int(3),      // 3.14159...
-                    "E" => Value::int(2),       // 2.71828...
-                    "LN2" => Value::int(0),     // 0.69314...
-                    "LN10" => Value::int(2),    // 2.30258...
-                    "LOG2E" => Value::int(1),   // 1.44269...
-                    "LOG10E" => Value::int(0),  // 0.43429...
-                    "SQRT2" => Value::int(1),   // 1.41421...
-                    "SQRT1_2" => Value::int(0), // 0.70710...
+                    // Math constants
+                    "PI" => Value::float(core::f32::consts::PI),
+                    "E" => Value::float(core::f32::consts::E),
+                    "LN2" => Value::float(core::f32::consts::LN_2),
+                    "LN10" => Value::float(core::f32::consts::LN_10),
+                    "LOG2E" => Value::float(core::f32::consts::LOG2_E),
+                    "LOG10E" => Value::float(core::f32::consts::LOG10_E),
+                    "SQRT2" => Value::float(core::f32::consts::SQRT_2),
+                    "SQRT1_2" => Value::float(core::f32::consts::FRAC_1_SQRT_2),
                     _ => Value::undefined(),
                 }
             }
@@ -366,11 +367,14 @@ impl Interpreter {
                     "isNaN" => self.get_native_func("Number.isNaN").unwrap_or_default(),
                     "isFinite" => self.get_native_func("Number.isFinite").unwrap_or_default(),
                     "parseInt" => self.get_native_func("parseInt").unwrap_or_default(),
-                    // Use 31-bit safe values (our Value::int only supports 31-bit signed integers)
-                    "MAX_VALUE" => Value::int((1 << 30) - 1), // 1073741823
-                    "MIN_VALUE" => Value::int(-(1 << 30)),    // -1073741824
-                    "MAX_SAFE_INTEGER" => Value::int((1 << 30) - 1),
-                    "MIN_SAFE_INTEGER" => Value::int(-(1 << 30)),
+                    "MAX_VALUE" => Value::float(f32::MAX),
+                    "MIN_VALUE" => Value::float(f32::MIN_POSITIVE),
+                    "EPSILON" => Value::float(f32::EPSILON),
+                    "MAX_SAFE_INTEGER" => Value::float(16777215.0), // 2^24 - 1 (f32 precision)
+                    "MIN_SAFE_INTEGER" => Value::float(-16777215.0),
+                    "NaN" => Value::nan(),
+                    "POSITIVE_INFINITY" => Value::infinity(),
+                    "NEGATIVE_INFINITY" => Value::neg_infinity(),
                     _ => Value::undefined(),
                 }
             }
@@ -443,8 +447,8 @@ impl Interpreter {
                 // globalThis provides access to global builtins
                 match prop_name {
                     "undefined" => Value::undefined(),
-                    "NaN" => Value::int(0),
-                    "Infinity" => Value::int(i32::MAX),
+                    "NaN" => Value::nan(),
+                    "Infinity" => Value::infinity(),
                     "Math" => Value::builtin_object(BUILTIN_MATH),
                     "JSON" => Value::builtin_object(BUILTIN_JSON),
                     "Number" => Value::builtin_object(BUILTIN_NUMBER),

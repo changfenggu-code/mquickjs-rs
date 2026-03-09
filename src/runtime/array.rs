@@ -3,6 +3,8 @@
 //! Arrays in MQuickJS use a "no-hole" semantics where all elements
 //! from index 0 to length-1 are defined (no sparse arrays).
 
+use alloc::vec;
+use alloc::vec::Vec;
 use crate::value::Value;
 
 /// Maximum array length (2^30 - 1)

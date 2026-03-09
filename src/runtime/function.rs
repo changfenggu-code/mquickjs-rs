@@ -6,6 +6,7 @@
 //! - Function bytecode
 
 use crate::value::Value;
+use alloc::{string::String, vec::Vec, vec, format, string::ToString};
 
 /// Maximum number of function arguments
 pub const MAX_ARGS: u16 = 65535;
@@ -118,6 +119,7 @@ pub struct CaptureInfo {
     pub is_local: bool,
 }
 
+#[repr(align(8))]
 pub struct FunctionBytecode {
     /// Function name (for debugging)
     pub name: Option<String>,
@@ -404,7 +406,7 @@ impl FunctionBytecode {
         let mut constants = Vec::with_capacity(const_count);
         for _ in 0..const_count {
             let raw = read_u64(&mut pos)? as usize;
-            constants.push(Value(crate::value::RawValue(raw)));
+            constants.push(Value(crate::value::RawValue(raw as u64)));
         }
 
         // String constants

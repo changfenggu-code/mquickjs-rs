@@ -2,6 +2,8 @@
 //!
 //! Converts source text into a stream of tokens.
 
+use alloc::{string::String, format, string::ToString};
+
 /// Token types
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -405,7 +407,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let ident = std::str::from_utf8(&self.source[start..self.pos])
+        let ident = core::str::from_utf8(&self.source[start..self.pos])
             .unwrap_or("")
             .to_string();
 
@@ -487,7 +489,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let num_str = std::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
+        let num_str = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
         match num_str.parse::<f64>() {
             Ok(n) => Token::Number(n),
             Err(_) => Token::Error(format!("Invalid number: {}", num_str)),

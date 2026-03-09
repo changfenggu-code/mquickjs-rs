@@ -2,6 +2,7 @@
 //!
 //! The stack grows downward in memory (toward lower addresses).
 
+use alloc::vec::Vec;
 use crate::value::Value;
 
 /// Value stack for bytecode execution
@@ -31,6 +32,12 @@ impl Stack {
     #[inline]
     pub fn pop(&mut self) -> Option<Value> {
         self.values.pop()
+    }
+
+    /// Clear the stack completely
+    pub fn clear(&mut self) {
+        self.values.clear();
+        self.frame_ptr = 0;
     }
 
     /// Pop a value from the stack without checking

@@ -8,7 +8,7 @@ pub mod opcode;
 mod ops;
 mod property;
 pub mod stack;
-mod types;
+pub mod types;
 
 pub use interpreter::{
     CallFrame, Interpreter, InterpreterError, InterpreterResult, InterpreterStats,

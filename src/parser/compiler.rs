@@ -6,6 +6,7 @@
 use super::lexer::{Lexer, SourcePos, Token};
 use crate::value::Value;
 use crate::vm::opcode::OpCode;
+use alloc::{string::String, vec::Vec, vec, format, string::ToString};
 
 /// Maximum number of local variables
 const MAX_LOCALS: usize = 256;
@@ -152,7 +153,7 @@ impl<'a> Compiler<'a> {
 
     /// Advance to the next token
     fn advance(&mut self) {
-        self.previous_token = std::mem::replace(&mut self.current_token, Token::Eof);
+        self.previous_token = core::mem::replace(&mut self.current_token, Token::Eof);
         self.current_pos = self.lexer.position();
 
         loop {
@@ -169,7 +170,7 @@ impl<'a> Compiler<'a> {
 
     /// Check if current token matches expected
     fn check(&self, expected: &Token) -> bool {
-        std::mem::discriminant(&self.current_token) == std::mem::discriminant(expected)
+        core::mem::discriminant(&self.current_token) == core::mem::discriminant(expected)
     }
 
     /// Consume token if it matches, return true if matched
@@ -218,6 +219,7 @@ impl<'a> Compiler<'a> {
         }
         self.panic_mode = true;
         self.had_error = true;
+        #[cfg(feature = "std")]
         eprintln!("[line {}] Error: {}", self.current_pos.line, message);
     }
 
@@ -328,9 +330,7 @@ impl<'a> Compiler<'a> {
                 self.emit_u16(v as i16 as u16);
             }
             _ => {
-                // Large integer: for now, truncate to short int range
-                // TODO: Store as float constant when float support is added
-                let idx = self.add_constant(Value::int(val.clamp(-(1 << 30), (1 << 30) - 1)));
+                let idx = self.add_constant(Value::int(val));
                 self.emit_const(idx);
             }
         }
@@ -722,6 +722,16 @@ impl<'a> Compiler<'a> {
         self.emit_op(OpCode::FClosure);
         self.emit_u16(bytecode_idx as u16);
 
+        // At top-level scope (not inside a function), also register as a global
+        // so that subsequent eval() calls can find this function via GetGlobal.
+        if self.outer_locals.is_none() && self.scope_depth == 0 {
+            let str_idx = self.string_constants.len() as u16;
+            self.string_constants.push(name.clone());
+            let const_idx = self.add_constant(Value::string(str_idx));
+            self.emit_op(OpCode::SetGlobal);
+            self.emit_u16(const_idx);
+        }
+
         // Store to local
         self.emit_set_local(func_index);
 
@@ -737,15 +747,15 @@ impl<'a> Compiler<'a> {
         params: &[String],
     ) -> Result<CompiledFunction, CompileError> {
         // Save current compiler state
-        let saved_bytecode = std::mem::take(&mut self.bytecode);
-        let saved_constants = std::mem::take(&mut self.constants);
-        let saved_string_constants = std::mem::take(&mut self.string_constants);
-        let saved_locals = std::mem::take(&mut self.locals);
-        let saved_functions = std::mem::take(&mut self.functions);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_captures = std::mem::take(&mut self.captures);
-        let saved_outer_locals = std::mem::take(&mut self.outer_locals);
-        let saved_outer_captures = std::mem::take(&mut self.outer_captures);
+        let saved_bytecode = core::mem::take(&mut self.bytecode);
+        let saved_constants = core::mem::take(&mut self.constants);
+        let saved_string_constants = core::mem::take(&mut self.string_constants);
+        let saved_locals = core::mem::take(&mut self.locals);
+        let saved_functions = core::mem::take(&mut self.functions);
+        let saved_loop_stack = core::mem::take(&mut self.loop_stack);
+        let saved_captures = core::mem::take(&mut self.captures);
+        let saved_outer_locals = core::mem::take(&mut self.outer_locals);
+        let saved_outer_captures = core::mem::take(&mut self.outer_captures);
         let saved_max_locals = self.max_locals;
         let saved_scope_depth = self.scope_depth;
 
@@ -802,12 +812,12 @@ impl<'a> Compiler<'a> {
 
         // Create compiled function
         let result = CompiledFunction {
-            bytecode: std::mem::take(&mut self.bytecode),
-            constants: std::mem::take(&mut self.constants),
-            string_constants: std::mem::take(&mut self.string_constants),
+            bytecode: core::mem::take(&mut self.bytecode),
+            constants: core::mem::take(&mut self.constants),
+            string_constants: core::mem::take(&mut self.string_constants),
             local_count: self.max_locals,
             arg_count,
-            functions: std::mem::take(&mut self.functions),
+            functions: core::mem::take(&mut self.functions),
             captures,
         };
 
@@ -1399,13 +1409,12 @@ impl<'a> Compiler<'a> {
                 let n = *n;
                 self.advance();
                 // Check if it's an integer that fits in short int range
-                if n.fract() == 0.0 && n >= -(1i64 << 30) as f64 && n <= ((1i64 << 30) - 1) as f64 {
+                if (n - libm::trunc(n)) == 0.0 && n >= -(1i64 << 30) as f64 && n <= ((1i64 << 30) - 1) as f64 {
                     self.emit_int(n as i32);
                 } else {
-                    // TODO: Handle floats when float support is added to Value
-                    // For now, truncate to integer
-                    let int_val = n as i32;
-                    self.emit_int(int_val.clamp(-(1 << 30), (1 << 30) - 1));
+                    // Emit as float constant
+                    let idx = self.add_constant(Value::float(n as crate::value::Float));
+                    self.emit_const(idx);
                 }
             }
             Token::String(s) => {
@@ -2153,8 +2162,8 @@ pub enum CompileError {
     TooManyLocals,
 }
 
-impl std::fmt::Display for CompileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for CompileError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             CompileError::UnexpectedToken {
                 expected,
@@ -2179,6 +2188,7 @@ impl std::fmt::Display for CompileError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for CompileError {}
 
 #[cfg(test)]

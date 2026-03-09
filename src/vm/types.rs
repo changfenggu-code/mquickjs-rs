@@ -6,6 +6,7 @@
 use crate::runtime::FunctionBytecode;
 use crate::value::{Value, float_to_value};
 use crate::vm::stack::Stack;
+use alloc::{string::String, vec::Vec, vec, string::ToString};
 
 // Builtin object indices
 /// Math object index
@@ -367,8 +368,8 @@ pub enum InterpreterError {
     UncaughtException(String),
 }
 
-impl std::fmt::Display for InterpreterError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for InterpreterError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::StackUnderflow => write!(f, "stack underflow"),
             Self::StackOverflow => write!(f, "stack overflow"),
@@ -382,6 +383,7 @@ impl std::fmt::Display for InterpreterError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for InterpreterError {}
 
 /// Result type for interpreter operations
@@ -426,6 +428,8 @@ pub struct Interpreter {
     pub(crate) for_of_iterators: Vec<ForOfIterator>,
     /// Native function registry
     pub(crate) native_functions: Vec<NativeFunction>,
+    /// Global variables set by top-level function declarations (SetGlobal opcode)
+    pub(crate) global_vars: Vec<(String, Value)>,
     /// Error objects created during execution
     /// Stores (error_type, message) pairs
     pub(crate) error_objects: Vec<ErrorObject>,
@@ -447,6 +451,8 @@ pub struct Interpreter {
     pub(crate) next_timer_id: u32,
     /// GC stats
     pub(crate) gc_count: u32,
+    /// PRNG seed for Math.random() (no_std compatible)
+    pub(crate) random_seed: u64,
 }
 
 /// Error object storage
@@ -459,6 +465,7 @@ pub struct ErrorObject {
 }
 
 /// RegExp object storage
+#[cfg(feature = "std")]
 #[derive(Clone)]
 pub struct RegExpObject {
     /// The compiled regex pattern
@@ -475,8 +482,25 @@ pub struct RegExpObject {
     pub multiline: bool,
 }
 
-impl std::fmt::Debug for RegExpObject {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+/// RegExp object storage (stub for no_std)
+#[cfg(not(feature = "std"))]
+#[derive(Debug, Clone)]
+pub struct RegExpObject {
+    /// Original pattern string
+    pub pattern: String,
+    /// Flags string (e.g., "gi")
+    pub flags: String,
+    /// Global flag
+    pub global: bool,
+    /// Case-insensitive flag
+    pub ignore_case: bool,
+    /// Multiline flag
+    pub multiline: bool,
+}
+
+#[cfg(feature = "std")]
+impl core::fmt::Debug for RegExpObject {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RegExpObject")
             .field("pattern", &self.pattern)
             .field("flags", &self.flags)
