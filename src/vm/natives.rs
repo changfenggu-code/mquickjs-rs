@@ -829,18 +829,19 @@ pub(crate) fn native_parse_int(
 
 /// isNaN - check if value is NaN
 pub(crate) fn native_is_nan(
-    _interp: &mut Interpreter,
+    interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
 
-    if val.to_i32().is_some() {
+    let num = interp.to_number(val);
+
+    if num.to_i32().is_some() {
         Ok(Value::bool(false))
-    } else if let Some(f) = val.to_f32() {
+    } else if let Some(f) = num.to_f32() {
         Ok(Value::bool(f.is_nan()))
     } else {
-        // Non-numbers: ToNumber would produce NaN
         Ok(Value::bool(true))
     }
 }
@@ -874,15 +875,17 @@ pub(crate) fn native_parse_float(
 
 /// isFinite - check if value is finite
 pub(crate) fn native_is_finite(
-    _interp: &mut Interpreter,
+    interp: &mut Interpreter,
     _this: Value,
     args: &[Value],
 ) -> Result<Value, String> {
     let val = args.first().copied().unwrap_or_default();
 
-    if val.to_i32().is_some() {
+    let num = interp.to_number(val);
+
+    if num.to_i32().is_some() {
         Ok(Value::bool(true))
-    } else if let Some(f) = val.to_f32() {
+    } else if let Some(f) = num.to_f32() {
         Ok(Value::bool(f.is_finite()))
     } else {
         Ok(Value::bool(false))

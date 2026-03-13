@@ -1469,6 +1469,13 @@ fn test_instanceof_with_properties() {
 }
 
 #[test]
+fn test_typeof_missing_var_returns_undefined() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return typeof missingVar === 'undefined';").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
 fn test_for_in_array() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -1734,6 +1741,28 @@ fn test_is_nan() {
     // isNaN with undefined returns true (since undefined is not a number)
     let result = ctx.eval("return isNaN(undefined);").unwrap();
     assert_eq!(result.to_bool(), Some(true));
+
+    // Global isNaN performs ToNumber on strings
+    let result = ctx.eval("return isNaN('3');").unwrap();
+    assert_eq!(result.to_bool(), Some(false));
+
+    let result = ctx.eval("return isNaN('foo');").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_is_finite_global() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return isFinite(42);").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    // Global isFinite performs ToNumber on strings
+    let result = ctx.eval("return isFinite('3');").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    let result = ctx.eval("return isFinite('foo');").unwrap();
+    assert_eq!(result.to_bool(), Some(false));
 }
 
 #[test]
@@ -5243,4 +5272,16 @@ fn test_number_plus_string_coercion() {
     // When one side is a string, + does concatenation (number→string)
     let result = ctx.eval("return 123 + 'abc';").unwrap();
     assert!(result.is_string());
+}
+
+#[test]
+fn test_string_numeric_subtract_coercion() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(ctx.eval("return '5' - 3;").unwrap().to_i32(), Some(2));
+}
+
+#[test]
+fn test_string_numeric_relational_coercion() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(ctx.eval("return '5' < 10;").unwrap().to_bool(), Some(true));
 }

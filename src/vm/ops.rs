@@ -6,9 +6,9 @@ use alloc::string::ToString;
 use super::interpreter::{Interpreter, InterpreterError, InterpreterResult};
 use crate::value::{Float, Value, float_to_value};
 
-/// JS ToNumber for a primitive value (bool/null/undefined/number).
-/// Returns None for object/string/array types (caller must handle).
-fn to_numeric(val: Value) -> Option<Float> {
+/// JS ToNumber for a subset of primitive values used by the current runtime.
+/// Supports number/bool/null/undefined and numeric strings.
+fn to_numeric(interp: &Interpreter, val: Value) -> Option<Float> {
     if let Some(n) = val.to_number_f32() {
         return Some(n);
     }
@@ -24,13 +24,30 @@ fn to_numeric(val: Value) -> Option<Float> {
     if val.is_undefined() {
         return Some(Float::NAN);
     }
+    // string → parse numeric form; invalid strings become NaN
+    if let Some(str_idx) = val.to_string_idx() {
+        if let Some(s) = interp.get_string_by_idx(str_idx) {
+            let s = s.trim();
+            if s.is_empty() {
+                return Some(0.0);
+            }
+            if let Ok(i) = s.parse::<i32>() {
+                return Some(i as Float);
+            }
+            if let Ok(f) = s.parse::<Float>() {
+                return Some(f);
+            }
+            return Some(Float::NAN);
+        }
+        return Some(Float::NAN);
+    }
     None
 }
 
 /// JS ToInt32: convert any primitive to i32 (for bitwise ops).
 /// bool → 0/1, null → 0, undefined → 0, NaN/Infinity → 0.
-fn to_int32(val: Value) -> Option<i32> {
-    if let Some(f) = to_numeric(val) {
+fn to_int32(interp: &Interpreter, val: Value) -> Option<i32> {
+    if let Some(f) = to_numeric(interp, val) {
         if f.is_nan() || f.is_infinite() {
             Some(0)
         } else {
@@ -42,8 +59,8 @@ fn to_int32(val: Value) -> Option<i32> {
 }
 
 /// Extract both operands as Float via ToNumber.
-fn to_numeric_pair(a: Value, b: Value) -> Option<(Float, Float)> {
-    Some((to_numeric(a)?, to_numeric(b)?))
+fn to_numeric_pair(interp: &Interpreter, a: Value, b: Value) -> Option<(Float, Float)> {
+    Some((to_numeric(interp, a)?, to_numeric(interp, b)?))
 }
 
 impl Interpreter {
@@ -55,7 +72,7 @@ impl Interpreter {
                 Some(r) => Ok(Value::int(r)),
                 None => Ok(Value::float(-(n as Float))),
             }
-        } else if let Some(f) = to_numeric(val) {
+        } else if let Some(f) = to_numeric(self, val) {
             Ok(float_to_value(-f))
         } else {
             Err(InterpreterError::TypeError(
@@ -73,7 +90,7 @@ impl Interpreter {
             };
         }
         // ToNumber for bool/null/undefined/float
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             return Ok(float_to_value(fa + fb));
         }
         Err(InterpreterError::TypeError(
@@ -88,7 +105,7 @@ impl Interpreter {
                 None => Ok(Value::float(va as Float - vb as Float)),
             };
         }
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             return Ok(float_to_value(fa - fb));
         }
         Err(InterpreterError::TypeError(
@@ -103,7 +120,7 @@ impl Interpreter {
                 None => Ok(Value::float(va as Float * vb as Float)),
             };
         }
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             return Ok(float_to_value(fa * fb));
         }
         Err(InterpreterError::TypeError(
@@ -112,7 +129,7 @@ impl Interpreter {
     }
 
     pub(crate) fn op_div(&self, a: Value, b: Value) -> InterpreterResult<Value> {
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             if fb == 0.0 {
                 if fa == 0.0 || fa.is_nan() {
                     Ok(Value::nan())
@@ -141,7 +158,7 @@ impl Interpreter {
                 return Ok(Value::int(0));
             }
         }
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             if fb == 0.0 {
                 Ok(Value::nan())
             } else {
@@ -161,7 +178,7 @@ impl Interpreter {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return Ok(Value::bool(va < vb));
         }
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             // NaN comparisons always false
             return Ok(Value::bool(!fa.is_nan() && !fb.is_nan() && fa < fb));
         }
@@ -174,7 +191,7 @@ impl Interpreter {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return Ok(Value::bool(va <= vb));
         }
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             return Ok(Value::bool(!fa.is_nan() && !fb.is_nan() && fa <= fb));
         }
         Err(InterpreterError::TypeError(
@@ -186,7 +203,7 @@ impl Interpreter {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return Ok(Value::bool(va > vb));
         }
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             return Ok(Value::bool(!fa.is_nan() && !fb.is_nan() && fa > fb));
         }
         Err(InterpreterError::TypeError(
@@ -198,7 +215,7 @@ impl Interpreter {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return Ok(Value::bool(va >= vb));
         }
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             return Ok(Value::bool(!fa.is_nan() && !fb.is_nan() && fa >= fb));
         }
         Err(InterpreterError::TypeError(
@@ -227,7 +244,7 @@ impl Interpreter {
         }
 
         // 3. Cross-type numeric: int(3) == float(3.0), bool==number (bool→0/1 via ToNumber)
-        if let Some((fa, fb)) = to_numeric_pair(a, b) {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
             if fa.is_nan() || fb.is_nan() {
                 return Ok(Value::bool(false));
             }
@@ -245,7 +262,9 @@ impl Interpreter {
         if a.is_nan_value() || b.is_nan_value() {
             return Ok(Value::bool(false));
         }
-        // Cross-type numeric: int(3) === float(3.0)
+        // Internal representations may differ (inline int vs short-float),
+        // but at the language level both are JavaScript Number values.
+        // Therefore 3 === 3.0 should evaluate to true, matching standard JS.
         if let Some((fa, fb)) = a.to_number_f32().zip(b.to_number_f32()) {
             return Ok(Value::bool(fa == fb));
         }
@@ -265,7 +284,7 @@ impl Interpreter {
     // Bitwise operations — JS ToInt32 coercion (bool/null/undefined included)
 
     pub(crate) fn op_bitwise_not(&self, val: Value) -> InterpreterResult<Value> {
-        if let Some(n) = to_int32(val) {
+        if let Some(n) = to_int32(self, val) {
             Ok(Value::int(!n))
         } else {
             Err(InterpreterError::TypeError(
@@ -275,7 +294,7 @@ impl Interpreter {
     }
 
     pub(crate) fn op_bitwise_and(&self, a: Value, b: Value) -> InterpreterResult<Value> {
-        match (to_int32(a), to_int32(b)) {
+        match (to_int32(self, a), to_int32(self, b)) {
             (Some(va), Some(vb)) => Ok(Value::int(va & vb)),
             _ => Err(InterpreterError::TypeError(
                 "cannot apply bitwise AND to non-numbers".to_string(),
@@ -284,7 +303,7 @@ impl Interpreter {
     }
 
     pub(crate) fn op_bitwise_or(&self, a: Value, b: Value) -> InterpreterResult<Value> {
-        match (to_int32(a), to_int32(b)) {
+        match (to_int32(self, a), to_int32(self, b)) {
             (Some(va), Some(vb)) => Ok(Value::int(va | vb)),
             _ => Err(InterpreterError::TypeError(
                 "cannot apply bitwise OR to non-numbers".to_string(),
@@ -293,7 +312,7 @@ impl Interpreter {
     }
 
     pub(crate) fn op_bitwise_xor(&self, a: Value, b: Value) -> InterpreterResult<Value> {
-        match (to_int32(a), to_int32(b)) {
+        match (to_int32(self, a), to_int32(self, b)) {
             (Some(va), Some(vb)) => Ok(Value::int(va ^ vb)),
             _ => Err(InterpreterError::TypeError(
                 "cannot apply bitwise XOR to non-numbers".to_string(),
@@ -302,7 +321,7 @@ impl Interpreter {
     }
 
     pub(crate) fn op_shl(&self, a: Value, b: Value) -> InterpreterResult<Value> {
-        match (to_int32(a), to_int32(b)) {
+        match (to_int32(self, a), to_int32(self, b)) {
             (Some(va), Some(vb)) => {
                 let shift = (vb & 0x1f) as u32;
                 Ok(Value::int(va << shift))
@@ -314,7 +333,7 @@ impl Interpreter {
     }
 
     pub(crate) fn op_sar(&self, a: Value, b: Value) -> InterpreterResult<Value> {
-        match (to_int32(a), to_int32(b)) {
+        match (to_int32(self, a), to_int32(self, b)) {
             (Some(va), Some(vb)) => {
                 let shift = (vb & 0x1f) as u32;
                 Ok(Value::int(va >> shift))
@@ -326,7 +345,7 @@ impl Interpreter {
     }
 
     pub(crate) fn op_shr(&self, a: Value, b: Value) -> InterpreterResult<Value> {
-        match (to_int32(a), to_int32(b)) {
+        match (to_int32(self, a), to_int32(self, b)) {
             (Some(va), Some(vb)) => {
                 let shift = (vb & 0x1f) as u32;
                 let result = (va as u32) >> shift;

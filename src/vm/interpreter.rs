@@ -176,6 +176,53 @@ impl Interpreter {
         }
     }
 
+    fn lookup_global_value(&self, name: &str) -> Option<Value> {
+        let val = match name {
+            "undefined" => Some(Value::undefined()),
+            "NaN" => Some(Value::nan()),
+            "Infinity" => Some(Value::infinity()),
+            "Math" => Some(Value::builtin_object(BUILTIN_MATH)),
+            "JSON" => Some(Value::builtin_object(BUILTIN_JSON)),
+            "Number" => Some(Value::builtin_object(BUILTIN_NUMBER)),
+            "Boolean" => Some(Value::builtin_object(BUILTIN_BOOLEAN)),
+            "String" => Some(Value::builtin_object(BUILTIN_STRING)),
+            "Object" => Some(Value::builtin_object(BUILTIN_OBJECT)),
+            "Array" => Some(Value::builtin_object(BUILTIN_ARRAY)),
+            "console" => Some(Value::builtin_object(BUILTIN_CONSOLE)),
+            "performance" => Some(Value::builtin_object(BUILTIN_PERFORMANCE)),
+            "Date" => Some(Value::builtin_object(BUILTIN_DATE)),
+            "Error" => Some(Value::builtin_object(BUILTIN_ERROR)),
+            "TypeError" => Some(Value::builtin_object(BUILTIN_TYPE_ERROR)),
+            "ReferenceError" => Some(Value::builtin_object(BUILTIN_REFERENCE_ERROR)),
+            "SyntaxError" => Some(Value::builtin_object(BUILTIN_SYNTAX_ERROR)),
+            "RangeError" => Some(Value::builtin_object(BUILTIN_RANGE_ERROR)),
+            "EvalError" => Some(Value::builtin_object(BUILTIN_EVAL_ERROR)),
+            "URIError" => Some(Value::builtin_object(BUILTIN_URI_ERROR)),
+            "InternalError" => Some(Value::builtin_object(BUILTIN_INTERNAL_ERROR)),
+            "RegExp" => Some(Value::builtin_object(BUILTIN_REGEXP)),
+            "globalThis" => Some(Value::builtin_object(BUILTIN_GLOBAL_THIS)),
+            "ArrayBuffer" => Some(Value::builtin_object(BUILTIN_ARRAY_BUFFER)),
+            "Int8Array" => Some(Value::builtin_object(BUILTIN_INT8_ARRAY)),
+            "Uint8Array" => Some(Value::builtin_object(BUILTIN_UINT8_ARRAY)),
+            "Uint8ClampedArray" => Some(Value::builtin_object(BUILTIN_UINT8_CLAMPED_ARRAY)),
+            "Int16Array" => Some(Value::builtin_object(BUILTIN_INT16_ARRAY)),
+            "Uint16Array" => Some(Value::builtin_object(BUILTIN_UINT16_ARRAY)),
+            "Int32Array" => Some(Value::builtin_object(BUILTIN_INT32_ARRAY)),
+            "Uint32Array" => Some(Value::builtin_object(BUILTIN_UINT32_ARRAY)),
+            "Float32Array" => Some(Value::builtin_object(BUILTIN_FLOAT32_ARRAY)),
+            "Float64Array" => Some(Value::builtin_object(BUILTIN_FLOAT64_ARRAY)),
+            _ => self.get_native_func(name),
+        };
+
+        val.or_else(|| {
+            self.global_vars
+                .iter()
+                .rev()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| *v)
+        })
+    }
+
     /// Create a closure and return a Value that references it
     fn create_closure(
         &mut self,
@@ -2161,52 +2208,7 @@ impl Interpreter {
                             ))
                         })?;
 
-                    // Look up the global by name
-                    // First check for special global values and builtin objects
-                    let val = match name {
-                        "undefined" => Some(Value::undefined()),
-                        "NaN" => Some(Value::nan()),
-                        "Infinity" => Some(Value::infinity()),
-                        "Math" => Some(Value::builtin_object(BUILTIN_MATH)),
-                        "JSON" => Some(Value::builtin_object(BUILTIN_JSON)),
-                        "Number" => Some(Value::builtin_object(BUILTIN_NUMBER)),
-                        "Boolean" => Some(Value::builtin_object(BUILTIN_BOOLEAN)),
-                        "String" => Some(Value::builtin_object(BUILTIN_STRING)),
-                        "Object" => Some(Value::builtin_object(BUILTIN_OBJECT)),
-                        "Array" => Some(Value::builtin_object(BUILTIN_ARRAY)),
-                        "console" => Some(Value::builtin_object(BUILTIN_CONSOLE)),
-                        "performance" => Some(Value::builtin_object(BUILTIN_PERFORMANCE)),
-                        "Date" => Some(Value::builtin_object(BUILTIN_DATE)),
-                        "Error" => Some(Value::builtin_object(BUILTIN_ERROR)),
-                        "TypeError" => Some(Value::builtin_object(BUILTIN_TYPE_ERROR)),
-                        "ReferenceError" => Some(Value::builtin_object(BUILTIN_REFERENCE_ERROR)),
-                        "SyntaxError" => Some(Value::builtin_object(BUILTIN_SYNTAX_ERROR)),
-                        "RangeError" => Some(Value::builtin_object(BUILTIN_RANGE_ERROR)),
-                        "EvalError" => Some(Value::builtin_object(BUILTIN_EVAL_ERROR)),
-                        "URIError" => Some(Value::builtin_object(BUILTIN_URI_ERROR)),
-                        "InternalError" => Some(Value::builtin_object(BUILTIN_INTERNAL_ERROR)),
-                        "RegExp" => Some(Value::builtin_object(BUILTIN_REGEXP)),
-                        "globalThis" => Some(Value::builtin_object(BUILTIN_GLOBAL_THIS)),
-                        // TypedArray and ArrayBuffer constructors
-                        "ArrayBuffer" => Some(Value::builtin_object(BUILTIN_ARRAY_BUFFER)),
-                        "Int8Array" => Some(Value::builtin_object(BUILTIN_INT8_ARRAY)),
-                        "Uint8Array" => Some(Value::builtin_object(BUILTIN_UINT8_ARRAY)),
-                        "Uint8ClampedArray" => {
-                            Some(Value::builtin_object(BUILTIN_UINT8_CLAMPED_ARRAY))
-                        }
-                        "Int16Array" => Some(Value::builtin_object(BUILTIN_INT16_ARRAY)),
-                        "Uint16Array" => Some(Value::builtin_object(BUILTIN_UINT16_ARRAY)),
-                        "Int32Array" => Some(Value::builtin_object(BUILTIN_INT32_ARRAY)),
-                        "Uint32Array" => Some(Value::builtin_object(BUILTIN_UINT32_ARRAY)),
-                        "Float32Array" => Some(Value::builtin_object(BUILTIN_FLOAT32_ARRAY)),
-                        "Float64Array" => Some(Value::builtin_object(BUILTIN_FLOAT64_ARRAY)),
-                        _ => self.get_native_func(name),
-                    };
-
-                    let val = val.or_else(|| {
-                        // Check user-defined globals (set via SetGlobal / top-level function decls)
-                        self.global_vars.iter().rev().find(|(n, _)| n == name).map(|(_, v)| *v)
-                    });
+                    let val = self.lookup_global_value(name);
 
                     if let Some(v) = val {
                         self.stack.push(v);
@@ -2216,6 +2218,37 @@ impl Interpreter {
                             name
                         )));
                     }
+                }
+
+                // GetGlobalOrUndefined - like GetGlobal, but missing names become undefined.
+                // Used to implement `typeof bareIdentifier` semantics.
+                op if op == OpCode::GetGlobalOrUndefined as u8 => {
+                    let frame = self.call_stack.last_mut().unwrap();
+                    let bytecode = unsafe { &*frame.bytecode };
+                    let bc = &bytecode.bytecode;
+                    let name_idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]);
+                    frame.pc += 2;
+
+                    let name = bytecode
+                        .constants
+                        .get(name_idx as usize)
+                        .and_then(|v| {
+                            if v.is_string() {
+                                let str_idx = v.to_string_idx()?;
+                                bytecode.string_constants.get(str_idx as usize).map(|s| s.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .ok_or_else(|| {
+                            InterpreterError::InternalError(format!(
+                                "invalid global name constant: {}",
+                                name_idx
+                            ))
+                        })?;
+
+                    let val = self.lookup_global_value(name).unwrap_or_else(Value::undefined);
+                    self.stack.push(val);
                 }
 
                 // SetGlobal - store top-level variable by name (16-bit constant index)

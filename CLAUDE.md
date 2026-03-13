@@ -2,9 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Note**: 中文版本 available at [CLAUDE.zh.md](CLAUDE.zh.md)
+
 ## Project Overview
 
 MQuickJS-RS is a **learning project** — a pure safe Rust port of Fabrice Bellard's [MQuickJS](https://github.com/bellard/mquickjs) minimalist JavaScript engine. It implements an ES5 subset with a tracing mark-compact GC, stack-based bytecode VM, and no `unsafe` code.
+
+**Critical for ESP32/Bare Metal Development**: This project is designed to run on ESP32 bare metal with `no_std`. When adding features or modifying code, always verify `no_std` compatibility.
 
 ## Commands
 
@@ -12,6 +16,9 @@ MQuickJS-RS is a **learning project** — a pure safe Rust port of Fabrice Bella
 # Build
 cargo build
 cargo build --release
+
+# Build for ESP32 bare metal (no_std)
+cargo build --release --no-default-features
 
 # Run tests (373 tests)
 cargo test
@@ -98,3 +105,6 @@ Tests live inline in each source file (`#[cfg(test)]` modules). The 373 tests co
 - **JS scripts** live in `js/examples/` (feature demos) and `js/tests/` (error handling tests). The top-level `examples/` is reserved for Rust examples by Cargo convention.
 - New opcodes go in [src/vm/opcode.rs](src/vm/opcode.rs), with the handler added in the interpreter's main `match` in [src/vm/interpreter.rs](src/vm/interpreter.rs).
 - New built-in methods go in `src/builtins/<object>.rs`, wired up via `get_*_property()` in the interpreter.
+- **`no_std` is required for ESP32** — The project must compile without `std`. When adding dependencies, verify they have `no_std` support or add `default-features = ["std"]` to `Cargo.toml` and use `#[cfg(feature = "std")]` gates.
+- **Memory-constrained design** — ESP32 has limited RAM (typically 320-520KB). Prefer inline allocation, avoid dynamic allocation in hot paths, and use tagged values for integers to minimize heap usage.
+- **Cross-compilation target** — For ESP32, use target: `xtensa-esp32-none-elf`. Run `rustup target add xtensa-esp32-none-elf` if not already installed.

@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Fabrice Bellard 的 [MQuickJS](https://github.com/bellard/mquickjs) 的 Rust 移植版，当前目标是演进为面向 ESP32 等 MCU 设备的 LED 特效脚本运行时。
+Fabrice Bellard 的 [MQuickJS](https://github.com/bellard/mquickjs) 的 Rust 移植版，当前已定位为面向 ESP32 等 MCU 设备的 LED 特效脚本运行时。
 
 本仓库的产品目标不是完整实现 ECMAScript，而是提供一个**受限的 ES6 风格脚本子集**，重点保证可预测执行、资源可控和宿主集成稳定性。
 
@@ -11,6 +11,7 @@ Fabrice Bellard 的 [MQuickJS](https://github.com/bellard/mquickjs) 的 Rust 移
 - `docs/LED_PROFILE.md`：产品脚本规范
 - `docs/PRODUCT_ROADMAP.md`：产品化路线图
 - `docs/JS_FEATURE_SPEC.md`：当前引擎实现说明
+- `docs/EMBEDDED_NO_STD.md`：`no_std` / ESP32 裸板集成说明
 
 ## 特性
 
@@ -109,7 +110,7 @@ fn main() {
 ### 语言核心
 
 - 变量：`var`、`let`、`const`
-- 函数：声明式、表达式、闭包、箭头函数
+- 函数：声明式、表达式、闭包、构造函数
 - 控制流：`if/else`、`while`、`for`、`for-in`、`for-of`
 - 运算符：算术、比较、逻辑、位运算、三元
 - 异常处理：`try/catch/finally`、`throw`
@@ -198,7 +199,7 @@ mqjs app.qbc
 
 值使用标记联合体表示，放入单个机器字：
 
-- **整数**：31 位有符号整数（内联存储）
+- **数值**：31 位有符号整数与内联短浮点（基于 `f32`）
 - **特殊值**：`null`、`undefined`、`true`、`false`
 - **对象**：指向 GC 管理堆对象的指针
 - **字符串**：UTF-8 编码，已内化（interned）
@@ -218,7 +219,7 @@ cargo test
 cargo test -- --nocapture
 ```
 
-目前共有 **373 个测试**，覆盖所有已实现的特性。
+目前共有 **312 个测试**，覆盖当前已实现的主要特性。
 
 ## MQuickJS 与 QuickJS 的区别
 
@@ -226,14 +227,14 @@ cargo test -- --nocapture
 
 | 特性 | QuickJS | MQuickJS / MQuickJS-RS |
 |------|---------|------------------------|
-| ES 版本 | ES2020+ | ES5 子集（"严格模式"） |
+| 语言范围 | ES2020+ | 受限 ES5/ES6 风格 Profile |
 | 内存模型 | 引用计数 | 追踪式 GC（标记-压缩） |
 | Generator | 支持 | 不支持 |
 | Async/Await | 支持 | 不支持 |
 | ES 模块 | 支持 | 不支持 |
 | BigInt | 支持 | 不支持 |
 | Proxy | 支持 | 不支持 |
-| 目标体积 | ~200KB 二进制 | 最低 10KB RAM |
+| 目标规模 | ~200KB 二进制 | 面向低内存嵌入式目标 |
 | 适用场景 | 通用 | 嵌入式系统 |
 
 ## 学习资源
@@ -281,4 +282,4 @@ MIT License
 ## 致谢
 
 - [Fabrice Bellard](https://bellard.org/) —— 原版 MQuickJS C 实现
-- **整个 Rust 移植版由 [Claude](https://claude.ai)（Anthropic AI 助手）编写**，使用 [Claude Code](https://claude.ai/claude-code) 自主实现了全部 373 个测试和约 20,000 行 Rust 代码，参考原版 C 实现完成。
+- **整个 Rust 移植版由 [Claude](https://claude.ai)（Anthropic AI 助手）编写**，使用 [Claude Code](https://claude.ai/claude-code) 基于原版 C 参考实现，自主完成了本仓库当前测试集和 Rust 代码实现。

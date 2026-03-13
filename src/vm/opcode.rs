@@ -354,6 +354,8 @@ pub enum OpCode {
     Print,
     /// Get global variable by name (16-bit constant index)
     GetGlobal,
+    /// Get global variable by name, but push undefined if missing (for typeof bare identifier)
+    GetGlobalOrUndefined,
     /// Set global variable by name (16-bit constant index), pops value
     SetGlobal,
 }
@@ -648,6 +650,8 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     // Print
     OpCodeInfo::new(1, 1, 0, OpFormat::None),
     // GetGlobal - 3 bytes (opcode + 16-bit constant index), pops 0, pushes 1
+    OpCodeInfo::new(3, 0, 1, OpFormat::Const16),
+    // GetGlobalOrUndefined - 3 bytes (opcode + 16-bit constant index), pops 0, pushes 1
     OpCodeInfo::new(3, 0, 1, OpFormat::Const16),
     // SetGlobal - 3 bytes (opcode + 16-bit constant index), pops 1, pushes 0
     OpCodeInfo::new(3, 1, 0, OpFormat::Const16),

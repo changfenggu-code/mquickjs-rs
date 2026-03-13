@@ -1,14 +1,14 @@
 //! MQuickJS - A Rust port of Fabrice Bellard's MicroQuickJS JavaScript engine
 //!
-//! MQuickJS is a minimalist JavaScript engine targeting embedded systems.
-//! It can run JS programs with as low as 10KB of RAM.
+//! MQuickJS is a lightweight JavaScript engine targeting embedded systems.
+//! This crate focuses on constrained script execution for MCU-hosted effect runtimes.
 //!
 //! # Features
-//! - Subset of ES5 JavaScript with "stricter mode"
+//! - Constrained ES5/ES6-style JavaScript profile
 //! - Tracing and compacting garbage collector
 //! - Stack-based bytecode VM
+//! - Inline integers and short-float (`f32`) number model
 //! - UTF-8 string storage
-//! - No external dependencies for core functionality
 //!
 //! # Example
 //! ```ignore

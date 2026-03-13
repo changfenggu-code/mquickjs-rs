@@ -1,86 +1,86 @@
-# How a JavaScript Engine Works
+# JavaScript 引擎工作原理
 
-A deep dive into the internals of MQuickJS-RS for learners interested in programming language implementation.
+深入了解 MQuickJS-RS 的内部实现，适用于对编程语言实现感兴趣的学习者。
 
-## Table of Contents
+## 目录
 
-1. [Overview](#overview)
-2. [The Pipeline](#the-pipeline)
-3. [Lexer (Tokenizer)](#lexer-tokenizer)
-4. [Parser & Compiler](#parser--compiler)
-5. [Bytecode](#bytecode)
-6. [Virtual Machine](#virtual-machine)
-7. [Value Representation](#value-representation)
-8. [Garbage Collection](#garbage-collection)
-9. [Built-in Objects](#built-in-objects)
-10. [Closures](#closures)
-11. [Exception Handling](#exception-handling)
-
----
-
-## Overview
-
-A JavaScript engine transforms human-readable JavaScript code into something a computer can execute. The process involves several stages:
-
-```
-Source Code → Lexer → Tokens → Parser → AST → Compiler → Bytecode → VM → Result
-```
-
-MQuickJS simplifies this by combining parsing and compilation into a single pass (no explicit AST), which reduces memory usage - critical for embedded systems.
+1. [概述](#概述)
+2. [执行流水线](#执行流水线)
+3. [词法分析器](#词法分析器tokenizer)
+4. [解析器与编译器](#解析器与编译器)
+5. [字节码](#字节码)
+6. [虚拟机](#虚拟机)
+7. [值表示](#值表示)
+8. [垃圾回收](#垃圾回收)
+9. [内置对象](#内置对象)
+10. [闭包](#闭包)
+11. [异常处理](#异常处理)
 
 ---
 
-## The Pipeline
+## 概述
 
-### What happens when you run `1 + 2 * 3`?
+JavaScript 引擎将人类可读的 JavaScript 代码转换为计算机可以执行的形式。这个过程涉及多个阶段：
+
+```
+源代码 → 词法分析器 → Token → 解析/编译器 → 字节码 → 虚拟机 → 结果
+```
+
+MQuickJS 通过将解析和编译合并为单次遍历（不显式构建 AST）来简化这一过程，从而减少内存使用——这对嵌入式系统至关重要。
+
+---
+
+## 执行流水线
+
+### 执行 `1 + 2 * 3` 时会发生什么？
 
 ```javascript
-// Input
+// 输入
 1 + 2 * 3
 
-// Step 1: Lexer produces tokens
+// 第 1 步：词法分析器生成 Token
 [NUMBER(1), PLUS, NUMBER(2), STAR, NUMBER(3)]
 
-// Step 2: Parser/Compiler produces bytecode
-push_i8 1      // Push 1 onto stack
-push_i8 2      // Push 2 onto stack
-push_i8 3      // Push 3 onto stack
-mul            // Pop 2,3 → Push 6
-add            // Pop 1,6 → Push 7
-return         // Return top of stack (7)
+// 第 2 步：解析器/编译器生成字节码
+push_i8 1      // 将 1 压入栈
+push_i8 2      // 将 2 压入栈
+push_i8 3      // 将 3 压入栈
+mul            // 弹出 2,3 → 压入 6
+add            // 弹出 1,6 → 压入 7
+return         // 返回栈顶值 (7)
 
-// Step 3: VM executes bytecode
-Stack: [] → [1] → [1,2] → [1,2,3] → [1,6] → [7]
-Result: 7
+// 第 3 步：虚拟机执行字节码
+栈: [] → [1] → [1,2] → [1,2,3] → [1,6] → [7]
+结果: 7
 ```
 
 ---
 
-## Lexer (Tokenizer)
+## 词法分析器 (Tokenizer)
 
-The lexer (`src/parser/lexer.rs`) breaks source code into tokens - the smallest meaningful units.
+词法分析器（`src/parser/lexer.rs`）将源代码分解为 token —— 最小的有意义单元。
 
-### Token Types
+### Token 类型
 
 ```rust
 pub enum Token {
-    // Literals
+    // 字面量
     Number(f64),           // 42, 3.14
     String(String),        // "hello"
     Identifier(String),    // foo, myVar
 
-    // Keywords
-    Var, Let, Const,       // Variable declarations
-    Function, Return,      // Functions
-    If, Else, While, For,  // Control flow
-    True, False, Null,     // Literals
+    // 关键字
+    Var, Let, Const,       // 变量声明
+    Function, Return,      // 函数
+    If, Else, While, For,  // 控制流
+    True, False, Null,     // 字面量
 
-    // Operators
+    // 运算符
     Plus, Minus, Star, Slash,  // + - * /
     Equal, EqualEqual,         // = ==
     Less, Greater,             // < >
 
-    // Punctuation
+    // 标点符号
     LeftParen, RightParen,     // ( )
     LeftBrace, RightBrace,     // { }
     LeftBracket, RightBracket, // [ ]
@@ -88,10 +88,10 @@ pub enum Token {
 }
 ```
 
-### How Lexing Works
+### 词法分析如何工作
 
 ```rust
-// Simplified lexer logic
+// 简化的词法分析逻辑
 fn next_token(&mut self) -> Token {
     self.skip_whitespace();
 
@@ -101,36 +101,36 @@ fn next_token(&mut self) -> Token {
         '"' | '\'' => self.read_string(),
         '+' => Token::Plus,
         '-' => Token::Minus,
-        // ... etc
+        // ... 等等
     }
 }
 ```
 
-### Example
+### 示例
 
 ```javascript
 var x = 10 + 20;
 ```
 
-Produces:
+生成：
 ```
 VAR, IDENTIFIER("x"), EQUAL, NUMBER(10), PLUS, NUMBER(20), SEMICOLON
 ```
 
 ---
 
-## Parser & Compiler
+## 解析器与编译器
 
-The parser (`src/parser/compiler.rs`) reads tokens and generates bytecode. MQuickJS uses a **single-pass compiler** - it parses and emits bytecode simultaneously without building an AST.
+解析器（`src/parser/compiler.rs`）读取 token 并生成字节码。MQuickJS 使用**单次遍历编译器** —— 它同时进行解析和字节码生成，而不构建 AST。
 
-### Operator Precedence
+### 运算符优先级
 
-For expressions like `1 + 2 * 3`, we need to handle operator precedence (multiplication before addition).
+对于像 `1 + 2 * 3` 这样的表达式，我们需要处理运算符优先级（乘法先于加法）。
 
-MQuickJS uses **Pratt parsing** (precedence climbing):
+MQuickJS 使用 **Pratt 解析**（优先级爬升）：
 
 ```rust
-// Precedence levels (higher = binds tighter)
+// 优先级级别（越高 = 结合越紧密）
 fn precedence(op: &Token) -> u8 {
     match op {
         Token::Or => 1,              // ||
@@ -139,28 +139,28 @@ fn precedence(op: &Token) -> u8 {
         Token::Less | Token::Greater => 4,  // < >
         Token::Plus | Token::Minus => 5,    // + -
         Token::Star | Token::Slash => 6,    // * /
-        Token::StarStar => 7,        // ** (right associative)
+        Token::StarStar => 7,        // ** (右结合)
         _ => 0,
     }
 }
 
-// Parse expression with minimum precedence
+// 解析具有最小优先级的表达式
 fn parse_expression(&mut self, min_prec: u8) {
-    // Parse left operand (atom: number, variable, parenthesized expr)
+    // 解析左操作数（原子：数字、变量、括号表达式）
     self.parse_atom();
 
-    // While next operator has higher precedence, continue
+    // 当下一个运算符具有更高优先级时，继续
     while precedence(self.current()) >= min_prec {
         let op = self.advance();
-        // Parse right side with higher precedence
+        // 用更高优先级解析右侧
         self.parse_expression(precedence(&op) + 1);
-        // Emit operator bytecode
+        // 发出运算符字节码
         self.emit_binary_op(op);
     }
 }
 ```
 
-### Parsing Statements
+### 解析语句
 
 ```rust
 fn parse_statement(&mut self) {
@@ -177,9 +177,9 @@ fn parse_statement(&mut self) {
 }
 ```
 
-### Control Flow Compilation
+### 控制流编译
 
-For `if/else`, we need **jump instructions**:
+对于 `if/else`，我们需要**跳转指令**：
 
 ```javascript
 if (x > 0) {
@@ -189,79 +189,79 @@ if (x > 0) {
 }
 ```
 
-Compiles to:
+编译为：
 ```
-get_local x           // Push x
-push_i8 0             // Push 0
+get_local x           // 压入 x
+push_i8 0             // 压入 0
 greater               // x > 0 → true/false
-if_false [ELSE_ADDR]  // Jump to else if false
+if_false [ELSE_ADDR]  // 如果为 false 跳转到 else
 push_string "positive"
 call print
-goto [END_ADDR]       // Skip else block
+goto [END_ADDR]       // 跳过 else 块
 [ELSE_ADDR]:
 push_string "non-positive"
 call print
 [END_ADDR]:
 ```
 
-The compiler uses **backpatching**: emit a placeholder jump address, then fill it in later when we know the target.
+编译器使用**回填**：发出占位符跳转地址，然后在知道目标时填入。
 
 ---
 
-## Bytecode
+## 字节码
 
-Bytecode is a compact, efficient representation of the program. Each instruction is 1-3 bytes.
+字节码是程序的紧凑、高效表示。每条指令为 1-3 字节。
 
-### Instruction Format
+### 指令格式
 
 ```
-[opcode: 1 byte] [operand: 0-2 bytes]
+[opcode: 1 字节] [operand: 0-2 字节]
 ```
 
-### Core Opcodes (`src/vm/opcode.rs`)
+### 核心操作码（`src/vm/opcode.rs`）
 
 ```rust
 pub enum OpCode {
-    // Stack operations
-    Push0, Push1, Push2, ..., Push7,  // Push small integers (0 bytes)
-    PushI8(i8),                        // Push signed byte (1 byte)
-    PushI16(i16),                      // Push signed short (2 bytes)
-    PushConst(u16),                    // Push from constant pool
+    // 栈操作
+    Push0, Push1, Push2, ..., Push7,  // 压入小整数（0 字节）
+    PushI8(i8),                        // 压入有符号字节（1 字节）
+    PushI16(i16),                      // 压入有符号短整（2 字节）
+    PushConst(u16),                    // 从常量池压入
     PushUndefined, PushNull, PushTrue, PushFalse,
 
-    Pop,                               // Discard top
-    Dup,                               // Duplicate top
-    Swap,                              // Swap top two
+    Pop,                               // 丢弃栈顶
+    Dup,                               // 复制栈顶
+    Swap,                              // 交换栈顶两个
 
-    // Arithmetic
+    // 算术运算
     Add, Sub, Mul, Div, Mod,
-    Neg,                               // Unary minus
+    Neg,                               // 一元负号
 
-    // Comparison
+    // 比较运算
     Lt, Le, Gt, Ge, Eq, Ne, StrictEq, StrictNe,
 
-    // Logical
+    // 逻辑运算
     Not,                               // !x
 
-    // Bitwise
+    // 位运算
     BitAnd, BitOr, BitXor, BitNot,
-    Shl, Sar, Shr,                     // Shifts
+    Shl, Sar, Shr,                     // 移位
 
-    // Variables
-    GetLocal(u8),                      // Get local variable
-    SetLocal(u8),                      // Set local variable
-    GetGlobal(u16),                    // Get global by name
+    // 变量
+    GetLocal(u8),                      // 获取局部变量
+    SetLocal(u8),                      // 设置局部变量
+    GetGlobal(u16),                    // 按名称获取全局变量
 
-    // Control flow
-    Goto(i16),                         // Unconditional jump
-    IfFalse(i16),                      // Jump if top is falsy
-    IfTrue(i16),                       // Jump if top is truthy
+    // 控制流
+    Goto(i16),                         // 无条件跳转
+    IfFalse(i16),                      // 如果栈顶为假值则跳转
+    IfTrue(i16),                       // 如果栈顶为真值则跳转
 
-    // Functions
-    Call(u8),                          // Call with N arguments
-    Return,                            // Return from function
+    // 函数
+    Call(u8),                          // 调用 N 个参数
+    Return,                            // 从函数返回
 
-    // Objects
+    // 对象
     GetField(u16),                     // obj.property
     PutField(u16),                     // obj.property = value
     GetArrayEl,                        // arr[index]
@@ -269,7 +269,7 @@ pub enum OpCode {
 }
 ```
 
-### Example Bytecode
+### 字节码示例
 
 ```javascript
 function add(a, b) {
@@ -279,44 +279,44 @@ add(3, 4);
 ```
 
 ```
-# Function 'add' bytecode:
-00: get_local 0      # Push parameter 'a'
-02: get_local 1      # Push parameter 'b'
+# 函数 'add' 字节码：
+00: get_local 0      # 压入参数 'a'
+02: get_local 1      # 压入参数 'b'
 04: add              # a + b
-05: return           # Return result
+05: return           # 返回结果
 
-# Main code:
-00: push_i8 3        # Push argument 3
-02: push_i8 4        # Push argument 4
-04: call 2           # Call with 2 arguments
+# 主代码：
+00: push_i8 3        # 压入参数 3
+02: push_i8 4        # 压入参数 4
+04: call 2           # 调用 2 个参数
 06: return
 ```
 
 ---
 
-## Virtual Machine
+## 虚拟机
 
-The VM (`src/vm/interpreter.rs`) executes bytecode using a **stack-based architecture**.
+虚拟机（`src/vm/interpreter.rs`）使用**基于栈的架构**执行字节码。
 
-### Stack Machine Basics
+### 栈机基础
 
-Unlike register machines (like x86), stack machines use an operand stack:
+与寄存器机（如 x86）不同，栈机使用操作数栈：
 
 ```
-Operation: 3 + 4 * 2
+操作: 3 + 4 * 2
 
-push 3       Stack: [3]
-push 4       Stack: [3, 4]
-push 2       Stack: [3, 4, 2]
-mul          Stack: [3, 8]      (4 * 2 = 8)
-add          Stack: [11]        (3 + 8 = 11)
+push 3       栈: [3]
+push 4       栈: [3, 4]
+push 2       栈: [3, 4, 2]
+mul          栈: [3, 8]      (4 * 2 = 8)
+add          栈: [11]        (3 + 8 = 11)
 ```
 
-### The Interpreter Loop
+### 解释器循环
 
 ```rust
 fn execute(&mut self, bytecode: &[u8]) -> Result<Value, Error> {
-    let mut pc = 0;  // Program counter
+    let mut pc = 0;  // 程序计数器
 
     loop {
         let opcode = bytecode[pc];
@@ -363,99 +363,86 @@ fn execute(&mut self, bytecode: &[u8]) -> Result<Value, Error> {
                 return Ok(result);
             }
 
-            // ... ~80 more opcodes
+            // ... 还有 ~80 个操作码
         }
     }
 }
 ```
 
-### Call Stack
+### 调用栈
 
-For function calls, we maintain a **call stack** of frames:
+对于函数调用，我们维护一个**调用栈**帧：
 
 ```rust
 struct CallFrame {
-    return_pc: usize,      // Where to return to
-    base_pointer: usize,   // Start of locals on stack
-    function: FunctionRef, // Current function
+    return_pc: usize,      // 返回到哪里
+    base_pointer: usize,   // 栈上局部变量的起始位置
+    function: FunctionRef, // 当前函数
 }
 ```
 
 ```
-# Calling add(3, 4):
+# 调用 add(3, 4):
 
-Main stack:  [... | 3 | 4]
+主栈:  [... | 3 | 4]
                    ↑ base_pointer
 
-Call 'add':
-- Save return address
-- Set base_pointer to arguments
-- Execute 'add' bytecode
-- Pop frame, restore state
+调用 'add':
+- 保存返回地址
+- 设置 base_pointer 指向参数
+- 执行 'add' 字节码
+- 弹出帧，恢复状态
 ```
 
 ---
 
-## Value Representation
+## 值表示
 
-JavaScript has dynamic types. Every value must carry its type at runtime.
+JavaScript 具有动态类型。每个值必须在运行时携带其类型信息。
 
-### Tagged Values (`src/value.rs`)
+### 标记值（`src/value.rs`）
 
-MQuickJS uses **tagged pointers** - stealing bits from pointers to encode type information:
+MQuickJS 使用**标记值（tagged value）**来编码类型信息：在一个 64 位字中同时保存类型标签与数据。
 
 ```rust
-// 64-bit value representation
-// Bit 0: 0 = 31-bit integer (value << 1)
-// Bits 0-2 = 001: Pointer to heap object
-// Bits 0-2 = 011: Special value (null, undefined, bool)
+// 64 位值表示（简化版）
+// 最低位为 0      -> 31 位整数（内联）
+// 低 3 位为 001   -> 堆对象引用
+// 低 2/3 位为 011 -> 特殊值（null / undefined / bool / exception ...）
+// 低 3 位为 101   -> 内联短浮点（f32）
 
-pub struct Value(usize);
-
-impl Value {
-    // Small integers stored inline (no allocation!)
-    pub fn int(n: i32) -> Value {
-        Value((n as usize) << 1)  // Shift left, bit 0 = 0
-    }
-
-    pub fn to_i32(&self) -> Option<i32> {
-        if self.0 & 1 == 0 {  // Check tag bit
-            Some((self.0 as i32) >> 1)
-        } else {
-            None
-        }
-    }
-
-    // Special values use tag bits
-    pub fn null() -> Value {
-        Value(0b0111)  // Special tag + null subtype
-    }
-
-    pub fn undefined() -> Value {
-        Value(0b1011)  // Special tag + undefined subtype
-    }
-}
+pub struct RawValue(u64);
+pub struct Value(RawValue);
 ```
 
-### Why Tagged Values?
+当前实现不是“纯整数模型”，而是：
 
-1. **Small integers are free** - no memory allocation
-2. **Single word** - fits in registers, cache-friendly
-3. **Type checks are fast** - just check bits
+1. **小整数内联** —— 常见整数无需分配
+2. **特殊值打标** —— `null` / `undefined` / `bool` 等直接编码在值里
+3. **对象走堆引用** —— 字符串、数组、对象等通过标记引用表示
+4. **短浮点内联** —— 非整数数值可用 `f32` 形式直接编码
 
-### Heap Objects
+这让运行时既保留了紧凑表示，又支持 `NaN`、`Infinity` 和非整数计算。
 
-Larger values (strings, arrays, objects) live on the heap:
+### 为什么使用标记值？
+
+1. **小整数是免费的** —— 无内存分配
+2. **单字大小** —— 适合寄存器，缓存友好
+3. **类型检查快速** —— 只需检查位
+
+### 堆对象
+
+较大的值（字符串、数组、对象）位于堆上：
 
 ```rust
-// Heap-allocated string
+// 堆分配的字符串
 struct JSString {
-    header: GcHeader,  // For garbage collector
+    header: GcHeader,  // 用于垃圾回收器
     length: u32,
-    data: [u8],        // UTF-8 bytes
+    data: [u8],        // UTF-8 字节
 }
 
-// Heap-allocated object
+// 堆分配的对象
 struct JSObject {
     header: GcHeader,
     properties: HashMap<String, Value>,
@@ -464,56 +451,56 @@ struct JSObject {
 
 ---
 
-## Garbage Collection
+## 垃圾回收
 
-JavaScript automatically manages memory. MQuickJS uses **mark-compact** collection.
+JavaScript 自动管理内存。MQuickJS 使用**标记-压缩**收集。
 
-### Why Mark-Compact?
+### 为什么使用标记-压缩？
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| Reference counting | Immediate cleanup | Cycles leak, overhead per write |
-| Mark-sweep | Handles cycles | Fragmentation |
-| **Mark-compact** | No fragmentation, handles cycles | Pause time |
+| 方法 | 优点 | 缺点 |
+|------|------|------|
+| 引用计数 | 立即清理 | 循环泄漏，每次写入有开销 |
+| 标记-清除 | 处理循环 | 碎片化 |
+| **标记-压缩** | 无碎片化，处理循环 | 暂停时间 |
 
-### How It Works
-
-```
-1. MARK PHASE: Find all reachable objects
-   - Start from "roots" (stack, globals)
-   - Recursively mark everything reachable
-
-2. COMPACT PHASE: Move live objects together
-   - Slide objects to eliminate gaps
-   - Update all pointers
-```
-
-### Example
+### 工作原理
 
 ```
-Before GC:
-[A][garbage][B][garbage][C][garbage]
+1. 标记阶段：找到所有可达对象
+   - 从"根"开始（栈、全局变量）
+   - 递归标记所有可达内容
 
-After mark: A, B, C are live
-
-After compact:
-[A][B][C][free space...]
+2. 压缩阶段：将存活对象移到一起
+   - 滑动对象以消除间隙
+   - 更新所有指针
 ```
 
-### The Algorithm (`src/gc/collector.rs`)
+### 示例
+
+```
+GC 前：
+[A][垃圾][B][垃圾][C][垃圾]
+
+标记后：A, B, C 存活
+
+压缩后：
+[A][B][C][空闲空间...]
+```
+
+### 算法（`src/gc/collector.rs`）
 
 ```rust
 fn collect(heap: &mut Heap) {
-    // Mark phase
+    // 标记阶段
     for root in get_roots() {
         mark(root);
     }
 
-    // Compact phase
+    // 压缩阶段
     let mut write_ptr = heap.start;
     for obj in heap.objects() {
         if obj.is_marked() {
-            // Move object to write_ptr
+            // 移动对象到 write_ptr
             if write_ptr != obj.address() {
                 copy(obj, write_ptr);
                 update_references(obj.address(), write_ptr);
@@ -526,10 +513,10 @@ fn collect(heap: &mut Heap) {
 }
 
 fn mark(obj: &Object) {
-    if obj.is_marked() { return; }  // Already visited
+    if obj.is_marked() { return; }  // 已访问
     obj.set_marked();
 
-    // Recursively mark children
+    // 递归标记子对象
     for child in obj.references() {
         mark(child);
     }
@@ -538,21 +525,21 @@ fn mark(obj: &Object) {
 
 ---
 
-## Built-in Objects
+## 内置对象
 
-JavaScript has many built-in objects. MQuickJS implements them as native Rust functions.
+JavaScript 有许多内置对象。MQuickJS 将它们实现为原生 Rust 函数。
 
-### Native Function Interface
+### 原生函数接口
 
 ```rust
-// Native function signature
+// 原生函数签名
 type NativeFn = fn(
     interp: &mut Interpreter,
     this: Value,
     args: &[Value]
 ) -> Result<Value, String>;
 
-// Example: Array.prototype.push
+// 示例：Array.prototype.push
 fn array_push(
     interp: &mut Interpreter,
     this: Value,
@@ -565,18 +552,18 @@ fn array_push(
     Ok(Value::int(array.len() as i32))
 }
 
-// Registration
+// 注册
 interp.register_native("Array.prototype.push", array_push);
 ```
 
-### Method Dispatch
+### 方法分发
 
-When you call `arr.push(x)`:
+当你调用 `arr.push(x)` 时：
 
 ```
-1. GetField2 "push"     // Get method, keep arr on stack
-2. // Stack: [arr, push_function]
-3. CallMethod 1         // Call with 1 arg, this=arr
+1. GetField2 "push"     // 获取方法，保留 arr 在栈上
+2. // 栈: [arr, push_function]
+3. CallMethod 1         // 调用 1 个参数，this=arr
 ```
 
 ```rust
@@ -589,25 +576,25 @@ fn get_field(&self, obj: Value, name: &str) -> Value {
             // ...
         }
     } else if obj.is_string() {
-        // String methods...
+        // 字符串方法...
     }
-    // etc
+    // 等等
 }
 ```
 
 ---
 
-## Closures
+## 闭包
 
-Closures are functions that capture variables from their enclosing scope.
+闭包是从其封闭作用域捕获变量的函数。
 
-### The Challenge
+### 挑战
 
 ```javascript
 function makeCounter() {
     var count = 0;
     return function() {
-        count = count + 1;  // Accesses outer 'count'
+        count = count + 1;  // 访问外部 'count'
         return count;
     };
 }
@@ -617,38 +604,38 @@ counter();  // 1
 counter();  // 2
 ```
 
-When `makeCounter` returns, its local `count` should be gone... but the inner function still needs it!
+当 `makeCounter` 返回时，其局部变量 `count` 应该消失了……但内部函数仍然需要它！
 
-### Solution: Captured Variables
+### 解决方案：捕获变量
 
 ```rust
 struct Closure {
     function: FunctionBytecode,
-    captured: Vec<Value>,  // Captured variable values
+    captured: Vec<Value>,  // 捕获的变量值
 }
 ```
 
-The compiler tracks which variables are captured:
+编译器跟踪哪些变量被捕获：
 
 ```rust
 struct CaptureInfo {
-    outer_index: usize,  // Index in outer function
-    is_local: bool,      // From locals or outer captures
+    outer_index: usize,  // 在外部函数中的索引
+    is_local: bool,      // 来自局部变量还是外部捕获
 }
 ```
 
-### Compilation
+### 编译
 
 ```javascript
 function outer() {
     var x = 10;
     return function inner() {
-        return x;  // Captures x
+        return x;  // 捕获 x
     };
 }
 ```
 
-Compiles to:
+编译为：
 
 ```
 # outer:
@@ -658,11 +645,11 @@ fclosure [inner], [CaptureInfo { index: 0, is_local: true }]
 return
 
 # inner:
-get_var_ref 0        # Get captured x
+get_var_ref 0        # 获取捕获的 x
 return
 ```
 
-### Runtime
+### 运行时
 
 ```rust
 fn execute_fclosure(&mut self, func_idx: usize, captures: &[CaptureInfo]) {
@@ -672,7 +659,7 @@ fn execute_fclosure(&mut self, func_idx: usize, captures: &[CaptureInfo]) {
         let value = if cap.is_local {
             self.get_local(cap.outer_index)
         } else {
-            // Already a capture - get from current closure
+            // 已是捕获值 - 从当前闭包获取
             self.current_closure().captured[cap.outer_index]
         };
         captured_values.push(value);
@@ -688,11 +675,11 @@ fn execute_fclosure(&mut self, func_idx: usize, captures: &[CaptureInfo]) {
 
 ---
 
-## Exception Handling
+## 异常处理
 
-JavaScript has `try/catch/finally` for error handling.
+JavaScript 使用 `try/catch/finally` 进行错误处理。
 
-### The Mechanism
+### 机制
 
 ```javascript
 try {
@@ -704,31 +691,31 @@ try {
 }
 ```
 
-### Exception Handlers
+### 异常处理器
 
 ```rust
 struct ExceptionHandler {
-    catch_pc: usize,       // Where to jump on exception
-    stack_depth: usize,    // Stack depth to restore
-    frame_depth: usize,    // Call frame depth
+    catch_pc: usize,       // 异常时跳转到哪里
+    stack_depth: usize,    // 要恢复的栈深度
+    frame_depth: usize,    // 调用帧深度
 }
 
-// Handler stack
+// 处理器栈
 exception_handlers: Vec<ExceptionHandler>
 ```
 
-### Bytecode
+### 字节码
 
 ```
-00: catch [20]         # Register handler at PC 20
-02: # try block
+00: catch [20]         # 在 PC 20 注册处理器
+02: # try 块
     push_string "oops"
     new Error 1
-    throw              # Jump to catch
-10: drop_catch         # Remove handler (normal exit)
-12: goto [30]          # Skip catch block
-20: # catch block
-    set_local 0        # e = exception value
+    throw              # 跳转到 catch
+10: drop_catch         # 移除处理器（正常退出）
+12: goto [30]          # 跳过 catch 块
+20: # catch 块
+    set_local 0        # e = 异常值
     get_local 0
     get_field "message"
     call print 1
@@ -737,76 +724,76 @@ exception_handlers: Vec<ExceptionHandler>
     call print 1
 ```
 
-### Throw Implementation
+### Throw 实现
 
 ```rust
 fn do_throw(&mut self, exception: Value) -> Result<(), Error> {
-    // Find matching handler
+    // 查找匹配的处理器
     while let Some(handler) = self.exception_handlers.pop() {
-        // Unwind call stack to handler's frame
+        // 展开调用栈到处理器的帧
         while self.call_stack.len() > handler.frame_depth {
             self.call_stack.pop();
         }
 
-        // Restore stack depth
+        // 恢复栈深度
         self.stack.truncate(handler.stack_depth);
 
-        // Push exception for catch block
+        // 压入异常给 catch 块
         self.stack.push(exception);
 
-        // Jump to catch
+        // 跳转到 catch
         self.pc = handler.catch_pc;
         return Ok(());
     }
 
-    // No handler found - propagate error
+    // 未找到处理器 - 传播错误
     Err(Error::UncaughtException(exception))
 }
 ```
 
 ---
 
-## Further Reading
+## 延伸阅读
 
-### Books
-- *Crafting Interpreters* by Robert Nystrom - excellent free online book
+### 书籍
+- *Crafting Interpreters* by Robert Nystrom - 优秀的免费在线书籍
 - *Engineering a Compiler* by Cooper & Torczon
 - *Modern Compiler Implementation* by Andrew Appel
 
-### Papers
-- "A No-Frills Introduction to Lua 5.1 VM Instructions" - great bytecode explanation
-- "Efficient Implementation of the Smalltalk-80 System" - pioneering VM paper
+### 论文
+- "A No-Frills Introduction to Lua 5.1 VM Instructions" - 优秀的字节码解释
+- "Efficient Implementation of Smalltalk-80 System" - 开创性的 VM 论文
 
-### Source Code
-- [MQuickJS (C)](https://bellard.org/quickjs/) - the original
-- [QuickJS (C)](https://bellard.org/quickjs/) - full-featured predecessor
-- [LuaJIT](https://luajit.org/) - extremely optimized Lua VM
-- [V8](https://v8.dev/) - Google's JavaScript engine
-
----
-
-## Exercises for Learners
-
-1. **Add a new operator**: Implement the `**` (exponentiation) operator
-   - Add token to lexer
-   - Add precedence (right associative!)
-   - Emit bytecode
-   - Implement in VM
-
-2. **Add a built-in function**: Implement `Math.sin()`
-   - Register native function
-   - Handle in `get_builtin_property`
-   - Add test
-
-3. **Trace execution**: Add a debug mode that prints each opcode as it executes
-
-4. **Optimize**: Find a frequently-executed bytecode sequence and add a specialized opcode
-
-5. **Add a type**: Implement a simple `Set` object
-   - Create `SetObject` struct
-   - Add marker bit for value encoding
-   - Implement `add`, `has`, `delete` methods
+### 源代码
+- [MQuickJS (C)](https://bellard.org/quickjs/) - 原始实现
+- [QuickJS (C)](https://bellard.org/quickjs/) - 功能完善的前身
+- [LuaJIT](https://luajit.org/) - 极度优化的 Lua VM
+- [V8](https://v8.dev/) - Google 的 JavaScript 引擎
 
 ---
 
-*This documentation is part of MQuickJS-RS, a JavaScript engine written entirely by Claude.*
+## 学习者练习
+
+1. **添加新运算符**：实现 `**`（幂运算）运算符
+   - 在词法分析器中添加 token
+   - 添加优先级（右结合！）
+   - 发出字节码
+   - 在虚拟机中实现
+
+2. **添加内置函数**：实现 `Math.sin()`
+   - 注册原生函数
+   - 在 `get_builtin_property` 中处理
+   - 添加测试
+
+3. **跟踪执行**：添加调试模式，打印每个操作码的执行
+
+4. **优化**：找到频繁执行的字节码序列并添加专用操作码
+
+5. **添加类型**：实现简单的 `Set` 对象
+   - 创建 `SetObject` 结构体
+   - 为值编码添加标记位
+   - 实现 `add`、`has`、`delete` 方法
+
+---
+
+*本文档是 MQuickJS-RS 的一部分，完全由 Claude 编写的 JavaScript 引擎。*

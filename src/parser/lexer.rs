@@ -125,6 +125,7 @@ pub struct SourcePos {
 }
 
 /// Lexer for JavaScript source code
+#[derive(Clone)]
 pub struct Lexer<'a> {
     source: &'a [u8],
     pos: usize,

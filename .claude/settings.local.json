@@ -11,7 +11,9 @@
       "Bash(grep -v '//')",
       "Bash(perl -i -pe 's/\"\"\\(Expected catch variable name|Expected .* after finally|Invalid increment operand|Invalid decrement operand|Expected property name after \\\\.|Assignment expressions not yet fully implemented\\)\"\"\\\\.into\\\\\\(\\\\\\)/\"\"$1\"\"/g' src/parser/compiler.rs)",
       "Bash(xargs wc:*)",
-      "Bash(-e \"throw new Error\\(''uncaught!''\\);\")"
+      "Bash(-e \"throw new Error\\(''uncaught!''\\);\")",
+      "Bash(find d:/projects/mquickjs-rs -type d -not -path */target/* -not -path */.git/*)",
+      "Bash(git add:*)"
     ]
   }
 }

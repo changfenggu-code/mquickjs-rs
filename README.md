@@ -2,13 +2,14 @@
 
 A Rust port of [MQuickJS](https://github.com/bellard/mquickjs) focused on embedded JavaScript execution for ESP32-class devices.
 
-This repository is being hardened into a product-oriented runtime for LED effect scripts. It does **not** target full ECMAScript compatibility; it targets a constrained ES6-style profile optimized for deterministic execution, bounded resources, and host integration on MCU devices.
+This repository is a product-oriented runtime for LED effect scripts. It does **not** target full ECMAScript compatibility; it targets a constrained ES5/ES6-style profile optimized for deterministic execution, bounded resources, and host integration on MCU devices.
 
 See:
 
 - `docs/LED_PROFILE.md` for the product script contract
 - `docs/PRODUCT_ROADMAP.md` for the productization plan
 - `docs/JS_FEATURE_SPEC.md` for the engine's broader implementation notes
+- `docs/EMBEDDED_NO_STD.md` for `no_std` / ESP32 bare-metal integration notes
 
 ## Features
 
@@ -107,7 +108,7 @@ This project intentionally supports a constrained JavaScript profile rather than
 ### Language Features
 
 - Variables: `var`, `let`, `const`
-- Functions: declarations, expressions, closures, arrow functions
+- Functions: declarations, expressions, closures, constructor functions
 - Control flow: `if/else`, `while`, `for`, `for-in`, `for-of`
 - Operators: arithmetic, comparison, logical, bitwise, ternary
 - Exception handling: `try/catch/finally`, `throw`
@@ -196,7 +197,7 @@ Bytecode files use the `.qbc` extension with a simple binary format:
 
 Values are represented as tagged unions fitting in a single machine word:
 
-- **Integers**: 31-bit signed integers (inline)
+- **Numbers**: 31-bit signed integers and inline short floats (`f32`-based)
 - **Special values**: `null`, `undefined`, `true`, `false`
 - **Objects**: Pointer to GC-managed heap object
 - **Strings**: UTF-8 encoded, interned
@@ -216,7 +217,7 @@ cargo test
 cargo test -- --nocapture
 ```
 
-Currently **373 tests** covering all implemented features.
+Currently **312 tests** covering implemented features.
 
 ## MQuickJS vs QuickJS
 
@@ -224,14 +225,14 @@ Currently **373 tests** covering all implemented features.
 
 | Feature | QuickJS | MQuickJS / MQuickJS-RS |
 |---------|---------|------------------------|
-| ES version | ES2020+ | ES5 subset ("stricter mode") |
+| Language scope | ES2020+ | Constrained ES5/ES6-style profile |
 | Memory model | Reference counting | Tracing GC (mark-compact) |
 | Generators | Yes | No |
 | Async/await | Yes | No |
 | ES Modules | Yes | No |
 | BigInt | Yes | No |
 | Proxies | Yes | No |
-| Target size | ~200KB binary | ~10KB RAM capable |
+| Target footprint | ~200KB binary | Low-RAM embedded targets |
 | Use case | General purpose | Embedded systems |
 
 ## Learning Resources
@@ -279,4 +280,4 @@ MIT License
 ## Credits
 
 - [Fabrice Bellard](https://bellard.org/) - Original MQuickJS C implementation
-- **This entire Rust port was written by [Claude](https://claude.ai)** (Anthropic's AI assistant), using [Claude Code](https://claude.ai/claude-code) to autonomously implement all 373 tests and ~20,000 lines of Rust code based on the original C reference implementation
+- **This entire Rust port was written by [Claude](https://claude.ai)** (Anthropic's AI assistant), using [Claude Code](https://claude.ai/claude-code) to autonomously implement the current test suite and the Rust code in this repository based on the original C reference implementation

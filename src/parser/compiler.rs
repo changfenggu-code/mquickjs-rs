@@ -115,6 +115,11 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    fn peek_token(&self) -> Token {
+        let mut lexer = self.lexer.clone();
+        lexer.next_token()
+    }
+
     /// Compile the source and return bytecode
     pub fn compile(mut self) -> Result<CompiledFunction, CompileError> {
         // Parse statements until EOF
@@ -1633,7 +1638,35 @@ impl<'a> Compiler<'a> {
             }
             Token::TypeOf => {
                 self.advance();
-                self.parse_precedence(Precedence::Unary)?;
+                // Special-case bare identifiers so `typeof missingVar` returns
+                // "undefined" instead of throwing ReferenceError, matching JS.
+                let bare_identifier = matches!(self.current_token, Token::Ident(_))
+                    && !matches!(
+                        self.peek_token(),
+                        Token::LParen | Token::LBracket | Token::Dot
+                    );
+
+                if bare_identifier {
+                    let Token::Ident(name) = &self.current_token else { unreachable!() };
+                    let name = name.clone();
+                    self.advance();
+
+                    if let Some(idx) = self.resolve_local(&name) {
+                        self.emit_get_local(idx);
+                    } else if let Some(idx) = self.resolve_capture(&name) {
+                        self.emit_get_capture(idx);
+                    } else {
+                        self.emit_op(OpCode::GetGlobalOrUndefined);
+                        let const_idx = self.add_constant(Value::string(0));
+                        // Replace temp constant with actual compile-time string constant
+                        let str_idx = self.string_constants.len() as u16;
+                        self.string_constants.push(name);
+                        self.constants[const_idx as usize] = Value::string(str_idx);
+                        self.emit_u16(const_idx);
+                    }
+                } else {
+                    self.parse_precedence(Precedence::Unary)?;
+                }
                 self.emit_op(OpCode::TypeOf);
             }
 
