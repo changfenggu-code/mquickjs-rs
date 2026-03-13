@@ -6,7 +6,7 @@ use crate::runtime::FunctionBytecode;
 use crate::value::Value;
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::Stack;
-use alloc::{string::String, vec::Vec, vec, format, string::ToString};
+use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 
 // Native function implementations and format helpers (defined in natives.rs)
 use super::natives::*;
@@ -721,7 +721,10 @@ impl Interpreter {
                     let bc = &bytecode.bytecode;
                     let idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]) as usize;
                     frame.pc += 2;
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(idx).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(idx).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
@@ -739,7 +742,10 @@ impl Interpreter {
                     let bc = &bytecode.bytecode;
                     let idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]) as usize;
                     frame.pc += 2;
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(idx).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(idx).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
@@ -751,7 +757,10 @@ impl Interpreter {
                 // Get local 0-3 (optimized)
                 op if op == OpCode::GetLoc0 as u8 => {
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(0).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.first().copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
@@ -762,7 +771,10 @@ impl Interpreter {
                 }
                 op if op == OpCode::GetLoc1 as u8 => {
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(1).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(1).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
@@ -773,7 +785,10 @@ impl Interpreter {
                 }
                 op if op == OpCode::GetLoc2 as u8 => {
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(2).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(2).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
@@ -784,7 +799,10 @@ impl Interpreter {
                 }
                 op if op == OpCode::GetLoc3 as u8 => {
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(3).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(3).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
@@ -798,7 +816,10 @@ impl Interpreter {
                 op if op == OpCode::PutLoc0 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(0).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.first().copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
@@ -809,7 +830,10 @@ impl Interpreter {
                 op if op == OpCode::PutLoc1 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(1).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(1).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
@@ -820,7 +844,10 @@ impl Interpreter {
                 op if op == OpCode::PutLoc2 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(2).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(2).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
@@ -831,7 +858,10 @@ impl Interpreter {
                 op if op == OpCode::PutLoc3 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(3).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(3).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
@@ -846,7 +876,10 @@ impl Interpreter {
                     let bytecode = unsafe { &*frame.bytecode };
                     let idx = bytecode.bytecode[frame.pc] as usize;
                     frame.pc += 1;
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(idx).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(idx).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
@@ -863,7 +896,10 @@ impl Interpreter {
                     let bytecode = unsafe { &*frame.bytecode };
                     let idx = bytecode.bytecode[frame.pc] as usize;
                     frame.pc += 1;
-                    let cell = frame.local_cells.as_ref().and_then(|lc| lc.get(idx).copied().flatten());
+                    let cell = frame
+                        .local_cells
+                        .as_ref()
+                        .and_then(|lc| lc.get(idx).copied().flatten());
                     let frame_ptr = frame.frame_ptr;
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
@@ -2235,7 +2271,10 @@ impl Interpreter {
                         .and_then(|v| {
                             if v.is_string() {
                                 let str_idx = v.to_string_idx()?;
-                                bytecode.string_constants.get(str_idx as usize).map(|s| s.as_str())
+                                bytecode
+                                    .string_constants
+                                    .get(str_idx as usize)
+                                    .map(|s| s.as_str())
                             } else {
                                 None
                             }
@@ -2247,7 +2286,9 @@ impl Interpreter {
                             ))
                         })?;
 
-                    let val = self.lookup_global_value(name).unwrap_or_else(Value::undefined);
+                    let val = self
+                        .lookup_global_value(name)
+                        .unwrap_or_else(Value::undefined);
                     self.stack.push(val);
                 }
 
@@ -2286,7 +2327,8 @@ impl Interpreter {
 
                     // Update or insert into global_vars
                     let name_owned = String::from(name);
-                    if let Some(entry) = self.global_vars.iter_mut().find(|(n, _)| *n == name_owned) {
+                    if let Some(entry) = self.global_vars.iter_mut().find(|(n, _)| *n == name_owned)
+                    {
                         entry.1 = val;
                     } else {
                         self.global_vars.push((name_owned, val));

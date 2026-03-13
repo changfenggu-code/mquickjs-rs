@@ -58,7 +58,11 @@ pub fn capture_effect(name: &'static str, js: &str, num_frames: usize) -> Effect
 
     let frames = CAPTURED.with(|c| c.borrow_mut().drain(..).collect::<Vec<_>>());
     let led_count = frames.first().map(|f| f.len()).unwrap_or(20);
-    EffectData { name, led_count, frames }
+    EffectData {
+        name,
+        led_count,
+        frames,
+    }
 }
 
 pub fn capture_all(num_frames: usize) -> Vec<EffectData> {

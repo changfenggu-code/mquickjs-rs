@@ -72,7 +72,10 @@ fn test_compile_error_undeclared_variable() {
 fn test_typeof_undeclared_variable_is_not_compile_error() {
     let mut ctx = Context::new(64 * 1024);
     let result = ctx.eval("return typeof undeclaredVariable;");
-    assert!(result.is_ok(), "typeof undeclared variable should not error");
+    assert!(
+        result.is_ok(),
+        "typeof undeclared variable should not error"
+    );
 }
 
 // =========================================================

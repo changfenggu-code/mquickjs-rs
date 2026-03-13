@@ -9,9 +9,9 @@
 //! - Bits 0-2 = 011: Special values (null, undefined, bool, exception, etc.)
 //! - Bits 0-2 = 101: Short float (limited range, no allocation needed)
 
-use core::fmt;
-use alloc::string::{String, ToString};
 use alloc::format;
+use alloc::string::{String, ToString};
+use core::fmt;
 
 /// The floating-point type used by the engine.
 /// Using f32 for embedded/MCU targets; change to f64 if needed.
@@ -395,13 +395,13 @@ impl Value {
     /// Check if this is null
     #[inline]
     pub const fn is_null(self) -> bool {
-        self.0.0 == RawValue::NULL.0
+        self.0 .0 == RawValue::NULL.0
     }
 
     /// Check if this is undefined
     #[inline]
     pub const fn is_undefined(self) -> bool {
-        self.0.0 == RawValue::UNDEFINED.0
+        self.0 .0 == RawValue::UNDEFINED.0
     }
 
     /// Check if this is a boolean
@@ -437,13 +437,13 @@ impl Value {
     /// Check if this is an exception
     #[inline]
     pub const fn is_exception(self) -> bool {
-        self.0.0 == RawValue::EXCEPTION.0
+        self.0 .0 == RawValue::EXCEPTION.0
     }
 
     /// Check if this is uninitialized
     #[inline]
     pub const fn is_uninitialized(self) -> bool {
-        self.0.0 == RawValue::UNINITIALIZED.0
+        self.0 .0 == RawValue::UNINITIALIZED.0
     }
 
     /// Check if this is nullish (null or undefined)

@@ -2,8 +2,8 @@
 //!
 //! The stack grows downward in memory (toward lower addresses).
 
-use alloc::vec::Vec;
 use crate::value::Value;
+use alloc::vec::Vec;
 
 /// Value stack for bytecode execution
 pub struct Stack {

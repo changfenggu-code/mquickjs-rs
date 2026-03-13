@@ -4,9 +4,9 @@
 //! error objects, regex, typed arrays, and interpreter statistics.
 
 use crate::runtime::FunctionBytecode;
-use crate::value::{Value, float_to_value};
+use crate::value::{float_to_value, Value};
 use crate::vm::stack::Stack;
-use alloc::{string::String, vec::Vec, vec, string::ToString};
+use alloc::{string::String, string::ToString, vec, vec::Vec};
 
 // Builtin object indices
 /// Math object index

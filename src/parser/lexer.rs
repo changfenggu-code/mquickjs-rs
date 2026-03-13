@@ -2,7 +2,7 @@
 //!
 //! Converts source text into a stream of tokens.
 
-use alloc::{string::String, format, string::ToString};
+use alloc::{format, string::String, string::ToString};
 
 /// Token types
 #[derive(Debug, Clone, PartialEq)]

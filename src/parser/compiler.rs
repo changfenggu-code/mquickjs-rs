@@ -6,7 +6,7 @@
 use super::lexer::{Lexer, SourcePos, Token};
 use crate::value::Value;
 use crate::vm::opcode::OpCode;
-use alloc::{string::String, vec::Vec, vec, format, string::ToString};
+use alloc::{format, string::String, string::ToString, vec::Vec};
 
 /// Maximum number of local variables
 const MAX_LOCALS: usize = 256;
@@ -41,15 +41,19 @@ struct JumpPatch {
     offset: usize,
 }
 
-/// Loop context for break/continue
+/// Loop/switch context for break/continue
 #[derive(Debug, Clone)]
 struct LoopContext {
     /// Continue jump target (start of loop or increment section)
     continue_target: usize,
-    /// Break jump patches (to be patched after loop)
+    /// Break jump patches (to be patched after loop/switch)
     break_patches: Vec<JumpPatch>,
+    /// Continue jump patches (for do...while where target is unknown at body compile time)
+    continue_patches: Vec<JumpPatch>,
     /// Scope depth when loop started (for proper cleanup)
     scope_depth: u32,
+    /// True if this is a switch statement (continue should skip past it)
+    is_switch: bool,
 }
 
 /// Compiler state
@@ -605,13 +609,16 @@ impl<'a> Compiler<'a> {
             Token::Function => self.function_declaration(),
             Token::If => self.if_statement(),
             Token::While => self.while_statement(),
+            Token::Do => self.do_while_statement(),
             Token::For => self.for_statement(),
+            Token::Switch => self.switch_statement(),
             Token::Break => self.break_statement(),
             Token::Continue => self.continue_statement(),
             Token::Return => self.return_statement(),
             Token::Print => self.print_statement(),
             Token::Try => self.try_statement(),
             Token::Throw => self.throw_statement(),
+            Token::Debugger => self.debugger_statement(),
             Token::LBrace => self.block_statement(),
             _ => self.expression_statement(),
         }
@@ -895,7 +902,9 @@ impl<'a> Compiler<'a> {
         self.loop_stack.push(LoopContext {
             continue_target: loop_start,
             break_patches: Vec::new(),
+            continue_patches: Vec::new(),
             scope_depth: self.scope_depth,
+            is_switch: false,
         });
 
         self.expect(Token::LParen)?;
@@ -908,6 +917,58 @@ impl<'a> Compiler<'a> {
 
         self.emit_loop(loop_start);
         self.patch_jump(exit_jump);
+
+        // Pop loop context and patch break jumps
+        let loop_ctx = self.loop_stack.pop().unwrap();
+        for patch in loop_ctx.break_patches {
+            self.patch_jump(patch);
+        }
+
+        Ok(())
+    }
+
+    /// Parse do...while statement: do { body } while (cond);
+    fn do_while_statement(&mut self) -> Result<(), CompileError> {
+        self.advance(); // consume 'do'
+
+        let loop_start = self.current_offset();
+
+        // Push loop context; continue_target is deferred (set to sentinel)
+        // because we don't know the condition offset yet
+        self.loop_stack.push(LoopContext {
+            continue_target: usize::MAX, // sentinel: will use continue_patches
+            break_patches: Vec::new(),
+            continue_patches: Vec::new(),
+            scope_depth: self.scope_depth,
+            is_switch: false,
+        });
+
+        // Compile body
+        self.statement()?;
+
+        // 'while' keyword
+        self.expect(Token::While)?;
+
+        // Patch any continue jumps to here (the condition)
+        let condition_start = self.current_offset();
+        let loop_ctx = self.loop_stack.last_mut().unwrap();
+        let continue_patches: Vec<JumpPatch> = core::mem::take(&mut loop_ctx.continue_patches);
+        for patch in continue_patches {
+            self.patch_jump(patch);
+        }
+
+        // Compile condition
+        self.expect(Token::LParen)?;
+        self.expression()?;
+        self.expect(Token::RParen)?;
+        self.expect(Token::Semicolon)?;
+
+        // If condition is true, jump back to loop_start
+        let _ = condition_start; // used above for continue patches
+        self.emit_op(OpCode::IfTrue);
+        let current = self.bytecode.len() + 4;
+        let offset = (loop_start as i32) - (current as i32);
+        self.emit_u32(offset as u32);
 
         // Pop loop context and patch break jumps
         let loop_ctx = self.loop_stack.pop().unwrap();
@@ -998,7 +1059,9 @@ impl<'a> Compiler<'a> {
         self.loop_stack.push(LoopContext {
             continue_target: loop_start,
             break_patches: Vec::new(),
+            continue_patches: Vec::new(),
             scope_depth: self.scope_depth,
+            is_switch: false,
         });
 
         // Get iterator from hidden local
@@ -1061,7 +1124,9 @@ impl<'a> Compiler<'a> {
         self.loop_stack.push(LoopContext {
             continue_target: loop_start,
             break_patches: Vec::new(),
+            continue_patches: Vec::new(),
             scope_depth: self.scope_depth,
+            is_switch: false,
         });
 
         // Get iterator from hidden local
@@ -1135,7 +1200,9 @@ impl<'a> Compiler<'a> {
         self.loop_stack.push(LoopContext {
             continue_target,
             break_patches: Vec::new(),
+            continue_patches: Vec::new(),
             scope_depth: self.scope_depth,
+            is_switch: false,
         });
 
         // Body
@@ -1169,7 +1236,7 @@ impl<'a> Compiler<'a> {
         self.advance(); // consume 'break'
 
         if self.loop_stack.is_empty() {
-            return Err(self.syntax_error("'break' outside of loop".to_string()));
+            return Err(self.syntax_error("'break' outside of loop or switch".to_string()));
         }
 
         // Emit jump (will be patched when loop ends)
@@ -1188,15 +1255,24 @@ impl<'a> Compiler<'a> {
     fn continue_statement(&mut self) -> Result<(), CompileError> {
         self.advance(); // consume 'continue'
 
-        if self.loop_stack.is_empty() {
+        // Find innermost loop context (skip switch contexts)
+        let loop_idx = self.loop_stack.iter().rposition(|ctx| !ctx.is_switch);
+
+        let Some(idx) = loop_idx else {
             return Err(self.syntax_error("'continue' outside of loop".to_string()));
+        };
+
+        let ctx = &self.loop_stack[idx];
+        let continue_target = ctx.continue_target;
+        let has_deferred_continue = continue_target == usize::MAX;
+
+        if has_deferred_continue {
+            // do...while: continue target not yet known, emit a patch
+            let patch = self.emit_jump(OpCode::Goto);
+            self.loop_stack[idx].continue_patches.push(patch);
+        } else {
+            self.emit_loop(continue_target);
         }
-
-        // Get the continue target
-        let continue_target = self.loop_stack.last().unwrap().continue_target;
-
-        // Emit loop back to continue target
-        self.emit_loop(continue_target);
 
         self.expect(Token::Semicolon)?;
         Ok(())
@@ -1236,6 +1312,192 @@ impl<'a> Compiler<'a> {
         self.expect(Token::Semicolon)?;
         self.emit_op(OpCode::Throw);
 
+        Ok(())
+    }
+
+    /// Parse debugger statement (compiled as no-op)
+    fn debugger_statement(&mut self) -> Result<(), CompileError> {
+        self.advance(); // consume 'debugger'
+        self.expect(Token::Semicolon)?;
+        self.emit_op(OpCode::Nop);
+        Ok(())
+    }
+
+    /// Parse switch statement: switch (expr) { case val: ...; default: ...; }
+    ///
+    /// Two-pass compilation with lexer save/restore for correct fall-through:
+    ///   Pass 1: compile case expressions into a comparison chain (skip bodies)
+    ///   Pass 2: restore lexer, skip expressions, compile bodies in order
+    ///
+    /// Bytecode layout:
+    ///   <switch_expr>
+    ///   Dup; <case1_expr>; StrictEq; IfTrue -> case1_body
+    ///   Dup; <case2_expr>; StrictEq; IfTrue -> case2_body
+    ///   Goto -> default_body | exit
+    ///   case1_body: <stmts>   ← falls through to case2_body
+    ///   case2_body: <stmts>
+    ///   default_body: <stmts>
+    ///   exit: Drop
+    fn switch_statement(&mut self) -> Result<(), CompileError> {
+        self.advance(); // consume 'switch'
+
+        self.expect(Token::LParen)?;
+        self.expression()?; // switch value on stack
+        self.expect(Token::RParen)?;
+        self.expect(Token::LBrace)?;
+
+        // Push switch context for break
+        self.loop_stack.push(LoopContext {
+            continue_target: 0,
+            break_patches: Vec::new(),
+            continue_patches: Vec::new(),
+            scope_depth: self.scope_depth,
+            is_switch: true,
+        });
+
+        // Save lexer state for pass 2
+        let saved_lexer = self.lexer.clone();
+        let saved_token = self.current_token.clone();
+
+        // Pass 1: Emit comparison chain, skip bodies
+        let mut case_jumps: Vec<JumpPatch> = Vec::new();
+        let mut has_default = false;
+
+        loop {
+            match &self.current_token {
+                Token::Case => {
+                    self.advance();
+                    self.emit_op(OpCode::Dup);
+                    self.expression()?;
+                    self.emit_op(OpCode::StrictEq);
+                    case_jumps.push(self.emit_jump(OpCode::IfTrue));
+                    self.expect(Token::Colon)?;
+                    self.skip_case_body();
+                }
+                Token::Default => {
+                    self.advance();
+                    self.expect(Token::Colon)?;
+                    has_default = true;
+                    case_jumps.push(self.emit_jump(OpCode::Goto));
+                    self.skip_case_body();
+                }
+                Token::RBrace => break,
+                Token::Eof => {
+                    return Err(self.syntax_error("Unexpected EOF in switch".to_string()));
+                }
+                _ => {
+                    return Err(self.syntax_error("Expected 'case', 'default', or '}'".to_string()));
+                }
+            }
+        }
+
+        // If no default clause, emit jump to exit
+        let no_match_exit = if !has_default {
+            Some(self.emit_jump(OpCode::Goto))
+        } else {
+            None
+        };
+
+        // Pass 2: Restore lexer, compile bodies
+        self.lexer = saved_lexer;
+        self.current_token = saved_token;
+
+        let mut jump_idx = 0;
+        loop {
+            match &self.current_token {
+                Token::Case => {
+                    self.advance();
+                    self.skip_to_colon();
+                    self.expect(Token::Colon)?;
+                    self.patch_jump(case_jumps[jump_idx]);
+                    jump_idx += 1;
+                    self.compile_case_body()?;
+                }
+                Token::Default => {
+                    self.advance();
+                    self.expect(Token::Colon)?;
+                    self.patch_jump(case_jumps[jump_idx]);
+                    jump_idx += 1;
+                    self.compile_case_body()?;
+                }
+                Token::RBrace => break,
+                Token::Eof => {
+                    return Err(self.syntax_error("Unexpected EOF in switch".to_string()));
+                }
+                _ => {
+                    return Err(self.syntax_error("Expected 'case', 'default', or '}'".to_string()));
+                }
+            }
+        }
+
+        self.expect(Token::RBrace)?;
+
+        if let Some(exit) = no_match_exit {
+            self.patch_jump(exit);
+        }
+
+        let switch_ctx = self.loop_stack.pop().unwrap();
+        for patch in switch_ctx.break_patches {
+            self.patch_jump(patch);
+        }
+
+        self.emit_op(OpCode::Drop); // drop switch value
+        Ok(())
+    }
+
+    /// Skip tokens in a case body (pass 1), respecting brace nesting.
+    fn skip_case_body(&mut self) {
+        let mut depth = 0u32;
+        loop {
+            match &self.current_token {
+                Token::LBrace => {
+                    depth += 1;
+                    self.advance();
+                }
+                Token::RBrace if depth > 0 => {
+                    depth -= 1;
+                    self.advance();
+                }
+                Token::RBrace | Token::Case | Token::Default if depth == 0 => break,
+                Token::Eof => break,
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    /// Skip tokens until a colon at depth 0 (used in pass 2 to skip case expressions).
+    fn skip_to_colon(&mut self) {
+        let mut depth = 0u32;
+        loop {
+            match &self.current_token {
+                Token::Colon if depth == 0 => break,
+                Token::LParen | Token::LBracket => {
+                    depth += 1;
+                    self.advance();
+                }
+                Token::RParen | Token::RBracket if depth > 0 => {
+                    depth -= 1;
+                    self.advance();
+                }
+                Token::Eof => break,
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    /// Compile case body statements until next case/default/} at top level.
+    fn compile_case_body(&mut self) -> Result<(), CompileError> {
+        while !self.check(&Token::Case)
+            && !self.check(&Token::Default)
+            && !self.check(&Token::RBrace)
+            && !self.check(&Token::Eof)
+        {
+            self.statement()?;
+        }
         Ok(())
     }
 
@@ -1432,7 +1694,10 @@ impl<'a> Compiler<'a> {
                 let n = *n;
                 self.advance();
                 // Check if it's an integer that fits in short int range
-                if (n - libm::trunc(n)) == 0.0 && n >= -(1i64 << 30) as f64 && n <= ((1i64 << 30) - 1) as f64 {
+                if (n - libm::trunc(n)) == 0.0
+                    && n >= -(1i64 << 30) as f64
+                    && n <= ((1i64 << 30) - 1) as f64
+                {
                     self.emit_int(n as i32);
                 } else {
                     // Emit as float constant
@@ -1529,8 +1794,7 @@ impl<'a> Compiler<'a> {
 
                 // Parse function body
                 self.expect(Token::LBrace)?;
-                let body_bytecode =
-                    self.compile_function_body(func_name.as_deref(), &params)?;
+                let body_bytecode = self.compile_function_body(func_name.as_deref(), &params)?;
 
                 let bytecode_idx = self.functions.len();
                 self.functions.push(body_bytecode);
@@ -1647,7 +1911,9 @@ impl<'a> Compiler<'a> {
                     );
 
                 if bare_identifier {
-                    let Token::Ident(name) = &self.current_token else { unreachable!() };
+                    let Token::Ident(name) = &self.current_token else {
+                        unreachable!()
+                    };
                     let name = name.clone();
                     self.advance();
 
@@ -1668,6 +1934,14 @@ impl<'a> Compiler<'a> {
                     self.parse_precedence(Precedence::Unary)?;
                 }
                 self.emit_op(OpCode::TypeOf);
+            }
+
+            // Void operator: void expr -> undefined
+            Token::Void => {
+                self.advance();
+                self.parse_precedence(Precedence::Unary)?;
+                self.emit_op(OpCode::Drop);
+                self.emit_op(OpCode::Undefined);
             }
 
             // Delete operator: delete obj.prop or delete arr[idx]

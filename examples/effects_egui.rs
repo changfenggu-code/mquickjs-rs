@@ -60,7 +60,9 @@ impl eframe::App for LedApp {
                 // Effect selector
                 ui.horizontal(|ui| {
                     for (i, ef) in self.effects.iter().enumerate() {
-                        if ui.add(egui::Button::new(ef.name).selected(i == self.current)).clicked()
+                        if ui
+                            .add(egui::Button::new(ef.name).selected(i == self.current))
+                            .clicked()
                             && i != self.current
                         {
                             self.current = i;

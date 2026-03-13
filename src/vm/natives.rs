@@ -4,8 +4,8 @@
 
 use super::interpreter::*;
 use crate::runtime::FunctionBytecode;
-use crate::value::{Float, Value, float_to_value, format_float};
-use alloc::{string::String, vec::Vec, vec, format, string::ToString};
+use crate::value::{float_to_value, format_float, Float, Value};
+use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 
 // =============================================================================
 // Native function implementations
@@ -673,27 +673,55 @@ pub(crate) fn native_array_sort(
     // Get optional compare function
     let compare_fn = args.first().copied();
 
-    if let Some(arr) = interp.arrays.get_mut(arr_idx as usize) {
-        if compare_fn.is_some()
-            && (compare_fn.unwrap().is_closure() || compare_fn.unwrap().to_func_ptr().is_some())
-        {
-            // Custom comparator - need to call the function for each comparison
-            // For now, just do default sort without custom comparator support
-            // TODO: Implement custom comparator
-            arr.sort_by(|a, b| {
-                // Default: convert to strings and compare
-                let a_val = a.to_i32().unwrap_or(0);
-                let b_val = b.to_i32().unwrap_or(0);
-                a_val.cmp(&b_val)
-            });
-        } else {
-            // Default sort - numeric comparison for integers
-            arr.sort_by(|a, b| {
-                let a_val = a.to_i32().unwrap_or(0);
-                let b_val = b.to_i32().unwrap_or(0);
-                a_val.cmp(&b_val)
-            });
-        }
+    if compare_fn.is_some()
+        && (compare_fn.unwrap().is_closure() || compare_fn.unwrap().to_func_ptr().is_some())
+    {
+        return Err("sort compareFn is not supported".to_string());
+    }
+
+    let arr = interp
+        .arrays
+        .get(arr_idx as usize)
+        .ok_or_else(|| "invalid array".to_string())?
+        .clone();
+
+    let all_numbers = arr.iter().all(|v| v.is_int() || v.is_float());
+    let all_strings = arr.iter().all(|v| v.to_string_idx().is_some());
+
+    let mut sorted = arr;
+
+    if all_numbers {
+        sorted.sort_by(|a, b| {
+            let a_val = a.to_number_f32().unwrap_or(Float::NAN);
+            let b_val = b.to_number_f32().unwrap_or(Float::NAN);
+
+            match (a_val.is_nan(), b_val.is_nan()) {
+                (true, true) => core::cmp::Ordering::Equal,
+                (true, false) => core::cmp::Ordering::Greater,
+                (false, true) => core::cmp::Ordering::Less,
+                (false, false) => a_val
+                    .partial_cmp(&b_val)
+                    .unwrap_or(core::cmp::Ordering::Equal),
+            }
+        });
+    } else if all_strings {
+        sorted.sort_by(|a, b| {
+            let a_str = a
+                .to_string_idx()
+                .and_then(|idx| interp.get_string_by_idx(idx))
+                .unwrap_or("");
+            let b_str = b
+                .to_string_idx()
+                .and_then(|idx| interp.get_string_by_idx(idx))
+                .unwrap_or("");
+            a_str.cmp(b_str)
+        });
+    } else {
+        return Err("sort only supports arrays of all numbers or all strings".to_string());
+    }
+
+    if let Some(slot) = interp.arrays.get_mut(arr_idx as usize) {
+        *slot = sorted;
     }
 
     // Return the array itself (sort is in-place)
@@ -1341,7 +1369,10 @@ pub(crate) fn native_math_random(
     _args: &[Value],
 ) -> Result<Value, String> {
     // Simple LCG PRNG that works in no_std
-    interp.random_seed = interp.random_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    interp.random_seed = interp
+        .random_seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     let random = ((interp.random_seed >> 33) as u32 % 1_000_000) as Float / 1_000_000.0;
     Ok(Value::float(random))
 }
@@ -2767,7 +2798,11 @@ impl<'a> JsonParser<'a> {
                             let hex: String = (0..4)
                                 .filter_map(|_| {
                                     let c = self.next_char();
-                                    if c.is_ascii_hexdigit() { Some(c) } else { None }
+                                    if c.is_ascii_hexdigit() {
+                                        Some(c)
+                                    } else {
+                                        None
+                                    }
                                 })
                                 .collect();
                             if hex.len() == 4 {
@@ -3883,11 +3918,7 @@ impl Interpreter {
         self.register_native("Array.prototype.fill", native_array_fill, 1);
 
         // TypedArray.prototype methods
-        self.register_native(
-            "TypedArray.prototype.fill",
-            native_typed_array_fill,
-            1,
-        );
+        self.register_native("TypedArray.prototype.fill", native_typed_array_fill, 1);
         self.register_native(
             "TypedArray.prototype.subarray",
             native_typed_array_subarray,

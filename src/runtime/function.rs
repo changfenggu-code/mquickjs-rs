@@ -6,7 +6,7 @@
 //! - Function bytecode
 
 use crate::value::Value;
-use alloc::{string::String, vec::Vec, vec, format, string::ToString};
+use alloc::{format, string::String, string::ToString, vec::Vec};
 
 /// Maximum number of function arguments
 pub const MAX_ARGS: u16 = 65535;
@@ -271,7 +271,7 @@ impl FunctionBytecode {
         out.extend_from_slice(&(self.constants.len() as u32).to_le_bytes());
         for val in &self.constants {
             // Serialize the raw value
-            let raw = val.0.0 as u64;
+            let raw = val.0 .0;
             out.extend_from_slice(&raw.to_le_bytes());
         }
 

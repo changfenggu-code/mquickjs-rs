@@ -2,9 +2,9 @@
 //
 //! All op_* methods are pure computations on Value types.
 
-use alloc::string::ToString;
 use super::interpreter::{Interpreter, InterpreterError, InterpreterResult};
-use crate::value::{Float, Value, float_to_value};
+use crate::value::{float_to_value, Float, Value};
+use alloc::string::ToString;
 
 /// JS ToNumber for a subset of primitive values used by the current runtime.
 /// Supports number/bool/null/undefined and numeric strings.

@@ -13,7 +13,10 @@
       "Bash(xargs wc:*)",
       "Bash(-e \"throw new Error\\(''uncaught!''\\);\")",
       "Bash(find d:/projects/mquickjs-rs -type d -not -path */target/* -not -path */.git/*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(xargs grep:*)"
     ]
   }
 }

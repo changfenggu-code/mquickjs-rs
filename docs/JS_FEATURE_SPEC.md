@@ -181,15 +181,19 @@
 - 数值、字符串、布尔、`null`、`undefined`
 - 表达式语句、块语句
 - `print expr;` 非标准打印语句
+- `debugger;`（当前为 no-op）
 - `if / else`
 - `while`
+- `do...while`
 - `for`
 - `for-in`
 - `for-of`
+- `switch / case / default`
 - `break` / `continue`
 - `return`
 - `try / catch / finally`
 - `throw`
+- `void`
 
 ### 函数与作用域
 
@@ -268,6 +272,7 @@
 - `Array.prototype.sort` 已实现基础路径，但**不保证完整自定义 comparator 语义**
 - `gc()` 可调用，但**不应视为稳定产品 API 或完整 GC 控制接口**
 - `toString()` 仅对当前已显式实现的类型提供基础支持；**`valueOf()` 与完整 `ToPrimitive` 链不在当前目标范围**
+- `switch` / `do...while` / `debugger` / `void` 已实现基础语义，但仍应按产品脚本子集理解，而不是推导为“完整语法广覆盖”
 
 ### Error 模型
 
@@ -284,8 +289,6 @@
 
 - 箭头函数 `=>`
 - `class`
-- `switch`
-- `do...while`
 - generator / `yield`
 - `async` / `await`
 - `Promise`
@@ -380,6 +383,10 @@
 
 - 稀疏数组语义不是主要目标
 - `sort` 不保证完整自定义 comparator 语义
+- 默认 `sort()` 当前采用受限实现：
+  - 纯数值数组按数值升序排序（支持整数与浮点）
+  - 纯字符串数组按字典序排序
+  - 混合类型数组与自定义 comparator 当前不保证支持
 
 ## 5.4 String
 

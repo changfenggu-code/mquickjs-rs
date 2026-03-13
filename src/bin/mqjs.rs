@@ -12,8 +12,8 @@
 //!   --memory-limit N   Limit memory usage to N bytes (supports k/K, m/M suffixes)
 
 use mquickjs::Context;
-use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
 
 /// Command line options
 struct Options {

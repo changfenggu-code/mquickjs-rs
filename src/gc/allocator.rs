@@ -19,9 +19,9 @@
 //!
 //! All allocations are word-aligned and have a memory tag in the first word.
 
+use crate::value::WORD_SIZE;
 use alloc::vec;
 use alloc::vec::Vec;
-use crate::value::WORD_SIZE;
 
 /// Memory block tags - stored in the first few bits of each block header
 #[repr(u8)]

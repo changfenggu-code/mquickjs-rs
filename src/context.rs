@@ -11,8 +11,8 @@ use crate::gc::Heap;
 use crate::parser::compiler::{CompileError, Compiler};
 use crate::runtime::FunctionBytecode;
 use crate::value::Value;
-use crate::vm::Interpreter;
 use crate::vm::types::NativeFn;
+use crate::vm::Interpreter;
 
 /// JavaScript execution context
 ///
@@ -34,6 +34,8 @@ pub struct Context {
     /// All bytecodes evaluated so far, kept alive to prevent dangling pointers.
     /// FClosure emits raw pointers into FunctionBytecode.inner_functions; those
     /// pointers must remain valid for the lifetime of the Context.
+    /// Box is intentional: provides stable heap addresses for raw pointers.
+    #[allow(clippy::vec_box)]
     bytecodes: Vec<Box<FunctionBytecode>>,
 }
 
@@ -129,8 +131,9 @@ impl Context {
         // inner_functions; those pointers must remain valid for as long as the
         // Context lives, so we keep every bytecode we execute in self.bytecodes.
         let bytecode = Box::new(Self::compiled_to_bytecode(compiled));
-        let result = self.interpreter
-            .execute(&*bytecode)
+        let result = self
+            .interpreter
+            .execute(&bytecode)
             .map_err(|e| EvalError::RuntimeError(e.to_string()));
         self.bytecodes.push(bytecode);
         result

@@ -7,9 +7,9 @@
 //! This design eliminates memory fragmentation and allows for smaller object headers
 //! compared to reference counting.
 
-use alloc::vec::Vec;
 use super::allocator::{BlockHeader, Heap, MemoryTag};
 use crate::value::Value;
+use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 /// A GC-safe reference to a value

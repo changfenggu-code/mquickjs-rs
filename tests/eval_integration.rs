@@ -1471,7 +1471,9 @@ fn test_instanceof_with_properties() {
 #[test]
 fn test_typeof_missing_var_returns_undefined() {
     let mut ctx = Context::new(64 * 1024);
-    let result = ctx.eval("return typeof missingVar === 'undefined';").unwrap();
+    let result = ctx
+        .eval("return typeof missingVar === 'undefined';")
+        .unwrap();
     assert_eq!(result.to_bool(), Some(true));
 }
 
@@ -4436,6 +4438,51 @@ fn test_array_sort_returns_array() {
 }
 
 #[test]
+fn test_array_sort_floats_numeric() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var arr = [3.5, 1.25, 2.0, -1.0];
+        arr.sort();
+        return arr[0] === -1 && arr[1] === 1.25 && arr[2] === 2 && arr[3] === 3.5;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_array_sort_strings_lexicographic() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var arr = ['b', 'aa', 'c', 'a'];
+        arr.sort();
+        return arr[0] === 'a' && arr[1] === 'aa' && arr[2] === 'b' && arr[3] === 'c';
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_array_sort_comparator_not_supported() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval(
+        "
+        var arr = [3, 2, 1];
+        arr.sort(function(a, b) { return a - b; });
+    ",
+    );
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_array_flat() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -5284,4 +5331,142 @@ fn test_string_numeric_subtract_coercion() {
 fn test_string_numeric_relational_coercion() {
     let mut ctx = Context::new(64 * 1024);
     assert_eq!(ctx.eval("return '5' < 10;").unwrap().to_bool(), Some(true));
+}
+
+// ===== debugger / void / do...while / switch tests =====
+
+#[test]
+fn test_debugger_statement() {
+    let mut ctx = Context::new(64 * 1024);
+    // debugger is a no-op, should not error
+    assert_eq!(ctx.eval("debugger; return 42;").unwrap().to_i32(), Some(42));
+}
+
+#[test]
+fn test_void_operator() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(ctx.eval("return void 0;").unwrap().is_undefined(), true);
+    assert_eq!(
+        ctx.eval("return void (1 + 2);").unwrap().is_undefined(),
+        true
+    );
+    // void should still evaluate its operand (side effects)
+    assert_eq!(
+        ctx.eval("var x = 1; void (x = 5); return x;")
+            .unwrap()
+            .to_i32(),
+        Some(5)
+    );
+}
+
+#[test]
+fn test_do_while_basic() {
+    let mut ctx = Context::new(64 * 1024);
+    // Basic do...while: body always runs at least once
+    assert_eq!(
+        ctx.eval("var i = 0; do { i = i + 1; } while (i < 5); return i;")
+            .unwrap()
+            .to_i32(),
+        Some(5)
+    );
+}
+
+#[test]
+fn test_do_while_runs_once_when_false() {
+    let mut ctx = Context::new(64 * 1024);
+    // Body runs once even if condition is immediately false
+    assert_eq!(
+        ctx.eval("var x = 0; do { x = x + 10; } while (false); return x;")
+            .unwrap()
+            .to_i32(),
+        Some(10)
+    );
+}
+
+#[test]
+fn test_do_while_break() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(
+        ctx.eval("var i = 0; do { i = i + 1; if (i === 3) { break; } } while (i < 10); return i;")
+            .unwrap()
+            .to_i32(),
+        Some(3)
+    );
+}
+
+#[test]
+fn test_do_while_continue() {
+    let mut ctx = Context::new(64 * 1024);
+    // continue should jump to condition check
+    assert_eq!(
+        ctx.eval("var i = 0; var sum = 0; do { i = i + 1; if (i === 3) { continue; } sum = sum + i; } while (i < 5); return sum;")
+            .unwrap()
+            .to_i32(),
+        Some(1 + 2 + 4 + 5) // skip i=3
+    );
+}
+
+#[test]
+fn test_switch_basic() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(
+        ctx.eval("var x = 2; var r = 0; switch (x) { case 1: r = 10; break; case 2: r = 20; break; case 3: r = 30; break; } return r;")
+            .unwrap().to_i32(),
+        Some(20)
+    );
+}
+
+#[test]
+fn test_switch_default() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(
+        ctx.eval("var x = 99; var r = 0; switch (x) { case 1: r = 10; break; default: r = -1; break; } return r;")
+            .unwrap().to_i32(),
+        Some(-1)
+    );
+}
+
+#[test]
+fn test_switch_no_match_no_default() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(
+        ctx.eval(
+            "var r = 0; switch (5) { case 1: r = 10; break; case 2: r = 20; break; } return r;"
+        )
+        .unwrap()
+        .to_i32(),
+        Some(0)
+    );
+}
+
+#[test]
+fn test_switch_fallthrough() {
+    let mut ctx = Context::new(64 * 1024);
+    // Without break, case 2 falls through to case 3
+    assert_eq!(
+        ctx.eval("var x = 2; var r = 0; switch (x) { case 1: r = r + 10; case 2: r = r + 20; case 3: r = r + 30; } return r;")
+            .unwrap().to_i32(),
+        Some(50) // 20 + 30 (fall-through)
+    );
+}
+
+#[test]
+fn test_switch_break_in_loop() {
+    let mut ctx = Context::new(64 * 1024);
+    // break inside switch should only break the switch, not the outer loop
+    assert_eq!(
+        ctx.eval("var sum = 0; for (var i = 0; i < 3; i = i + 1) { switch (i) { case 0: sum = sum + 1; break; case 1: sum = sum + 10; break; default: sum = sum + 100; break; } } return sum;")
+            .unwrap().to_i32(),
+        Some(111) // 1 + 10 + 100
+    );
+}
+
+#[test]
+fn test_switch_string_cases() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(
+        ctx.eval("var s = 'b'; var r = 0; switch (s) { case 'a': r = 1; break; case 'b': r = 2; break; case 'c': r = 3; break; } return r;")
+            .unwrap().to_i32(),
+        Some(2)
+    );
 }

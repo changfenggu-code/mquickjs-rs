@@ -101,13 +101,21 @@ pub fn unicode_from_utf8(buf: &[u8]) -> Option<(u32, usize)> {
 /// Minimum of two values
 #[inline]
 pub const fn min_usize(a: usize, b: usize) -> usize {
-    if a < b { a } else { b }
+    if a < b {
+        a
+    } else {
+        b
+    }
 }
 
 /// Maximum of two values
 #[inline]
 pub const fn max_usize(a: usize, b: usize) -> usize {
-    if a > b { a } else { b }
+    if a > b {
+        a
+    } else {
+        b
+    }
 }
 
 /// Count leading zeros (32-bit)
