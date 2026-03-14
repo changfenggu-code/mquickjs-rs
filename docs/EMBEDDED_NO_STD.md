@@ -179,10 +179,19 @@ fn run_precompiled(bytecode: &FunctionBytecode) {
 
 ## 10. 当前已知限制
 
-当前库虽然能走 `no_std`，但若你们要做真正的 ESP32 裸板产品，还需要关注：
+### ✅ 已验证（2026-03-14）
+
+- **no_std 编译验证通过**：`cargo build --release --no-default-features` 成功
+- **测试全部通过**：`cargo test --no-default-features --lib` 109/109 测试通过
+- **库大小**：`libmquickjs.rlib` ~2.5MB（release 模式）
+- **API 完整性**：EffectEngine、EffectManager、ConfigValue 已支持结构化配置
+
+### 待完善的产品化功能
+
+若你们要做真正的 ESP32 裸板产品，还需要关注：
 
 - 执行预算 / watchdog
-- 更稳定的宿主 effect API
+- 更稳定的宿主 effect API（EffectManager 调度语义完善）
 - 更严格的内存计量
 - 更完整的资源上限控制
 
