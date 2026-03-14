@@ -186,14 +186,20 @@ fn run_precompiled(bytecode: &FunctionBytecode) {
 - **库大小**：`libmquickjs.rlib` ~2.5MB（release 模式）
 - **API 完整性**：EffectEngine、EffectManager、ConfigValue 已支持结构化配置
 
-### ⚠️ ESP32 交叉编译限制（2026-03-14）
+### ✅ 交叉编译验证（2026-03-14）
+
+- **x86_64（Windows）**：编译成功，库大小 2.5MB
+- **riscv32imac（RISC-V）**：编译成功，库大小 2.4MB
+- **编译时间**：x86_64 用时 3.66s，RISC-V 用时 3.86s
+
+### ⚠️ ESP32（Xtensa）交叉编译限制
 
 - **标准 stable Rust 工具链不支持 `xtensa-esp32-none-elf` 目标**
 - 需要使用 ESP-IDF / esp-rs 工具链
 - 参考：
   - https://github.com/esp-rs/esp
   - https://docs.esp-rs.com/book/
-- 当前验证仅确认 `no_std` 兼容性，未能在实际 ESP32 目标上编译
+- **注意**：当前验证仅确认 `no_std` 兼容性，ESP32 实际编译需要特殊工具链
 
 ### 待完善的产品化功能
 
