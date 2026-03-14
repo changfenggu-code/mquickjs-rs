@@ -10,6 +10,7 @@ See:
 - `docs/PRODUCT_ROADMAP.md` for the productization plan
 - `docs/JS_FEATURE_SPEC.md` for the engine's broader implementation notes
 - `docs/EMBEDDED_NO_STD.md` for `no_std` / ESP32 bare-metal integration notes
+- `docs/EFFECT_ENGINE_API.md` for the minimal product-facing effect host API
 
 ## Features
 

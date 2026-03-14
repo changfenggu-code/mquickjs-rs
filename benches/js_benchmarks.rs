@@ -200,6 +200,51 @@ fn bench_recursion(c: &mut Criterion) {
     });
 }
 
+fn bench_switch(c: &mut Criterion) {
+    let code = r#"
+        var sum = 0;
+        for (var i = 0; i < 1000; i = i + 1) {
+            switch (i % 10) {
+                case 0: sum = sum + 10; break;
+                case 1: sum = sum + 20; break;
+                case 2: sum = sum + 30; break;
+                case 3: sum = sum + 40; break;
+                case 4: sum = sum + 50; break;
+                case 5: sum = sum + 60; break;
+                case 6: sum = sum + 70; break;
+                case 7: sum = sum + 80; break;
+                case 8: sum = sum + 90; break;
+                default: sum = sum + 5;
+            }
+        }
+        return sum;
+    "#;
+
+    c.bench_function("switch 1k", |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(64 * 1024);
+            black_box(ctx.eval(code).unwrap())
+        })
+    });
+}
+
+fn bench_do_while(c: &mut Criterion) {
+    let code = r#"
+        var i = 0;
+        do {
+            i = i + 1;
+        } while (i < 10000);
+        return i;
+    "#;
+
+    c.bench_function("do...while 10k", |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(64 * 1024);
+            black_box(ctx.eval(code).unwrap())
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_fib,
@@ -211,6 +256,8 @@ criterion_group!(
     bench_json_parse,
     bench_sieve,
     bench_recursion,
+    bench_switch,
+    bench_do_while,
 );
 
 criterion_main!(benches);

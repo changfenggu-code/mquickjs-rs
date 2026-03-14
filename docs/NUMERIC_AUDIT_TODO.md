@@ -171,8 +171,8 @@
 
 ### P1
 
-- 对 `Math` 系列补充一轮 `f32` / `NaN` / `Infinity` 行为测试
-- 对 `Number.prototype.*` 补充格式化边界测试
+- 对 `Math` 系列补充一轮 `f32` / `NaN` / `Infinity` 行为测试（已补）
+- 对 `Number.prototype.*` 补充格式化边界测试（已补）
 
 ### P2
 

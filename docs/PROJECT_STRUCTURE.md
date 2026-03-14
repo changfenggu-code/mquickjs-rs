@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-MQuickJS-RS 是一个纯安全的 Rust JavaScript 引擎移植项目，专为嵌入式系统和 LED 特效场景设计。项目采用模块化架构，将词法分析、语法分析、编译、虚拟机、运行时等功能分离为独立模块。
+MQuickJS-RS 是一个以嵌入式系统和 LED 特效场景为目标的 Rust JavaScript 运行时项目。项目采用模块化架构，将词法分析、解析编译、虚拟机、运行时等功能分离为独立模块。
 
 ## 目录结构
 
@@ -22,6 +22,45 @@ mquickjs-rs/
 └── target/               # 构建输出目录（不纳入版本控制）
 ```
 
+## 文件归属分层
+
+为了便于区分“哪些是 `mquickjs-rs` 引擎本体文件，哪些是为 LED / ESP32 产品方向准备的文件”，本仓库可按目标归属分为三层：
+
+### A. 引擎本体层
+
+这部分文件属于通用 JavaScript 引擎本体，即使脱离 LED 场景也成立：
+
+- `src/`：核心 Rust 源码（编译器、VM、运行时、GC、builtins）
+- `tests/eval_integration.rs`、`tests/error_messages.rs`：通用语义与错误处理测试
+- `src/bin/mqjs.rs`：通用桌面 CLI
+- `Cargo.toml` / `Cargo.lock`：包定义与依赖
+- `vendor/`：原始 C 参考实现
+- `README.md` / `README.zh.md`：仓库总说明
+- `docs/HOW_IT_WORKS.md`、`docs/BENCHMARK_ANALYSIS.md`、`docs/PROJECT_STRUCTURE.md`：引擎实现与工程说明
+
+### B. LED / ESP32 产品层
+
+这部分文件明显面向 LED effect 产品脚本运行时，不应简单视为“纯引擎通用能力”：
+
+- `docs/LED_PROFILE.md`：产品脚本规范
+- `docs/PRODUCT_ROADMAP.md`：产品化路线图
+- `docs/EMBEDDED_NO_STD.md`：`no_std` / ESP32 裸板接入说明
+- `js/effects/`：LED 效果脚本资源
+- `tests/effects.rs`：LED 效果集成测试
+- `examples/common/effects.rs`、`examples/effects_demo.rs`、`examples/effects_egui.rs`、`examples/effects_slint/`：LED 产品演示与采帧示例
+
+### C. 混合层 / 边界说明层
+
+这部分文件既在描述引擎现状，也在为产品脚本边界收口：
+
+- `docs/JS_FEATURE_SPEC.md`：引擎实际能力说明，同时明确哪些能力属于产品脚本可依赖子集、哪些只是受限实现或非目标
+
+理解这三层很重要：
+
+- **A 层**回答“引擎本身实现了什么”
+- **B 层**回答“为了 LED / ESP32 产品我们额外约束了什么”
+- **C 层**回答“引擎现状与产品边界之间如何对齐”
+
 ---
 
 ## 核心源代码 (src/)
@@ -30,7 +69,7 @@ mquickjs-rs/
 
 **[src/lib.rs](../src/lib.rs)**
 - **功能**：库入口文件，定义公共 API
-- **导出类型**：`Context`, `Value`, `MemoryStats`, `FunctionBytecode`, `NativeFn`
+- **导出类型**：`Context`, `Value`, `MemoryStats`, `FunctionBytecode`, `NativeFn`, `EffectEngine`, `EffectInstance`, `EffectManager`, `ConfigValue`
 - **特性**：支持 `no_std` 模式，条件编译 `std` 特性
 - **模块组织**：
   - 核心模块：context, value
@@ -46,9 +85,28 @@ mquickjs-rs/
 - **主要 API**：
   - `Context::new(size)` - 创建指定内存大小的上下文
   - `ctx.eval(source)` - 执行 JavaScript 代码
+  - `ctx.compile(source)` - 编译 JavaScript 源码为字节码对象
+  - `ctx.execute(&bytecode)` - 执行预编译字节码
   - `ctx.memory_stats()` - 获取内存使用统计
-  - `ctx.load_bytecode()` - 加载预编译字节码
+  - `ctx.register_native(...)` - 注册宿主原生函数
 - **生命周期**：拥有 `Heap` (GC) 和 `Interpreter`，负责整体资源管理
+
+**[src/effect.rs](../src/effect.rs)**
+- **功能**：最小产品级 effect 宿主 API 封装
+- **主要类型**：
+  - `EffectEngine` - 从源码或字节码创建可实例化 effect 模板
+  - `EffectInstance` - 运行中的 effect 实例
+  - `EffectManager` - 最小多实例 / 多脚本调度层
+  - `ConfigValue` - 基础配置值类型
+- **主要能力**：
+  - `EffectEngine::from_source()`
+  - `EffectEngine::from_bytecode()`
+  - `engine.instantiate(config)`
+  - `manager.add_engine()` / `manager.instantiate()` / `manager.activate()`
+  - `manager.tick_active()` / `manager.active_led_buffer()`
+  - `instance.start()` / `tick()` / `pause()` / `resume()` / `stop()`
+  - `instance.led_buffer()` / `led_count()` / `set_config()` / `reset()`
+- **定位**：当前是最小可用的产品 API 与调度层雏形，后续仍会继续朝路线图中的宿主接口产品化目标完善
 
 ---
 
@@ -59,10 +117,11 @@ mquickjs-rs/
 - **核心设计**：
   - 使用 `u64` 标签联合体（tagged union）
   - 31 位整数内联存储
+  - 短浮点（`f32`）内联存储
   - 特殊值（null/undefined/bool）直接编码
   - 堆对象使用索引引用，而非原始指针
 - **值类型**：
-  - 整数：直接存储在 u64 中
+  - 数值：整数与短浮点
   - 特殊值：null, undefined, true, false
   - 堆对象：通过索引引用 interpreter 拥有的 Vec
     - 字符串
@@ -75,12 +134,12 @@ mquickjs-rs/
     - 内置对象
 - **API 示例**：
   ```rust
-  Value::from_i32(42)
-  Value::from_bool(true)
+  Value::int(42)
+  Value::bool(true)
   Value::null()
   value.to_i32()
   value.to_bool()
-  value.to_string()
+  value.to_f32()
   ```
 
 ---
@@ -102,29 +161,22 @@ mquickjs-rs/
   - 调用栈
   - 所有堆分配对象的 Vec
 - **特性**：
-  - 支持 JIT 模式的 opcode 分发（可选）
   - 完整的异常处理机制
+  - 宿主桥接、全局变量与运行时对象管理
 
 #### **[src/vm/opcode.rs](../src/vm/opcode.rs)**
-- **功能**：定义约 80 个操作码（opcode）
+- **功能**：定义解释器使用的操作码（opcode）
 - **操作码分类**：
-  - 常量与字面量：`PushUndefined`, `PushNull`, `PushTrue`, `PushFalse`, `PushInt`
-  - 栈操作：`Pop`, `Dup`, `Swap`, `Rot`
-  - 算术运算：`Add`, `Sub`, `Mul`, `Div`, `Mod`, `Neg`
-  - 位运算：`BitAnd`, `BitOr`, `BitXor`, `BitNot`, `Shl`, `Shr`, `Ushr`
-  - 比较运算：`Eq`, `Neq`, `Lt`, `Lte`, `Gt`, `Gte`, `StrictEq`, `StrictNeq`
-  - 逻辑运算：`And`, `Or`, `Not`
-  - 成员访问：`GetField`, `GetField2`, `SetField`, `DeleteField`
-  - 数组操作：`GetArray`, `SetArray`
-  - 字符串操作：`GetLength`, `Concat`
-  - 控制流：`Jump`, `JumpIfFalse`, `JumpIfTrue`, `Return`
-  - 函数调用：`Call`, `CallMethod`, `New`, `Return`
-  - 闭包：`MakeClosure`, `MakeEnv`
-  - 类型检查：`IsUndefined`, `IsNull`, `IsBoolean`, `IsNumber`, `IsString`, `IsObject`, `IsFunction`
-  - 杂项：`TypeOf`, `In`, `InstanceOf`, `Delete`
+  - 常量与字面量
+  - 栈操作与局部变量访问
+  - 算术 / 比较 / 位运算
+  - 对象、数组、类型化数组访问
+  - 控制流与异常处理
+  - 函数调用、闭包与宿主函数交互
+  - `typeof` / `in` / `instanceof` / `delete` 等杂项操作
 
 #### **[src/vm/natives.rs](../src/vm/natives.rs)**
-- **功能**：实现约 100 个原生函数
+- **功能**：实现内建对象与全局函数对应的原生方法
 - **主要类别**：
   - Array 方法：`push`, `pop`, `shift`, `unshift`, `slice`, `splice`, `join`, `reverse`, `sort`, `indexOf`, `lastIndexOf`, `includes`
   - String 方法：`charCodeAt`, `charAt`, `indexOf`, `lastIndexOf`, `slice`, `substring`, `trim`, `toLowerCase`, `toUpperCase`, `split`
@@ -676,9 +728,16 @@ mquickjs-rs/
 **[docs/JS_FEATURE_SPEC.md](../docs/JS_FEATURE_SPEC.md)**
 - **内容**：JavaScript 特性规范
 - **定义**：
-  - 核心设计约束（纯整数、严格类型、编译时变量解析）
-  - 支持的特性（语法、内置对象）
-  - 不支持的特性（浮点数、class、async/await 等）
+  - 当前数值与语义模型（`i32 + f32` 混合模型）
+  - 支持的特性（语法、内置对象、受限实现边界）
+  - 不支持或不应依赖的特性（如 `class`、`async/await`、完整 `ToPrimitive` 等）
+
+**[docs/EFFECT_ENGINE_API.md](../docs/EFFECT_ENGINE_API.md)**
+- **内容**：最小产品级 effect 宿主 API 说明
+- **定义**：
+  - `EffectEngine` / `EffectInstance` 的定位与职责
+  - 从源码 / 字节码创建引擎
+  - effect 实例生命周期与 `led_buffer()` 的使用方式
 
 **[docs/HOW_IT_WORKS.md](../docs/HOW_IT_WORKS.md)**
 - **内容**：引擎工作原理说明

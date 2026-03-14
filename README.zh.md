@@ -12,6 +12,7 @@ Fabrice Bellard 的 [MQuickJS](https://github.com/bellard/mquickjs) 的 Rust 移
 - `docs/PRODUCT_ROADMAP.md`：产品化路线图
 - `docs/JS_FEATURE_SPEC.md`：当前引擎实现说明
 - `docs/EMBEDDED_NO_STD.md`：`no_std` / ESP32 裸板集成说明
+- `docs/EFFECT_ENGINE_API.md`：最小产品级 effect 宿主 API 说明
 
 ## 特性
 

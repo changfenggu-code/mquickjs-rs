@@ -1860,6 +1860,32 @@ fn test_math_max_min() {
 }
 
 #[test]
+fn test_math_max_min_float_nan_infinity() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return Math.max(1.5, 2.25, -3.0);").unwrap();
+    let val = result.to_number_f32().unwrap();
+    assert!((val - 2.25).abs() < 0.001);
+
+    let result = ctx.eval("return Math.min(1.5, 2.25, -3.0);").unwrap();
+    let val = result.to_number_f32().unwrap();
+    assert!((val - (-3.0)).abs() < 0.001);
+
+    let result = ctx.eval("return Math.max(Infinity, 1);").unwrap();
+    assert!(result.is_infinite_value());
+
+    let result = ctx.eval("return Math.min(-Infinity, 1);").unwrap();
+    assert!(result.is_infinite_value());
+    assert!(result.to_number_f32().unwrap().is_sign_negative());
+
+    let result = ctx.eval("return isNaN(Math.max(NaN, 1));").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    let result = ctx.eval("return isNaN(Math.min(1, NaN));").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
 fn test_math_sqrt() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -3832,6 +3858,29 @@ fn test_number_to_fixed() {
 
     // (42).toFixed(2) returns "42.00"
     let result = ctx.eval("return (42).toFixed(2);").unwrap();
+    assert!(result.is_string());
+}
+
+#[test]
+fn test_number_formatting_float_nan_infinity() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return (3.5).toString();").unwrap();
+    assert!(result.is_string());
+
+    let result = ctx.eval("return (3.14159).toFixed(2);").unwrap();
+    assert!(result.is_string());
+
+    let result = ctx.eval("return (1234.0).toExponential();").unwrap();
+    assert!(result.is_string());
+
+    let result = ctx.eval("return (3.14159).toPrecision(3);").unwrap();
+    assert!(result.is_string());
+
+    let result = ctx.eval("return (Infinity).toString();").unwrap();
+    assert!(result.is_string());
+
+    let result = ctx.eval("return (NaN).toString();").unwrap();
     assert!(result.is_string());
 }
 

@@ -192,6 +192,20 @@ impl Context {
             .map_err(|e| EvalError::RuntimeError(e.to_string()))
     }
 
+    /// Load and execute bytecode while keeping it alive inside the Context.
+    ///
+    /// This is required for scripts that define functions/closures whose
+    /// bytecode must remain valid after top-level execution completes.
+    pub fn load_bytecode(&mut self, bytecode: FunctionBytecode) -> Result<Value, EvalError> {
+        let bytecode = Box::new(bytecode);
+        let result = self
+            .interpreter
+            .execute(&bytecode)
+            .map_err(|e| EvalError::RuntimeError(e.to_string()));
+        self.bytecodes.push(bytecode);
+        result
+    }
+
     /// Run the garbage collector
     pub fn gc(&mut self) {
         self.heap.collect();
@@ -226,6 +240,46 @@ impl Context {
     /// The index of the registered function
     pub fn register_native(&mut self, name: &'static str, func: NativeFn, arity: u8) -> u32 {
         self.interpreter.register_native(name, func, arity)
+    }
+
+    /// Read raw bytes from a TypedArray value.
+    pub fn read_typed_array(&self, value: Value) -> Option<&[u8]> {
+        self.interpreter.read_typed_array(value)
+    }
+
+    /// Resolve a string value into an owned Rust String when possible.
+    pub fn string_value(&self, value: Value) -> Option<String> {
+        let idx = value.to_string_idx()?;
+        if let Some(s) = crate::value::get_builtin_string(idx) {
+            Some(s.to_string())
+        } else {
+            self.interpreter.get_string_by_idx(idx).map(|s| s.to_string())
+        }
+    }
+
+    /// Store or replace a user-defined global variable.
+    pub fn set_global(&mut self, name: &str, value: Value) {
+        if let Some((_, slot)) = self
+            .interpreter
+            .global_vars
+            .iter_mut()
+            .rev()
+            .find(|(n, _)| n == name)
+        {
+            *slot = value;
+        } else {
+            self.interpreter.global_vars.push((name.to_string(), value));
+        }
+    }
+
+    /// Get a user-defined global variable if present.
+    pub fn get_global(&self, name: &str) -> Option<Value> {
+        self.interpreter
+            .global_vars
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| *v)
     }
 
     /// Reset user-defined state (global vars, closures, bytecodes) while keeping

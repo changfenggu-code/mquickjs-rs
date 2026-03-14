@@ -31,16 +31,16 @@
 
 - `createEffect(config)`：创建效果实例
 - 返回对象至少包含：
-  - `status`
-  - `speed`
-  - `ledCount`
-  - `leds: Uint8Array`
-  - `tick()`
-  - `start()`
-  - `pause()`
-  - `resume()`
-  - `stop()`
-  - `setConfig(key, value)`
+  - `status` — 当前状态字符串："idle" / "running" / "paused" / "stopped"
+  - `speed` — 播放速度（帧每秒或像素/秒）
+  - `ledCount` — LED 灯珠数量（即 leds.length）
+  - `leds: Uint8Array` — LED 颜色数据数组（每字节一个灯）
+  - `tick()` — 帧更新函数，动画每帧调用一次
+  - `start()` — 开始播放效果（idle → running）
+  - `pause()` — 暂停效果（running → paused）
+  - `resume()` — 恢复播放（paused → running）
+  - `stop()` — 停止效果（running/paused → idle）
+  - `setConfig(key, value)` — 动态设置配置参数
 
 推荐状态流转：`idle -> running -> paused -> running -> idle`
 

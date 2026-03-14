@@ -4,6 +4,7 @@
 
 - `EffectEngine`
 - `EffectInstance`
+- `EffectManager`
 - `ConfigValue`
 
 这套 API 的目标是：
@@ -43,9 +44,9 @@
 
 主要入口：
 
-- `EffectEngine::from_source(source)`
-- `EffectEngine::from_bytecode(bytes)`
-- `engine.instantiate(config_expr)`
+- `EffectEngine::from_source(source)` — JS 源码编译为字节码存入内存，开发阶段使用
+- `EffectEngine::from_bytecode(bytes)` — 直接加载预编译字节码，生产环境秒开
+- `engine.instantiate(config_expr)` — 创建效果实例，执行 createEffect(config)，每次调用创建新 Context
 
 ### `EffectInstance`
 
@@ -77,6 +78,23 @@
 - `Int(i32)`
 - `Float(f32)`
 - `Str(String)`
+
+### `EffectManager`
+
+表示：
+
+- 一个最小的宿主侧调度层
+- 用于管理多个 effect engine、多个实例，以及当前激活实例
+
+主要能力：
+
+- `EffectManager::new()`
+- `add_engine(name, engine)`
+- `instantiate(engine_name, instance_name, config_expr)`
+- `activate(instance_idx)`
+- `active_name()` / `active_engine_name()`
+- `start_active()` / `tick_active()` / `pause_active()` / `resume_active()` / `stop_active()`
+- `active_led_buffer()` / `active_led_count()`
 
 ## 3. 基本用法
 
@@ -210,10 +228,45 @@ let engine = EffectEngine::from_bytecode(&bytes)?;
 当前仍未完全产品化的部分：
 
 - 更强类型的 Rust 配置对象
-- 多实例 / 多脚本运行模型的进一步抽象
+- 多实例 / 多脚本运行模型的进一步抽象（当前已有最小 `EffectManager` 雏形）
 - 更正式的错误类型
 - 更完整的文档与示例矩阵
 - 更严格的内存与执行预算集成
+
+## 6.1 `EffectManager` 的作用
+
+当宿主侧需要：
+
+- 预加载多个 effect
+- 管理多个实例
+- 在不同实例间切换当前激活效果
+
+时，可以使用 `EffectManager`。
+
+一个最小示例：
+
+```rust
+use mquickjs::{EffectEngine, EffectManager};
+
+let mut manager = EffectManager::new();
+manager.add_engine("blink", EffectEngine::from_source(BLINK_JS)?);
+manager.add_engine("rainbow", EffectEngine::from_source(RAINBOW_JS)?);
+
+let blink_idx = manager.instantiate("blink", "blink-a", "{ ledCount: 20 }")?;
+let rainbow_idx = manager.instantiate("rainbow", "rainbow-a", "{ ledCount: 20 }")?;
+
+manager.activate(blink_idx)?;
+manager.start_active()?;
+manager.tick_active()?;
+let blink_leds = manager.active_led_buffer()?;
+
+manager.activate(rainbow_idx)?;
+manager.start_active()?;
+manager.tick_active()?;
+let rainbow_leds = manager.active_led_buffer()?;
+```
+
+这说明当前仓库已经不只具备“单 effect 实例 API”，还具备“最小调度层雏形”。
 
 ## 7. 与 `examples/common/effects.rs` 的区别
 
