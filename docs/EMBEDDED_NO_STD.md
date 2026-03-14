@@ -207,7 +207,10 @@ fn run_precompiled(bytecode: &FunctionBytecode) {
 
 - 执行预算 / watchdog
 - 更稳定的宿主 effect API（EffectManager 调度语义完善）
-- 更严格的内存计量
+- ~~更严格的内存计量~~ ⚠️ 已部分改进（2026-03-14）
+  - ✅ 添加 `estimated_object_bytes` 字段
+  - ✅ 基于对象计数和平均大小估算内存占用
+  - ℹ️ 完整实现需要对象级大小跟踪（Phase 4 资源模型重构）
 - 更完整的资源上限控制
 
 这些是产品化层面的工作，不是 `no_std` 编译本身的阻塞。

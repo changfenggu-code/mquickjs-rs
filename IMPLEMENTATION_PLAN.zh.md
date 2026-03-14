@@ -161,7 +161,8 @@
 - `src/runtime/function.rs` - CFunction, Closure, FunctionBytecode 及 CaptureInfo
 - `src/util/mod.rs`, `dtoa.rs`, `unicode.rs` - 工具函数
 - `src/bin/mqjs.rs` - REPL 二进制
-- `src/effect.rs` - EffectEngine API（LED 效果引擎）
+- `src/effect.rs` - EffectEngine API（LED 效果引擎）⚠️ 已添加 ConfigValue 结构化配置支持（2026-03-14）
+- `src/context.rs` - MemoryStats 改进（添加 estimated_object_bytes）
 
 **测试数量**：328 个通过
 
