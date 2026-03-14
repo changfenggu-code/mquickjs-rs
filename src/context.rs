@@ -14,6 +14,14 @@ use crate::value::Value;
 use crate::vm::types::NativeFn;
 use crate::vm::Interpreter;
 
+/// Approximate sizes for memory estimation (in bytes)
+/// These are rough estimates used for calculating estimated_object_bytes
+const ESTIMATED_STRING_BYTES: usize = 24;   // Average string size (header + UTF-8 chars)
+const ESTIMATED_ARRAY_BYTES: usize = 32;    // Average array (header + some elements)
+const ESTIMATED_OBJECT_BYTES: usize = 48;   // Average object (header + some properties)
+const ESTIMATED_CLOSURE_BYTES: usize = 56;  // Average closure (header + capture data)
+const ESTIMATED_TYPEDARRAY_BYTES: usize = 24; // Base typed array (header + type info)
+
 /// JavaScript execution context
 ///
 /// The Context owns all memory used by the JavaScript engine.
@@ -68,8 +76,19 @@ impl From<CompileError> for EvalError {
 pub struct MemoryStats {
     /// Total memory size
     pub heap_size: usize,
-    /// Currently used heap memory
+    /// Currently allocated memory boundary (heap pointer position)
+    ///
+    /// Note: This represents the allocation boundary position, not the actual
+    /// object memory usage. For accurate object memory tracking, a full GC
+    /// implementation would be needed. This is the "inconsistent口径" issue
+    /// documented in PRODUCT_ROADMAP.md.
     pub used: usize,
+    /// Estimated object memory usage in bytes
+    ///
+    /// Approximate calculation based on object counts and average sizes.
+    /// This provides a more accurate representation of actual memory consumption
+    /// than the `used` field.
+    pub estimated_object_bytes: usize,
     /// Currently used stack memory
     pub stack_used: usize,
     /// Free memory available
@@ -214,6 +233,20 @@ impl Context {
     /// Get memory usage statistics
     pub fn memory_stats(&self) -> MemoryStats {
         let interp_stats = self.interpreter.get_stats();
+
+        // Estimate actual object memory usage based on object counts
+        // This is more accurate than `heap.heap_used()` which only tracks
+        // allocation boundaries. The estimation uses average sizes per object type.
+        let estimated_object_bytes = interp_stats.runtime_strings * ESTIMATED_STRING_BYTES
+            + interp_stats.arrays * ESTIMATED_ARRAY_BYTES
+            + interp_stats.objects * ESTIMATED_OBJECT_BYTES
+            + interp_stats.closures * ESTIMATED_CLOSURE_BYTES
+            + interp_stats.error_objects * ESTIMATED_OBJECT_BYTES
+            + interp_stats.regex_objects * ESTIMATED_OBJECT_BYTES
+            // TypedArray size is calculated differently (byteLength * 1)
+            // Add base size for each typed array
+            + interp_stats.typed_arrays * ESTIMATED_TYPEDARRAY_BYTES;
+
         MemoryStats {
             heap_size: self.heap.total_size,
             used: self.heap.heap_used(),
@@ -226,6 +259,7 @@ impl Context {
             error_objects: interp_stats.error_objects,
             regex_objects: interp_stats.regex_objects,
             typed_arrays: interp_stats.typed_arrays,
+            estimated_object_bytes,
         }
     }
 
