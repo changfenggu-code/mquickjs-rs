@@ -69,18 +69,24 @@ pub enum ColorConfig {
 impl From<ColorConfig> for ConfigValue {
     fn from(value: ColorConfig) -> Self {
         match value {
-            ColorConfig::Rgb { r, g, b } => ConfigValue::Object(vec![
-                ("mode".into(), ConfigValue::Str("rgb".into())),
-                ("r".into(), ConfigValue::Int(r as i32)),
-                ("g".into(), ConfigValue::Int(g as i32)),
-                ("b".into(), ConfigValue::Int(b as i32)),
-            ]),
-            ColorConfig::Hsv { h, s, v } => ConfigValue::Object(vec![
-                ("mode".into(), ConfigValue::Str("hsv".into())),
-                ("h".into(), ConfigValue::Float(h)),
-                ("s".into(), ConfigValue::Float(s)),
-                ("v".into(), ConfigValue::Float(v)),
-            ]),
+            ColorConfig::Rgb { r, g, b } => {
+                let entries = vec![
+                    ("mode".into(), ConfigValue::Str("rgb".into())),
+                    ("r".into(), ConfigValue::Int(r as i32)),
+                    ("g".into(), ConfigValue::Int(g as i32)),
+                    ("b".into(), ConfigValue::Int(b as i32)),
+                ];
+                ConfigValue::Object(entries)
+            }
+            ColorConfig::Hsv { h, s, v } => {
+                let entries = vec![
+                    ("mode".into(), ConfigValue::Str("hsv".into())),
+                    ("h".into(), ConfigValue::Float(h)),
+                    ("s".into(), ConfigValue::Float(s)),
+                    ("v".into(), ConfigValue::Float(v)),
+                ];
+                ConfigValue::Object(entries)
+            }
         }
     }
 }

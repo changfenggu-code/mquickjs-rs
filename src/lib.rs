@@ -22,6 +22,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(dead_code)] // During development
 
+#[macro_use]
 extern crate alloc;
 
 #[cfg(feature = "std")]

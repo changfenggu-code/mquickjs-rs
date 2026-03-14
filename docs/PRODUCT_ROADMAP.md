@@ -74,65 +74,67 @@
 **当前状态**：
 - ✅ CLI 支持基本 bytecode 编译和执行
 - ✅ 基础 `Context::eval()` API 稳定
-- ✅ 已有最小可用的 `EffectEngine` / `EffectInstance` API 雏形
+- ✅ 已有最小可用的 `EffectEngine` / `EffectInstance` API
+- ✅ 已有最小可用的 `EffectManager` 调度层
 - ✅ 多实例、生命周期、配置更新、重置等基础场景已有测试覆盖
 - ✅ 多脚本 / 多效果 engine 基础共存场景已有测试覆盖
-- ⚠️ 仍缺少更完整的产品级宿主接口收口（更强配置类型系统、文档与更多示例、资源边界）
+- ✅ 基础配置系统已支持对象 / 数组配置与最小领域配置层雏形
+- ⚠️ 仍缺少更完整的产品级宿主接口收口（资源边界、更强调度策略、更多示例与最终文档收口）
 
 **待实现**：
 
-- **完善 effect 实例 API**（已提供最小 `EffectEngine` 类型）
+- **完善 effect 实例 API**
   - 继续收口“脚本加载/编译”和“实例创建”两个阶段
-  - 完善单脚本多实例、多脚本共存模型
+  - 继续增强实例边界、错误模型与资源约束
 
 - **增强读取 LED buffer 的宿主接口**
   - 已提供 `led_buffer()` 方法返回 `&[u8]`
   - 后续继续完善零拷贝、错误处理与实例状态边界
 
 - **增强加载 bytecode / 重置实例 / 更新配置能力**
-  - 已提供 `from_bytecode()` / `from_source()` / `instantiate()` / `reset()` / `set_config()` 最小接口
-  - 后续继续补齐配置类型系统与实例隔离语义
+  - 已提供 `from_bytecode()` / `from_source()` / `instantiate()` / `instantiate_config()` / `reset()` / `set_config()`
+  - 已有基础对象/数组配置与领域配置雏形
+  - 后续继续补齐更强类型配置体系与实例隔离语义
 
 - **明确单脚本/多脚本运行模型**
   - 单脚本多实例基础能力已具备并有测试覆盖
   - 多脚本共存基础能力已具备并有测试覆盖
-  - 后续继续完善效果切换、调度与资源边界模型
+  - 最小调度层（`EffectManager`）已具备 engine/instance 管理、激活、切换、移除能力
+  - 后续继续完善效果切换策略、调度行为与资源边界模型
   - 实例生命周期管理（`start()`, `pause()`, `resume()`, `stop()`）已具备基础实现
 
 建议 API 方向：
 
 ```rust
-pub struct EffectEngine {
-    // 持有编译后的 bytecode
-    bytecode: FunctionBytecode,
-}
+pub struct EffectEngine { /* effect 模板 */ }
+pub struct EffectInstance { /* 运行中实例 */ }
+pub struct EffectManager { /* 最小调度层 */ }
 
 impl EffectEngine {
     pub fn from_bytecode(bytes: &[u8]) -> Result<Self>;
     pub fn from_source(source: &str) -> Result<Self>;
-
-    pub fn instantiate(&self, config: &JsObject) -> Result<EffectInstance>;
-}
-
-pub struct EffectInstance {
-    // 持有运行时状态
+    pub fn instantiate(&self, config_expr: &str) -> Result<EffectInstance>;
+    pub fn instantiate_config(&self, config: ConfigValue) -> Result<EffectInstance>;
 }
 
 impl EffectInstance {
     pub fn tick(&mut self) -> Result<()>;
-    pub fn led_buffer(&self) -> &[u8];
-    pub fn set_config(&mut self, key: &str, value: Value) -> Result<()>;
+    pub fn led_buffer(&mut self) -> Result<&[u8]>;
+    pub fn led_count(&mut self) -> Result<usize>;
+    pub fn set_config(&mut self, key: &str, value: ConfigValue) -> Result<()>;
     pub fn start(&mut self) -> Result<()>;
     pub fn pause(&mut self) -> Result<()>;
+    pub fn resume(&mut self) -> Result<()>;
     pub fn stop(&mut self) -> Result<()>;
+    pub fn reset(&mut self) -> Result<()>;
 }
 ```
 
 验收标准：
 
 - ✅ 宿主侧已可无需直接依赖通用 `eval` 即可驱动 effect 基本生命周期
-- ⚠️ API 已有最小实现，但文档、示例和资源边界语义仍未完整收口
-- ⚠️ 宿主集成测试已有基础覆盖：多实例 / 多脚本 / 配置 / 重置已补齐，后续仍需补调度与资源边界场景
+- ✅ 宿主集成测试已有基础覆盖：多实例 / 多脚本 / 配置 / 重置 / manager 基础行为已补齐
+- ⚠️ API 已有最小实现，但资源边界语义、调度策略和最终文档收口仍未完成
 
 ### 多脚本 / 多实例模型完成后可支持的产品功能
 
@@ -250,9 +252,9 @@ impl EffectInstance {
 
 **Phase 3：宿主接口产品化**
 
-- 设计并实现 `EffectEngine` / `EffectInstance` API
-- 编写宿主集成测试
-- 完善 API 文档和示例
+- 完善 `EffectManager` 调度策略与资源边界
+- 收口配置系统（是否继续扩展统一基础配置层）
+- 最终整理并收口 API 文档和示例
 
 ### 之后执行
 
@@ -281,10 +283,13 @@ impl EffectInstance {
 - ✅ JS 特性文档与产品规范对齐
 - ✅ 效果集成测试覆盖
 - ✅ 中英文文档同步（CLAUDE.md/README.md）
+- ✅ `EffectEngine` / `EffectInstance` 最小产品 API
+- ✅ `EffectManager` 最小调度层
+- ✅ 多实例 / 多脚本 / 配置 / 重置 / manager 基础测试覆盖
 
 ### 进行中
 
-- ⚠️ 宿主接口产品化设计
+- ⚠️ 宿主接口产品化收口（资源边界、调度策略、最终文档）
 
 ### 待处理
 
@@ -300,14 +305,11 @@ impl EffectInstance {
 
 以下优先级仅针对**核心库语义**，不包含 `mqjs` CLI、REPL、文件系统、`std` 宿主能力与桌面输出层。
 
-### P0：必须优先修复
+### P0：已完成
 
-- **字符串参与数值运算时的 `ToNumber` 语义**
-  - 修复 `"5" - 3`、`"5" < 10` 等当前与标准 JS 不一致的行为
-- **全局 `isNaN()` / `isFinite()` 的标准数值化**
-  - 与 `Number.isNaN()` / `Number.isFinite()` 的语义分工保持一致
-- **语义回归测试补齐**
-  - 为数值转换、比较、字符串数值化补足回归测试
+- ✅ 字符串参与数值运算时的 `ToNumber` 语义
+- ✅ 全局 `isNaN()` / `isFinite()` 的标准数值化
+- ✅ 相关语义回归测试补齐
 
 ### P1：建议尽快修复
 
