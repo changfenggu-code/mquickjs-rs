@@ -6,6 +6,8 @@
 - `EffectInstance`
 - `EffectManager`
 - `ConfigValue`
+- `ColorConfig`
+- `BlinkConfig` / `ChaseConfig` / `RainbowConfig` / `WaveConfig`
 
 这套 API 的目标是：
 
@@ -46,7 +48,8 @@
 
 - `EffectEngine::from_source(source)` — JS 源码编译为字节码存入内存，开发阶段使用
 - `EffectEngine::from_bytecode(bytes)` — 直接加载预编译字节码，生产环境秒开
-- `engine.instantiate(config_expr)` — 创建效果实例，执行 createEffect(config)，每次调用创建新 Context
+- `engine.instantiate(config_expr)` — 底层接口：直接传 JS 配置表达式字符串
+- `engine.instantiate_config(config)` — 更正式的宿主接口：传 `ConfigValue` / typed config
 
 ### `EffectInstance`
 
@@ -78,6 +81,20 @@
 - `Int(i32)`
 - `Float(f32)`
 - `Str(String)`
+- `Array(Vec<ConfigValue>)`
+- `Object(Vec<(String, ConfigValue)>)`
+
+### typed config
+
+为了避免宿主层每次手工拼 `ConfigValue::Object(...)`，当前已经提供一层最小领域配置对象：
+
+- `ColorConfig`
+- `BlinkConfig`
+- `ChaseConfig`
+- `RainbowConfig`
+- `WaveConfig`
+
+这些类型都可以转换成 `ConfigValue`，再交给 `instantiate_config(...)` 或 `set_config(...)` 使用。
 
 ### `EffectManager`
 
@@ -92,7 +109,13 @@
 - `add_engine(name, engine)`
 - `instantiate(engine_name, instance_name, config_expr)`
 - `activate(instance_idx)`
+- `activate_by_name(instance_name)`
 - `active_name()` / `active_engine_name()`
+- `engine_names()` / `engine_count()`
+- `instance_names()` / `instance_count()`
+- `instances_for_engine(engine_name)`
+- `remove_instance(index)` / `remove_instance_by_name(name)`
+- `remove_instances_by_engine(engine_name)`
 - `start_active()` / `tick_active()` / `pause_active()` / `resume_active()` / `stop_active()`
 - `active_led_buffer()` / `active_led_count()`
 
@@ -107,7 +130,7 @@ let js = include_str!("../js/effects/blink/effect.js");
 let engine = EffectEngine::from_source(js)?;
 ```
 
-### 创建实例
+### 创建实例（字符串配置）
 
 ```rust
 let mut instance = engine.instantiate("{ ledCount: 4, speed: 100 }")?;
@@ -120,7 +143,24 @@ let mut instance = engine.instantiate("{ ledCount: 4, speed: 100 }")?;
 - `"{ ledCount: 4 }"`
 - `"{ ledCount: 60, speed: 120 }"`
 
-当前设计是最小实现，因此配置对象还不是一个 Rust 结构体，而是直接走 JS 配置表达式。
+当前设计保留了这条底层接口，用于最大兼容现有脚本和调试场景。
+
+### 创建实例（结构化配置）
+
+```rust
+use mquickjs::{BlinkConfig, ColorConfig, EffectEngine};
+
+let engine = EffectEngine::from_source(js)?;
+let config = BlinkConfig {
+    led_count: Some(4),
+    speed: Some(100),
+    color: Some(ColorConfig::Rgb { r: 255, g: 0, b: 0 }),
+};
+
+let mut instance = engine.instantiate_config(config.into())?;
+```
+
+这是当前更推荐的宿主侧写法。
 
 ### 驱动生命周期
 
@@ -157,6 +197,17 @@ use mquickjs::ConfigValue;
 
 instance.set_config("speed", ConfigValue::Int(500))?;
 instance.set_config("label", ConfigValue::Str("demo".into()))?;
+```
+
+如果配置值本身是对象，也可以直接传：
+
+```rust
+use mquickjs::ColorConfig;
+
+instance.set_config(
+    "color",
+    ColorConfig::Rgb { r: 255, g: 0, b: 0 }.into(),
+)?;
 ```
 
 ### 重置实例
@@ -220,14 +271,16 @@ let engine = EffectEngine::from_bytecode(&bytes)?;
 
 - 从源码/字节码创建引擎
 - 实例化 effect
+- 通过 `instantiate_config(...)` 使用结构化配置实例化 effect
 - 生命周期方法调用
 - 读取 LED buffer
 - 更新配置
 - 重置实例
+ - 最小调度层（`EffectManager`）
 
 当前仍未完全产品化的部分：
 
-- 更强类型的 Rust 配置对象
+- 更统一的通用基础配置层（当前已有 typed config 雏形）
 - 多实例 / 多脚本运行模型的进一步抽象（当前已有最小 `EffectManager` 雏形）
 - 更正式的错误类型
 - 更完整的文档与示例矩阵
@@ -267,6 +320,17 @@ let rainbow_leds = manager.active_led_buffer()?;
 ```
 
 这说明当前仓库已经不只具备“单 effect 实例 API”，还具备“最小调度层雏形”。
+
+### 当前 `EffectManager` 能实现什么
+
+当前这层已经可以支持：
+
+- 预加载多个不同 effect engine
+- 同一个 engine 创建多个实例
+- 通过索引或实例名激活当前实例
+- 查询有哪些 engine / instance 已加载
+- 按实例删除、按 engine 批量删除实例
+- 读取当前激活实例的 LED buffer 并驱动宿主输出
 
 ## 7. 与 `examples/common/effects.rs` 的区别
 
