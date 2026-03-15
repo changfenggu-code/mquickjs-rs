@@ -2,6 +2,31 @@
 
 本文档解释 MQuickJS-RS (Rust) 与原始 MQuickJS (C) 之间的性能差异。
 
+## 运行基准测试
+
+### 本地运行
+
+```bash
+# 方式1: 只测 Rust 版
+./benches/compare.sh
+
+# 方式2: 自动检测 C 版对比 (需要初始化 submodule)
+git submodule update --init
+./benches/compare.sh
+
+# 方式3: 指定 C 二进制路径
+./benches/compare.sh /path/to/mqjs
+```
+
+**注意**：首次运行会编译 Rust release 版本，需要一些时间。
+
+### GitHub Actions
+
+提交到 `main` 分支或提交 PR 时会自动触发 benchmark workflow：
+- `.github/workflows/bench.yml`
+
+结果会在 Actions 页面显示。
+
 ## 基准结果
 
 **机器**：Apple M4 Max, 64 GB RAM, macOS
