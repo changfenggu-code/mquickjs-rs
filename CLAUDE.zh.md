@@ -6,7 +6,7 @@
 
 ## 项目概述
 
-MQuickJS-RS 是一个**学习项目**—— 是 Fabrice Bellard 的 [MQuickJS](https://github.com/bellard/mquickjs)  minimalist JavaScript 引擎的纯安全 Rust 移植版。它实现了 ES5 子集，包含追踪式标记压缩 GC、基于栈的字节码虚拟机，且没有使用 `unsafe` 代码。
+MQuickJS-RS 是一个**研究项目**—— 是 Fabrice Bellard 的 [MQuickJS](https://github.com/bellard/mquickjs)  minimalist JavaScript 引擎的纯安全 Rust 移植版。它实现了 ES5 子集，包含追踪式标记压缩 GC、基于栈的字节码虚拟机，且没有使用 `unsafe` 代码。
 **ESP32/裸机开发的关键约束**：本项目设计为在 ESP32 裸机上以 no_std 模式运行。添加功能或修改代码时，必须始终验证 no_std 兼容性。
 
 ## 命令

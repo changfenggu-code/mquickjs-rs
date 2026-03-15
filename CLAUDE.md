@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MQuickJS-RS is a **learning project** — a pure safe Rust port of Fabrice Bellard's [MQuickJS](https://github.com/bellard/mquickjs) minimalist JavaScript engine. It implements an ES5 subset with a tracing mark-compact GC, stack-based bytecode VM, and no `unsafe` code.
+MQuickJS-RS is a **Research Project** — a pure safe Rust port of Fabrice Bellard's [MQuickJS](https://github.com/bellard/mquickjs) minimalist JavaScript engine. It implements an ES5 subset with a tracing mark-compact GC, stack-based bytecode VM, and no `unsafe` code.
 
 **Critical for ESP32/Bare Metal Development**: This project is designed to run on ESP32 bare metal with `no_std`. When adding features or modifying code, always verify `no_std` compatibility.
 
