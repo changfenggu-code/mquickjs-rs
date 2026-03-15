@@ -116,3 +116,4 @@ cargo build --features debug-gc    # GC 每次分配都移动对象
 - **ESP32 需要 `no_std`** — 项目必须能够在没有 `std` 的情况下编译。添加依赖时，验证它们是否有 `no_std` 支持，或在 `Cargo.toml` 中添加 `default-features = ["std"]` 并使用 `#[cfg(feature = "std")]` 条件编译。
 - **内存受限设计** — ESP32 的 RAM 有限（通常 320-520KB）。优先使用内联分配，在热路径中避免动态分配，使用标记值来减少堆使用。
 - **交叉编译目标** — 对于 ESP32，使用目标：`riscv32imac-unknown-none-elf`。如果尚未安装，运行 `rustup target add riscv32imac-unknown-none-elf`。
+- **no_std 测试** — 运行 `cargo test --no-default-features` 验证。测试模块必须导入 `use alloc::vec;` 才能使用 `vec![]` 宏。Regex/Date 测试在 no_std 下可能失败（预期行为，因为 regex crate 仅 std 可用）。

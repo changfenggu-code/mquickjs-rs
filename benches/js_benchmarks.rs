@@ -245,6 +245,86 @@ fn bench_do_while(c: &mut Criterion) {
     });
 }
 
+fn bench_method_chain(c: &mut Criterion) {
+    let code = r#"
+        var arr = [];
+        for (var i = 0; i < 5000; i = i + 1) {
+            arr.push(i);
+        }
+        function double(x) { return x * 2; }
+        function divByThree(x) { return x % 3 === 0; }
+        function add(acc, x) { return acc + x; }
+        return arr.map(double).filter(divByThree).reduce(add, 0);
+    "#;
+
+    c.bench_function("method_chain 5k", |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(256 * 1024);
+            black_box(ctx.eval(code).unwrap())
+        })
+    });
+}
+
+fn bench_runtime_string_pressure(c: &mut Criterion) {
+    let code = r#"
+        var parts = [];
+        for (var i = 0; i < 4000; i = i + 1) {
+            parts.push("item-" + i + "-" + (i % 17));
+        }
+        var total = 0;
+        for (var i = 0; i < parts.length; i = i + 1) {
+            total = total + parts[i].length;
+        }
+        return total;
+    "#;
+
+    c.bench_function("runtime_string_pressure 4k", |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(256 * 1024);
+            black_box(ctx.eval(code).unwrap())
+        })
+    });
+}
+
+fn bench_for_of_array(c: &mut Criterion) {
+    let code = r#"
+        var arr = [];
+        for (var i = 0; i < 20000; i = i + 1) {
+            arr.push(i);
+        }
+        var sum = 0;
+        for (var value of arr) {
+            sum = sum + value;
+        }
+        return sum;
+    "#;
+
+    c.bench_function("for_of_array 20k", |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(256 * 1024);
+            black_box(ctx.eval(code).unwrap())
+        })
+    });
+}
+
+fn bench_deep_property(c: &mut Criterion) {
+    let code = r#"
+        var root = { a: { b: { c: { d: 1 } } } };
+        var sum = 0;
+        for (var i = 0; i < 200000; i = i + 1) {
+            sum = sum + root.a.b.c.d;
+        }
+        return sum;
+    "#;
+
+    c.bench_function("deep_property 200k", |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(128 * 1024);
+            black_box(ctx.eval(code).unwrap())
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_fib,
@@ -258,6 +338,10 @@ criterion_group!(
     bench_recursion,
     bench_switch,
     bench_do_while,
+    bench_method_chain,
+    bench_runtime_string_pressure,
+    bench_for_of_array,
+    bench_deep_property,
 );
 
 criterion_main!(benches);

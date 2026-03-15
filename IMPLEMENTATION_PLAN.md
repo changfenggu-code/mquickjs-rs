@@ -129,6 +129,8 @@
 ### Stage 9: Optimization & Polish
 **Goal**: Performance parity with C version
 
+See also: `docs/ENGINE_OPTIMIZATION_TASKLIST.md` for the current engine-only optimization backlog and recommended execution order.
+
 - [ ] 9.1 Profile and optimize hot paths
 - [ ] 9.2 Optimize GC performance
 - [ ] 9.3 Reduce memory usage

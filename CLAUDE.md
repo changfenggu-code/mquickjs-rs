@@ -117,3 +117,4 @@ This is a Cargo workspace with two members:
 - **`no_std` is required for ESP32** — The project must compile without `std`. When adding dependencies, verify they have `no_std` support or add `default-features = ["std"]` to `Cargo.toml` and use `#[cfg(feature = "std")]` gates.
 - **Memory-constrained design** — ESP32 has limited RAM (typically 320-520KB). Prefer inline allocation, avoid dynamic allocation in hot paths, and use tagged values for integers to minimize heap usage.
 - **Cross-compilation target** — For ESP32, use target: `riscv32imac-unknown-none-elf`. Run `rustup target add riscv32imac-unknown-none-elf` if not already installed.
+- **no_std tests** — Run `cargo test --no-default-features` to verify. Test modules must import `use alloc::vec;` for `vec![]` macro. Regex/Date tests may fail in no_std (expected - regex crate is std-only).

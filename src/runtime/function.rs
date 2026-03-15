@@ -517,6 +517,8 @@ impl FunctionKind {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
+    use alloc::vec;
     use super::*;
 
     #[test]
