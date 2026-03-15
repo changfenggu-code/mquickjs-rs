@@ -1,4 +1,4 @@
-use alloc::format;
+﻿use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -259,7 +259,7 @@ impl EffectEngine {
         self
     }
 
-    pub fn instantiate(&self, config_expr: &str) -> EffectResult<EffectInstance> {
+    pub fn instantiate_expr(&self, config_expr: &str) -> EffectResult<EffectInstance> {
         let config_expr = if config_expr.trim().is_empty() {
             ConfigValue::Object(Vec::new()).to_js_literal()
         } else {
@@ -334,7 +334,7 @@ impl EffectManager {
         Ok(self.engines.len() - 1)
     }
 
-    pub fn instantiate(
+    pub fn instantiate_expr(
         &mut self,
         engine_name: &str,
         instance_name: impl Into<String>,
@@ -351,7 +351,7 @@ impl EffectManager {
             .find(|(name, _)| name == engine_name)
             .ok_or_else(|| format!("unknown effect engine: {}", engine_name))?;
 
-        let instance = engine.1.instantiate(config_expr)?;
+        let instance = engine.1.instantiate_expr(config_expr)?;
         self.instances.push(ManagedEffectInstance {
             name: instance_name,
             engine_name: engine_name.to_string(),
@@ -587,3 +587,4 @@ impl EffectInstance {
         self.ctx.memory_stats()
     }
 }
+

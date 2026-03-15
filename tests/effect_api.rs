@@ -1,4 +1,4 @@
-use mquickjs::{
+﻿use mquickjs::{
     BlinkConfig, ChaseConfig, ColorConfig, ConfigValue, Context, EffectEngine, EffectManager,
     RainbowConfig, WaveConfig,
 };
@@ -10,7 +10,7 @@ const RAINBOW_JS: &str = include_str!("../js/effects/rainbow/effect.js");
 #[test]
 fn effect_engine_from_source_runs_blink() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let mut instance = engine.instantiate("{ ledCount: 4 }").unwrap();
+    let mut instance = engine.instantiate_expr("{ ledCount: 4 }").unwrap();
 
     instance.start().unwrap();
     instance.tick().unwrap();
@@ -28,7 +28,7 @@ fn effect_engine_from_bytecode_runs_blink() {
     let bytes = bytecode.serialize();
 
     let engine = EffectEngine::from_bytecode(&bytes).unwrap();
-    let mut instance = engine.instantiate("{ ledCount: 3 }").unwrap();
+    let mut instance = engine.instantiate_expr("{ ledCount: 3 }").unwrap();
 
     instance.start().unwrap();
     instance.tick().unwrap();
@@ -41,7 +41,7 @@ fn effect_engine_from_bytecode_runs_blink() {
 #[test]
 fn effect_instance_set_config_and_reset() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let mut instance = engine.instantiate("{ ledCount: 2, speed: 100 }").unwrap();
+    let mut instance = engine.instantiate_expr("{ ledCount: 2, speed: 100 }").unwrap();
 
     instance.set_config("speed", ConfigValue::Int(500)).unwrap();
     instance.start().unwrap();
@@ -61,8 +61,8 @@ fn effect_instance_set_config_and_reset() {
 fn effect_engine_supports_multiple_independent_instances() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
 
-    let mut a = engine.instantiate("{ ledCount: 2 }").unwrap();
-    let mut b = engine.instantiate("{ ledCount: 5 }").unwrap();
+    let mut a = engine.instantiate_expr("{ ledCount: 2 }").unwrap();
+    let mut b = engine.instantiate_expr("{ ledCount: 5 }").unwrap();
 
     a.start().unwrap();
     b.start().unwrap();
@@ -85,7 +85,7 @@ fn effect_engine_supports_multiple_independent_instances() {
 #[test]
 fn effect_instance_pause_resume_stop_lifecycle() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let mut instance = engine.instantiate("{ ledCount: 3 }").unwrap();
+    let mut instance = engine.instantiate_expr("{ ledCount: 3 }").unwrap();
 
     instance.start().unwrap();
     instance.tick().unwrap();
@@ -111,7 +111,7 @@ fn effect_instance_pause_resume_stop_lifecycle() {
 #[test]
 fn effect_instance_set_config_changes_behavior() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let mut instance = engine.instantiate("{ ledCount: 2 }").unwrap();
+    let mut instance = engine.instantiate_expr("{ ledCount: 2 }").unwrap();
 
     instance
         .set_config(
@@ -262,9 +262,9 @@ fn different_effect_engines_can_coexist() {
     let blink = EffectEngine::from_source(BLINK_JS).unwrap();
     let chase = EffectEngine::from_source(CHASE_JS).unwrap();
 
-    let mut blink_instance = blink.instantiate("{ ledCount: 4 }").unwrap();
+    let mut blink_instance = blink.instantiate_expr("{ ledCount: 4 }").unwrap();
     let mut chase_instance = chase
-        .instantiate("{ ledCount: 4, chaseCount: 1 }")
+        .instantiate_expr("{ ledCount: 4, chaseCount: 1 }")
         .unwrap();
 
     blink_instance.start().unwrap();
@@ -286,9 +286,9 @@ fn interleaved_multi_script_instances_keep_independent_state() {
     let blink = EffectEngine::from_source(BLINK_JS).unwrap();
     let rainbow = EffectEngine::from_source(RAINBOW_JS).unwrap();
 
-    let mut blink_instance = blink.instantiate("{ ledCount: 3 }").unwrap();
+    let mut blink_instance = blink.instantiate_expr("{ ledCount: 3 }").unwrap();
     let mut rainbow_instance = rainbow
-        .instantiate("{ ledCount: 3, hueSpread: 60 }")
+        .instantiate_expr("{ ledCount: 3, hueSpread: 60 }")
         .unwrap();
 
     blink_instance.start().unwrap();
@@ -322,10 +322,10 @@ fn effect_manager_can_activate_and_tick_instances() {
         .unwrap();
 
     let blink_idx = manager
-        .instantiate("blink", "blink-a", "{ ledCount: 3 }")
+        .instantiate_expr("blink", "blink-a", "{ ledCount: 3 }")
         .unwrap();
     let rainbow_idx = manager
-        .instantiate("rainbow", "rainbow-a", "{ ledCount: 3, hueSpread: 60 }")
+        .instantiate_expr("rainbow", "rainbow-a", "{ ledCount: 3, hueSpread: 60 }")
         .unwrap();
 
     manager.activate(blink_idx).unwrap();
@@ -358,10 +358,10 @@ fn effect_manager_switching_preserves_instance_state() {
         .unwrap();
 
     let blink_idx = manager
-        .instantiate("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_expr("blink", "blink-a", "{ ledCount: 2 }")
         .unwrap();
     let chase_idx = manager
-        .instantiate("chase", "chase-a", "{ ledCount: 2, chaseCount: 1 }")
+        .instantiate_expr("chase", "chase-a", "{ ledCount: 2, chaseCount: 1 }")
         .unwrap();
 
     manager.activate(blink_idx).unwrap();
@@ -395,10 +395,10 @@ fn effect_manager_can_activate_by_name_and_list_instances() {
     assert_eq!(manager.engine_count(), 2);
 
     manager
-        .instantiate("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_expr("blink", "blink-a", "{ ledCount: 2 }")
         .unwrap();
     manager
-        .instantiate("rainbow", "rainbow-a", "{ ledCount: 2 }")
+        .instantiate_expr("rainbow", "rainbow-a", "{ ledCount: 2 }")
         .unwrap();
 
     assert_eq!(manager.engine_names(), vec!["blink", "rainbow"]);
@@ -418,10 +418,10 @@ fn effect_manager_can_remove_instances() {
         .unwrap();
 
     let a = manager
-        .instantiate("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_expr("blink", "blink-a", "{ ledCount: 2 }")
         .unwrap();
     let _b = manager
-        .instantiate("blink", "blink-b", "{ ledCount: 2 }")
+        .instantiate_expr("blink", "blink-b", "{ ledCount: 2 }")
         .unwrap();
 
     manager.activate(a).unwrap();
@@ -448,10 +448,10 @@ fn effect_manager_rejects_duplicate_names() {
         .is_err());
 
     manager
-        .instantiate("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_expr("blink", "blink-a", "{ ledCount: 2 }")
         .unwrap();
     assert!(manager
-        .instantiate("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_expr("blink", "blink-a", "{ ledCount: 2 }")
         .is_err());
 }
 
@@ -466,13 +466,13 @@ fn effect_manager_can_query_and_remove_by_engine() {
         .unwrap();
 
     manager
-        .instantiate("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_expr("blink", "blink-a", "{ ledCount: 2 }")
         .unwrap();
     manager
-        .instantiate("blink", "blink-b", "{ ledCount: 3 }")
+        .instantiate_expr("blink", "blink-b", "{ ledCount: 3 }")
         .unwrap();
     manager
-        .instantiate("rainbow", "rainbow-a", "{ ledCount: 2 }")
+        .instantiate_expr("rainbow", "rainbow-a", "{ ledCount: 2 }")
         .unwrap();
 
     assert_eq!(manager.instances_for_engine("blink"), vec!["blink-a", "blink-b"]);
@@ -510,3 +510,4 @@ fn effect_manager_can_instantiate_with_typed_config() {
     assert_eq!(leds.len(), 6);
     assert_eq!(leds[0], 255);
 }
+

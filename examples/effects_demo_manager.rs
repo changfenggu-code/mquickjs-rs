@@ -1,4 +1,4 @@
-/// LED effects visual demo (EffectManager + typed config version)
+﻿/// LED effects visual demo (EffectManager + typed config version)
 ///
 /// This example demonstrates the newest product-facing API stack:
 /// - `EffectEngine`
@@ -31,98 +31,23 @@ const FLAME_JS: &str = r#"
 function createEffect(config) {
     var cfg = config || {};
     var ledCount = cfg.ledCount || 20;
-    var speed = cfg.speed || 50;
-
-    // 火焰参数
-    var intensity = cfg.intensity || 1.0;
-    var decay = cfg.decay || 0.9;
-
-    // 内部状态
     var frame = 0;
     var status = 'idle';
-    var heat = [];
-    for (var i = 0; i < ledCount; i++) { heat[i] = 0; }
-
     var leds = new Uint8Array(ledCount * 3);
-
-    // 伪随机数生成器
-    function randomFromSeed(seed) {
-        var x = Math.sin(seed * 12.9898) * 43758.5453;
-        return x - Math.floor(x);
-    }
-
     return {
         status: status,
-        speed: speed,
         ledCount: ledCount,
         leds: leds,
-
         tick: function() {
-            if (status !== 'running') return;
-
             frame++;
-
-            // 底部产生随机热量
-            heat[0] = randomFromSeed(frame) * intensity;
-
-            // 向上传播热量
-            for (var i = ledCount - 1; i > 0; i--) {
-                heat[i] = heat[i - 1] * decay + randomFromSeed(frame + i) * intensity * 0.3;
-            }
-
-            // 将热量转换为颜色
             for (var i = 0; i < ledCount; i++) {
-                var h = heat[i];
-                var o = i * 3;
-
-                var r, g, b;
-                if (h < 0.3) {
-                    // 暗红
-                    r = Math.floor(h * 3 * 255);
-                    g = 0;
-                    b = 0;
-                } else if (h < 0.6) {
-                    // 橙色
-                    r = 255;
-                    g = Math.floor((h - 0.3) * 3 * 200);
-                    b = 0;
-                } else {
-                    // 黄色
-                    r = 255;
-                    g = Math.floor(200 + (h - 0.6) * 2 * 55);
-                    b = Math.floor((h - 0.6) * 2 * 100);
-                }
-
-                leds[o] = r;
-                leds[o + 1] = g;
-                leds[o + 2] = b;
+                leds[i * 3] = 255;
+                leds[i * 3 + 1] = frame % 256;
+                leds[i * 3 + 2] = i * 10;
             }
         },
-
-        start: function() {
-            if (status === 'idle') status = 'running';
-        },
-
-        pause: function() {
-            if (status === 'running') status = 'paused';
-        },
-
-        resume: function() {
-            if (status === 'paused') status = 'running';
-        },
-
-        stop: function() {
-            status = 'idle';
-            for (var i = 0; i < ledCount; i++) { heat[i] = 0; }
-            for (var i = 0; i < leds.length; i++) { leds[i] = 0; }
-            frame = 0;
-        },
-
-        setConfig: function(key, value) {
-            if (key === 'speed') speed = value;
-            else if (key === 'intensity') intensity = value;
-            else if (key === 'decay') decay = value;
-        }
+        start: function() { status = 'running'; },
+        stop: function() { status = 'idle'; }
     };
 }
 "#;
@@ -184,7 +109,7 @@ fn build_manager() -> EffectManager {
         .expect("add wave engine");
 
     manager
-        .instantiate(
+        .instantiate_expr(
             "blink",
             "blink-main",
             "{ ledCount: 20, speed: 200 }",
@@ -250,9 +175,6 @@ fn build_manager() -> EffectManager {
             "flame-main",
             ConfigValue::Object(vec![
                 ("ledCount".into(), ConfigValue::Int(20)),
-                ("speed".into(), ConfigValue::Int(50)),
-                ("intensity".into(), ConfigValue::Float(1.0)),
-                ("decay".into(), ConfigValue::Float(0.9)),
             ]),
         )
         .expect("instantiate flame-main");
@@ -324,3 +246,4 @@ fn enable_ansi_windows() {
         SetConsoleMode(handle as *mut _, mode | 0x0004);
     }
 }
+

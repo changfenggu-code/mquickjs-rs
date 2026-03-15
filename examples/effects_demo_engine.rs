@@ -1,4 +1,4 @@
-/// LED effects visual demo (EffectEngine API version)
+﻿/// LED effects visual demo (EffectEngine API version)
 ///
 /// Runs all 4 LED effects (blink, chase, rainbow, wave) through the
 /// product-facing `EffectEngine` / `EffectInstance` API and renders the LED
@@ -84,7 +84,7 @@ fn run_effect(name: &str, js: &str) {
         }
     };
 
-    let mut instance = match engine.instantiate("{ ledCount: 20 }") {
+    let mut instance = match engine.instantiate_expr("{ ledCount: 20 }") {
         Ok(instance) => instance,
         Err(e) => {
             eprintln!("  ERROR: {}", e);
@@ -137,3 +137,4 @@ fn enable_ansi_windows() {
         SetConsoleMode(handle as *mut _, mode | 0x0004);
     }
 }
+

@@ -1,4 +1,4 @@
-//! LED 效果帧捕获逻辑（基于 EffectEngine API 的对照实现）
+﻿//! LED 效果帧捕获逻辑（基于 EffectEngine API 的对照实现）
 //!
 //! 这个文件与 `examples/common/effects.rs` 的目标相同：
 //! 预计算动画帧并返回给 demo / GUI / 测试使用。
@@ -37,7 +37,7 @@ pub struct EffectData {
 ///
 /// 而是：
 /// - `EffectEngine::from_source()`
-/// - `engine.instantiate(config)`
+/// - `engine.instantiate_expr(config)`
 /// - `instance.start()`
 /// - `instance.tick()`
 /// - `instance.led_buffer()`
@@ -49,7 +49,7 @@ pub fn capture_effect_via_engine(
     let engine = EffectEngine::from_source(js).expect("effect compile failed");
 
     let mut instance = engine
-        .instantiate("{ ledCount: 20 }")
+        .instantiate_expr("{ ledCount: 20 }")
         .expect("effect instantiate failed");
 
     instance.start().expect("effect start failed");
@@ -91,3 +91,4 @@ pub fn capture_all_via_engine(num_frames: usize) -> Vec<EffectData> {
         capture_effect_via_engine("Wave", WAVE_JS, num_frames),
     ]
 }
+

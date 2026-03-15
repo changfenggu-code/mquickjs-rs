@@ -1,4 +1,4 @@
-# EffectEngine API 使用说明
+﻿# EffectEngine API 使用说明
 
 本文档说明当前仓库中新增的最小产品级 effect 宿主 API：
 
@@ -48,7 +48,7 @@
 
 - `EffectEngine::from_source(source)` — JS 源码编译为字节码存入内存，开发阶段使用
 - `EffectEngine::from_bytecode(bytes)` — 直接加载预编译字节码，生产环境秒开
-- `engine.instantiate(config_expr)` — 底层接口：直接传 JS 配置表达式字符串
+- `engine.instantiate_expr(config_expr)` — 底层接口：直接传 JS 配置表达式字符串
 - `engine.instantiate_config(config)` — 更正式的宿主接口：传 `ConfigValue` / typed config
 
 ### `EffectInstance`
@@ -133,7 +133,7 @@ let engine = EffectEngine::from_source(js)?;
 ### 创建实例（字符串配置）
 
 ```rust
-let mut instance = engine.instantiate("{ ledCount: 4, speed: 100 }")?;
+let mut instance = engine.instantiate_expr("{ ledCount: 4, speed: 100 }")?;
 ```
 
 这里的 `config_expr` 当前是一个 **JS 对象字面量字符串**。
@@ -305,8 +305,8 @@ let mut manager = EffectManager::new();
 manager.add_engine("blink", EffectEngine::from_source(BLINK_JS)?);
 manager.add_engine("rainbow", EffectEngine::from_source(RAINBOW_JS)?);
 
-let blink_idx = manager.instantiate("blink", "blink-a", "{ ledCount: 20 }")?;
-let rainbow_idx = manager.instantiate("rainbow", "rainbow-a", "{ ledCount: 20 }")?;
+let blink_idx = manager.instantiate_expr("blink", "blink-a", "{ ledCount: 20 }")?;
+let rainbow_idx = manager.instantiate_expr("rainbow", "rainbow-a", "{ ledCount: 20 }")?;
 
 manager.activate(blink_idx)?;
 manager.start_active()?;
@@ -357,7 +357,7 @@ fn main() -> Result<(), String> {
     let js = include_str!("../js/effects/blink/effect.js");
 
     let engine = EffectEngine::from_source(js)?;
-    let mut instance = engine.instantiate("{ ledCount: 4, speed: 100 }")?;
+    let mut instance = engine.instantiate_expr("{ ledCount: 4, speed: 100 }")?;
 
     instance.start()?;
     instance.tick()?;
@@ -383,3 +383,4 @@ fn main() -> Result<(), String> {
 - 已经开始形成面向产品宿主层的 effect API 雏形
 
 后续仍需继续完善，但这已经是从“示例驱动”走向“产品化宿主接口”的关键一步。
+

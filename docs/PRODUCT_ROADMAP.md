@@ -1,4 +1,4 @@
-# Productization Roadmap
+﻿# Productization Roadmap
 
 本文档描述将 `mquickjs-rs` 演进为 ESP32 LED 特效产品运行时的优先级路线。
 
@@ -114,7 +114,7 @@ pub struct EffectManager { /* 最小调度层 */ }
 impl EffectEngine {
     pub fn from_bytecode(bytes: &[u8]) -> Result<Self>;
     pub fn from_source(source: &str) -> Result<Self>;
-    pub fn instantiate(&self, config_expr: &str) -> Result<EffectInstance>;
+    pub fn instantiate_expr(&self, config_expr: &str) -> Result<EffectInstance>;
     pub fn instantiate_config(&self, config: ConfigValue) -> Result<EffectInstance>;
 }
 
@@ -330,3 +330,4 @@ impl EffectInstance {
 
 - `RegExp`
 - 完整 ES6+ 高级语法与运行时能力（如 `class`、`Promise`、`async/await`、模块系统、`Map/Set` 等）
+

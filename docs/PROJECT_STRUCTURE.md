@@ -1,4 +1,4 @@
-# MQuickJS-RS 项目结构详解
+﻿# MQuickJS-RS 项目结构详解
 
 本文档详细说明 MQuickJS-RS 项目的目录结构、文件组织及各模块的功能定位。
 
@@ -101,8 +101,8 @@ mquickjs-rs/
 - **主要能力**：
   - `EffectEngine::from_source()`
   - `EffectEngine::from_bytecode()`
-  - `engine.instantiate(config)`
-  - `manager.add_engine()` / `manager.instantiate()` / `manager.activate()`
+  - `engine.instantiate_expr(config)`
+  - `manager.add_engine()` / `manager.instantiate_expr()` / `manager.activate()`
   - `manager.tick_active()` / `manager.active_led_buffer()`
   - `instance.start()` / `tick()` / `pause()` / `resume()` / `stop()`
   - `instance.led_buffer()` / `led_count()` / `set_config()` / `reset()`
@@ -953,3 +953,4 @@ cargo bench                                   # 运行基准测试
 - **特性规范**：[docs/JS_FEATURE_SPEC.md](../docs/JS_FEATURE_SPEC.md)
 - **路线图**：[docs/PRODUCT_ROADMAP.md](../docs/PRODUCT_ROADMAP.md)
 - **Claude 指导**：[CLAUDE.md](../CLAUDE.md)
+
