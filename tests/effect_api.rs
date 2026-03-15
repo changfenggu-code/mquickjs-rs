@@ -482,3 +482,31 @@ fn effect_manager_can_query_and_remove_by_engine() {
     assert_eq!(removed, 2);
     assert_eq!(manager.instance_names(), vec!["rainbow-a"]);
 }
+
+#[test]
+fn effect_manager_can_instantiate_with_typed_config() {
+    let mut manager = EffectManager::new();
+    manager
+        .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
+        .unwrap();
+
+    manager
+        .instantiate_config(
+            "blink",
+            "blink-a",
+            BlinkConfig {
+                led_count: Some(2),
+                speed: Some(100),
+                color: Some(ColorConfig::Rgb { r: 255, g: 0, b: 0 }),
+            }
+            .into(),
+        )
+        .unwrap();
+
+    manager.activate_by_name("blink-a").unwrap();
+    manager.start_active().unwrap();
+    manager.tick_active().unwrap();
+    let leds = manager.active_led_buffer().unwrap().to_vec();
+    assert_eq!(leds.len(), 6);
+    assert_eq!(leds[0], 255);
+}

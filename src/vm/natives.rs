@@ -3,6 +3,7 @@
 //! All functions follow the signature: fn(interp, this, args) -> Result<Value, String>
 
 use super::interpreter::*;
+use crate::runtime::FunctionBytecode;
 use crate::value::{float_to_value, format_float, Float, Value};
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 

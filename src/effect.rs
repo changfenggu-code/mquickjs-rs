@@ -360,6 +360,32 @@ impl EffectManager {
         Ok(self.instances.len() - 1)
     }
 
+    pub fn instantiate_config(
+        &mut self,
+        engine_name: &str,
+        instance_name: impl Into<String>,
+        config: ConfigValue,
+    ) -> EffectResult<usize> {
+        let instance_name = instance_name.into();
+        if self.instances.iter().any(|entry| entry.name == instance_name) {
+            return Err(format!("duplicate effect instance name: {}", instance_name));
+        }
+
+        let engine = self
+            .engines
+            .iter()
+            .find(|(name, _)| name == engine_name)
+            .ok_or_else(|| format!("unknown effect engine: {}", engine_name))?;
+
+        let instance = engine.1.instantiate_config(config)?;
+        self.instances.push(ManagedEffectInstance {
+            name: instance_name,
+            engine_name: engine_name.to_string(),
+            instance,
+        });
+        Ok(self.instances.len() - 1)
+    }
+
     pub fn activate(&mut self, instance_idx: usize) -> EffectResult<()> {
         if instance_idx >= self.instances.len() {
             return Err(format!("invalid effect instance index: {}", instance_idx));
