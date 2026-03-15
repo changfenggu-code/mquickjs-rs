@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  BENCH_RUNS: 15
 
 jobs:
   benchmark:
@@ -35,54 +36,91 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-      - name: Build C implementation
-        run: make -C vendor/mquickjs
+      - name: Locate and build C implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          C_BIN=""
+
+          if [ -x vendor/mquickjs/bin/mqjs ]; then
+            C_BIN="vendor/mquickjs/bin/mqjs"
+          elif [ -x vendor/mquickjs/mqjs ]; then
+            C_BIN="vendor/mquickjs/mqjs"
+          elif [ -f vendor/mquickjs/mquickjs.c ]; then
+            echo "C source found but no mqjs binary; building..."
+            make -C vendor/mquickjs -j"$(nproc 2>/dev/null || echo 4)" mqjs
+            if [ -x vendor/mquickjs/bin/mqjs ]; then
+              C_BIN="vendor/mquickjs/bin/mqjs"
+            elif [ -x vendor/mquickjs/mqjs ]; then
+              C_BIN="vendor/mquickjs/mqjs"
+            fi
+          fi
+
+          if [ -n "$C_BIN" ]; then
+            echo "Using C benchmark binary: $C_BIN"
+            echo "C_BIN=$C_BIN" >> "$GITHUB_ENV"
+          else
+            echo "Warning: C benchmark binary not found; Rust-only benchmark summary will be generated."
+            echo "C_BIN=" >> "$GITHUB_ENV"
+          fi
 
       - name: Run benchmark comparison
+        shell: bash
         run: |
+          set -euo pipefail
           echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Benchmark | Rust (s) | C (s) | Ratio | Notes |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|----------|-------|-------|-------|" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "${C_BIN:-}" ]; then
+            echo "| Benchmark | Rust (s) | C (s) | Ratio | Notes |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|----------|-------|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Benchmark | Rust (s) | Notes |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          fi
 
           for script in benches/scripts/*.js; do
             name=$(basename "$script" .js)
 
-            # Run Rust version (3 runs, take average)
+            # Run Rust version (${BENCH_RUNS} runs, take average)
             rust_total=0
-            for i in 1 2 3; do
+            for i in $(seq 1 "$BENCH_RUNS"); do
               start=$(date +%s.%N)
               ./target/release/mqjs "$script" > /dev/null 2>&1
               end=$(date +%s.%N)
               elapsed=$(echo "$end - $start" | bc)
               rust_total=$(echo "$rust_total + $elapsed" | bc)
             done
-            rust_time=$(echo "scale=4; $rust_total / 3" | bc)
+            rust_time=$(echo "scale=4; $rust_total / $BENCH_RUNS" | bc)
 
-            # Run C version (3 runs, take average)
-            c_total=0
-            for i in 1 2 3; do
-              start=$(date +%s.%N)
-              ./vendor/mquickjs/mqjs "$script" > /dev/null 2>&1
-              end=$(date +%s.%N)
-              elapsed=$(echo "$end - $start" | bc)
-              c_total=$(echo "$c_total + $elapsed" | bc)
-            done
-            c_time=$(echo "scale=4; $c_total / 3" | bc)
+            if [ -n "${C_BIN:-}" ]; then
+              # Run C version (${BENCH_RUNS} runs, take average)
+              c_total=0
+              for i in $(seq 1 "$BENCH_RUNS"); do
+                start=$(date +%s.%N)
+                "$C_BIN" "$script" > /dev/null 2>&1
+                end=$(date +%s.%N)
+                elapsed=$(echo "$end - $start" | bc)
+                c_total=$(echo "$c_total + $elapsed" | bc)
+              done
+              c_time=$(echo "scale=4; $c_total / $BENCH_RUNS" | bc)
 
-            # Calculate ratio
-            ratio=$(echo "scale=2; $rust_time / $c_time" | bc)
+              # Calculate ratio
+              ratio=$(echo "scale=2; $rust_time / $c_time" | bc)
 
-            # Determine notes
-            if (( $(echo "$ratio < 0.9" | bc -l) )); then
-              notes="Rust faster"
-            elif (( $(echo "$ratio > 1.1" | bc -l) )); then
-              notes="C faster"
+              # Determine notes
+              if (( $(echo "$ratio < 0.9" | bc -l) )); then
+                notes="Rust faster"
+              elif (( $(echo "$ratio > 1.1" | bc -l) )); then
+                notes="C faster"
+              else
+                notes="Equal"
+              fi
+
+              echo "| $name | $rust_time | $c_time | ${ratio}x | $notes |" >> $GITHUB_STEP_SUMMARY
             else
-              notes="Equal"
+              echo "| $name | $rust_time | Rust-only |" >> $GITHUB_STEP_SUMMARY
             fi
-
-            echo "| $name | $rust_time | $c_time | ${ratio}x | $notes |" >> $GITHUB_STEP_SUMMARY
           done
 
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -105,42 +143,76 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-      - name: Build C implementation
-        run: make -C vendor/mquickjs
+      - name: Locate and build C implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          C_BIN=""
+
+          if [ -x vendor/mquickjs/bin/mqjs ]; then
+            C_BIN="vendor/mquickjs/bin/mqjs"
+          elif [ -x vendor/mquickjs/mqjs ]; then
+            C_BIN="vendor/mquickjs/mqjs"
+          elif [ -f vendor/mquickjs/mquickjs.c ]; then
+            echo "C source found but no mqjs binary; building..."
+            make -C vendor/mquickjs mqjs
+            if [ -x vendor/mquickjs/bin/mqjs ]; then
+              C_BIN="vendor/mquickjs/bin/mqjs"
+            elif [ -x vendor/mquickjs/mqjs ]; then
+              C_BIN="vendor/mquickjs/mqjs"
+            fi
+          fi
+
+          if [ -n "$C_BIN" ]; then
+            echo "Using C benchmark binary: $C_BIN"
+            echo "C_BIN=$C_BIN" >> "$GITHUB_ENV"
+          else
+            echo "Warning: C benchmark binary not found; Rust-only benchmark summary will be generated."
+            echo "C_BIN=" >> "$GITHUB_ENV"
+          fi
 
       - name: Run benchmark comparison
+        shell: bash
         run: |
+          set -euo pipefail
           echo "## Benchmark Results (macOS)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Benchmark | Rust (s) | C (s) | Ratio |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|----------|-------|-------|" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "${C_BIN:-}" ]; then
+            echo "| Benchmark | Rust (s) | C (s) | Ratio |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|----------|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Benchmark | Rust (s) | Notes |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          fi
 
           for script in benches/scripts/*.js; do
             name=$(basename "$script" .js)
 
-            # Run Rust version (3 runs)
+            # Run Rust version (${BENCH_RUNS} runs)
             rust_total=0
-            for i in 1 2 3; do
+            for i in $(seq 1 "$BENCH_RUNS"); do
               start=$(python3 -c 'import time; print(time.time())')
               ./target/release/mqjs "$script" > /dev/null 2>&1
               end=$(python3 -c 'import time; print(time.time())')
               elapsed=$(python3 -c "print($end - $start)")
               rust_total=$(python3 -c "print($rust_total + $elapsed)")
             done
-            rust_time=$(python3 -c "print(f'{$rust_total / 3:.4f}')")
+            rust_time=$(python3 -c "print(f'{$rust_total / $BENCH_RUNS:.4f}')")
 
-            # Run C version (3 runs)
-            c_total=0
-            for i in 1 2 3; do
-              start=$(python3 -c 'import time; print(time.time())')
-              ./vendor/mquickjs/mqjs "$script" > /dev/null 2>&1
-              end=$(python3 -c 'import time; print(time.time())')
-              elapsed=$(python3 -c "print($end - $start)")
-              c_total=$(python3 -c "print($c_total + $elapsed)")
-            done
-            c_time=$(python3 -c "print(f'{$c_total / 3:.4f}')")
-
-            ratio=$(python3 -c "print(f'{$rust_time / $c_time:.2f}x' if $c_time > 0 else 'N/A')")
-
-            echo "| $name | $rust_time | $c_time | $ratio |" >> $GITHUB_STEP_SUMMARY
+            if [ -n "${C_BIN:-}" ]; then
+              c_total=0
+              for i in $(seq 1 "$BENCH_RUNS"); do
+                start=$(python3 -c 'import time; print(time.time())')
+                "$C_BIN" "$script" > /dev/null 2>&1
+                end=$(python3 -c 'import time; print(time.time())')
+                elapsed=$(python3 -c "print($end - $start)")
+                c_total=$(python3 -c "print($c_total + $elapsed)")
+              done
+              c_time=$(python3 -c "print(f'{$c_total / $BENCH_RUNS:.4f}')")
+              ratio=$(python3 -c "print(f'{$rust_time / $c_time:.2f}x' if $c_time > 0 else 'N/A')")
+              echo "| $name | $rust_time | $c_time | $ratio |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $name | $rust_time | Rust-only |" >> $GITHUB_STEP_SUMMARY
+            fi
           done
