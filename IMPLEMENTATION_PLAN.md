@@ -132,16 +132,21 @@
 - [ ] 9.1 Profile and optimize hot paths
 - [ ] 9.2 Optimize GC performance
 - [ ] 9.3 Reduce memory usage
-- [ ] 9.4 Add benchmarks
-- [ ] 9.5 Documentation
+- [x] 9.4 Add benchmarks (compare.sh + benchmark scripts)
+- [x] 9.5 Documentation (BENCHMARK_ANALYSIS.md)
 
-**Status**: Not Started
+**Status**: In Progress (benchmark infrastructure ready, analysis ongoing)
 
 ---
 
 ## Current Progress
 
-**Last Updated**: Stage 8 Complete (CLI with memory stats)
+**Last Updated**: Stage 9 In Progress (benchmark infrastructure ready)
+
+**Stage 9 Status**:
+- Benchmark scripts: Ready (`benches/compare.sh`)
+- Performance baseline: Recorded (Rust-only on Windows)
+- Analysis: Ongoing (see docs/BENCHMARK_ANALYSIS.md)
 
 **Files Created/Updated**:
 - `src/lib.rs` - Main library entry
