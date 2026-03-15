@@ -20,7 +20,7 @@ cargo build --release
 # Build for ESP32 bare metal (no_std)
 cargo build --release --no-default-features
 
-# Run tests (373 tests)
+# Run tests (458 tests)
 cargo test
 
 # Run a single test by name
@@ -97,7 +97,14 @@ Object property/method access goes through `get_*_property()` helpers in the int
 
 ### Tests
 
-Tests live inline in each source file (`#[cfg(test)]` modules). The 373 tests cover the full language feature set and all built-in methods.
+Tests live inline in each source file (`#[cfg(test)]` modules). The 458 tests cover the full language feature set and all built-in methods.
+
+## Workspace Structure
+
+This is a Cargo workspace with two members:
+
+- **mquickjs-rs** (root) — Core JavaScript engine (`src/`)
+- **led-runtime** (`led-runtime/`) — LED effect runtime built on top of mquickjs-rs
 
 ## Conventions
 
@@ -107,4 +114,4 @@ Tests live inline in each source file (`#[cfg(test)]` modules). The 373 tests co
 - New built-in methods go in `src/builtins/<object>.rs`, wired up via `get_*_property()` in the interpreter.
 - **`no_std` is required for ESP32** — The project must compile without `std`. When adding dependencies, verify they have `no_std` support or add `default-features = ["std"]` to `Cargo.toml` and use `#[cfg(feature = "std")]` gates.
 - **Memory-constrained design** — ESP32 has limited RAM (typically 320-520KB). Prefer inline allocation, avoid dynamic allocation in hot paths, and use tagged values for integers to minimize heap usage.
-- **Cross-compilation target** — For ESP32, use target: `xtensa-esp32-none-elf`. Run `rustup target add xtensa-esp32-none-elf` if not already installed.
+- **Cross-compilation target** — For ESP32, use target: `riscv32imac-unknown-none-elf`. Run `rustup target add riscv32imac-unknown-none-elf` if not already installed.
