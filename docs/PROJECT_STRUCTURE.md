@@ -47,7 +47,7 @@ mquickjs-rs/
 - `led-runtime/docs/LED_PROFILE.md`：产品脚本规范
 - `led-runtime/docs/PRODUCT_ROADMAP.md`：产品化路线图
 - `led-runtime/docs/EMBEDDED_NO_STD.md`：`no_std` / ESP32 裸板接入说明
-- `js/effects/`：LED 效果脚本资源
+- `led-runtime/js/effects/`：LED 效果脚本资源
 - `led-runtime/tests/effects.rs`：LED 效果集成测试
 - `led-runtime/examples/common/effects.rs`、`led-runtime/examples/effects_demo.rs`、`led-runtime/examples/effects_egui.rs`、`led-runtime/examples/effects_slint/`：LED 产品演示与采帧示例
 
