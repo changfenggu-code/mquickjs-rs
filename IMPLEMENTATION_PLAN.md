@@ -64,7 +64,7 @@
 - [x] 4.5 Implement bytecode generation
 - [x] 4.6 Implement scope and variable resolution (local variables)
 
-**Status**: Complete (closures pending for Stage 7)
+**Status**: Complete (includes switch/case/default, do...while, debugger, void)
 
 ---
 
@@ -160,32 +160,19 @@
 - `src/util/mod.rs`, `dtoa.rs`, `unicode.rs` - Utilities
 - `src/bin/mqjs.rs` - REPL binary
 
-**Test Count**: 373 passing
+**Test Count**: 458 passing
 
-**Additional mquickjs Features (post-Stage 8)**:
-- String.charCodeAt, String.lastIndexOf
-- String.fromCharCode, String.fromCodePoint
-- Array.lastIndexOf
+**Additional mquickjs Features (post-Stage 8)** - All implemented ✓:
+- String: charCodeAt, lastIndexOf, fromCharCode, fromCodePoint, and 20+ methods
+- Array: lastIndexOf, reduceRight, toString, and 20+ methods
+- Math: all trig functions (sin/cos/tan/asin/acos/atan/atan2), exp/log/pow/sqrt/random/sign, all constants
+- Number: toString, toFixed, toExponential, toPrecision
+- Object: getPrototypeOf, setPrototypeOf, create, defineProperty, hasOwnProperty
+- TypedArray: subarray, Uint8ClampedArray, Float32Array, Float64Array
+- Error: EvalError, URIError, InternalError types, stack, toString
+- Function: toString
+- Global: parseFloat, isFinite, gc, setTimeout, clearTimeout, load
 - performance.now
-- Object.getPrototypeOf, Object.setPrototypeOf, Object.create, Object.defineProperty
-- Object.prototype.toString
-- Math.sign, Math.sin, Math.cos, Math.tan, Math.exp, Math.log, Math.random, Math.atan2
-- Math.asin, Math.acos, Math.atan
-- Math.pow, Math.sqrt
-- Math constants: PI, E, LN2, LN10, LOG2E, LOG10E, SQRT2, SQRT1_2
-- parseFloat, isFinite global functions
-- Number.prototype.toString, toFixed, toExponential, toPrecision
-- ArrayBuffer constructor with byteLength property
-- TypedArray.prototype.subarray
-- Uint8ClampedArray, Float32Array, Float64Array TypedArray types
-- EvalError, URIError, InternalError error types
-- Error.prototype.stack, Error.prototype.toString
-- Array.prototype.toString, Array.prototype.reduceRight
-- Function.prototype.toString
-- gc() - trigger garbage collection (placeholder)
-- load(filename) - load and execute a JavaScript file
-- setTimeout(callback, delay) - schedule callback (returns timer ID)
-- clearTimeout(id) - cancel a scheduled timeout
 
 **Stage 8 CLI Features**:
 - Complete argument parsing (-h, -e, -i, -I, -d, -c, --memory-limit)

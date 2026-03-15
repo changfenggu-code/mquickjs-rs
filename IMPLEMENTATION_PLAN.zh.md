@@ -161,36 +161,23 @@
 - `src/runtime/function.rs` - CFunction, Closure, FunctionBytecode 及 CaptureInfo
 - `src/util/mod.rs`, `dtoa.rs`, `unicode.rs` - 工具函数
 - `src/bin/mqjs.rs` - REPL 二进制
-- `src/effect.rs` - EffectEngine API（LED 效果引擎）⚠️ 已添加 ConfigValue 结构化配置支持（2026-03-14）
+- `led-runtime/src/effect.rs` - EffectEngine API（LED 效果引擎）⚠️ 已迁移到 `led-runtime`，并使用 `ConfigValue` 作为正式结构化配置入口（2026-03-15）
 - `src/context.rs` - MemoryStats 改进（添加 estimated_object_bytes）
 
-**测试数量**：328 个通过
+**测试数量**：458 个通过
 
-**额外 mquickjs 特性（阶段 8 后）**：
-- String.charCodeAt, String.lastIndexOf
-- String.fromCharCode, String.fromCodePoint
-- Array.lastIndexOf
+**额外 mquickjs 特性（阶段 8 后）- 全部已实现 ✓**：
+- String: charCodeAt, lastIndexOf, fromCharCode, fromCodePoint 等 20+ 方法
+- Array: lastIndexOf, reduceRight, toString 等 20+ 方法
+- Math: 所有三角函数 (sin/cos/tan/asin/acos/atan/atan2)、exp/log/pow/sqrt/random/sign、所有常量
+- Number: toString, toFixed, toExponential, toPrecision
+- Object: getPrototypeOf, setPrototypeOf, create, defineProperty, hasOwnProperty
+- TypedArray: subarray, Uint8ClampedArray, Float32Array, Float64Array
+- Error: EvalError, URIError, InternalError 类型，stack, toString
+- Function: toString
+- 全局函数: parseFloat, isFinite, gc, setTimeout, clearTimeout, load
 - performance.now
-- Object.getPrototypeOf, Object.setPrototypeOf, Object.create, Object.defineProperty
-- Object.prototype.toString
-- Math.sign, Math.sin, Math.cos, Math.tan, Math.exp, Math.log, Math.random, Math.atan2
-- Math.asin, Math.acos, Math.atan
-- Math.pow, Math.sqrt
-- Math 常量：PI, E, LN2, LN10, LOG2E, LOG10E, SQRT2, SQRT1_2
-- parseFloat, isFinite 全局函数
-- Number.prototype.toString, toFixed, toExponential, toPrecision
-- ArrayBuffer 构造函数及 byteLength 属性
-- TypedArray.prototype.subarray
-- Uint8ClampedArray, Float32Array, Float64Array TypedArray 类型
-- EvalError, URIError, InternalError 错误类型
-- Error.prototype.stack, Error.prototype.toString
-- Array.prototype.toString, Array.prototype.reduceRight
-- Function.prototype.toString
-- gc() - 触发垃圾回收（占位符）
-- load(filename) - 加载并执行 JavaScript 文件
-- setTimeout(callback, delay) - 调度回调（返回 timer ID）
-- clearTimeout(id) - 取消已调度的超时
-- switch/case/do-while/void/debugger 语句
+- switch/case/do-while/void/debugger 语句 ✓ 已实现
 
 **阶段 8 CLI 特性**：
 - 完整参数解析 (-h, -e, -i, -I, -d, -c, --memory-limit)

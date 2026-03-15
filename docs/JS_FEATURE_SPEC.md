@@ -8,7 +8,7 @@
 
 当前状态概览：
 
-- `cargo test` 通过，当前共 **316** 个测试通过
+- `cargo test` 通过，当前共 **458** 个测试通过
 - LED effect 最小闭环已完成，`blink / chase / rainbow / wave` 集成测试通过
 - 引擎已支持源码执行、字节码编译与字节码反序列化执行
 - 宿主产品 API 仍在补齐中，详见 `led-runtime/docs/PRODUCT_ROADMAP.md`
@@ -570,7 +570,7 @@
 - 完整标准 property descriptor 语义
 - `Array.prototype.sort` 的完整 comparator 语义
 - `gc()` 作为完整 GC 控制接口的行为语义
-- lexer 已识别但编译器未完整支持的语法（如 `switch` / `do...while` / `debugger` / `void` 等）
+- （已实现：`switch` / `do...while` / `debugger` / `void`）
 - 仅在 `std` 下存在或更完整的能力（如 `RegExp` 路径、文件加载、宿主定时器）
 
 ## 6. LED / 产品脚本相关实现状态

@@ -16,6 +16,7 @@
 - `led-runtime/tests/effect_api.rs`
 - `led-runtime/tests/effects.rs`
 - `led-runtime/examples/` 下的产品层示例
+- 根目录中原先的主要产品层文件已完成迁移并开始去重
 
 这意味着本方案已经进入“渐进迁移”阶段，而不是纯规划状态。
 
@@ -24,6 +25,12 @@
 - 保持迁移过程平滑
 - 方便对照
 - 降低一次性大迁移的风险
+
+当前最新状态：
+
+- 根目录的主要产品层代码/测试/示例已经迁到 `led-runtime/`
+- 根目录逐步收回纯引擎层角色
+- 后续剩余工作将更多集中在文档彻底收口与最终去重
 
 ## 1. 为什么值得拆分
 
@@ -128,11 +135,11 @@ resolver = "2"
 
 `led-runtime` 作为产品项目，负责 effect 宿主运行时与业务层。
 
-### 建议迁移过去的文件
+### 已迁移的文件
 
 #### 产品 API / 宿主层
 
-- `src/effect.rs`
+- `led-runtime/src/effect.rs`
 
 拆分后可考虑细化为：
 
@@ -148,22 +155,22 @@ led-runtime/src/
 
 #### effect 脚本
 
-- `js/effects/`
+- `led-runtime/js/effects/`
 
 #### 产品测试
 
-- `tests/effects.rs`
-- `tests/effect_api.rs`
+- `led-runtime/tests/effects.rs`
+- `led-runtime/tests/effect_api.rs`
 
 #### 示例
 
-- `examples/common/effects.rs`
-- `examples/effects_demo.rs`
-- `examples/effects_demo_engine.rs`
-- `examples/effects_demo_manager.rs`
-- `examples/effects_egui.rs`
-- `examples/effects_slint/`
-- `examples/docs/EFFECT_WORKFLOW.md`
+- `led-runtime/examples/common/effects.rs`
+- `led-runtime/examples/effects_demo.rs`
+- `led-runtime/examples/effects_demo_engine.rs`
+- `led-runtime/examples/effects_demo_manager.rs`
+- `led-runtime/examples/effects_egui.rs`
+- `led-runtime/examples/effects_slint/`
+- `led-runtime/examples/docs/EFFECT_WORKFLOW.md`
 
 #### 产品文档
 
@@ -180,11 +187,11 @@ led-runtime/src/
 - BLE / UI / ESP32 宿主集成（后续）
 - 示例、产品测试和效果演示
 
-## 5. 为什么 `src/effect.rs` 更适合放到 `led-runtime`
+## 5. 为什么 `led-runtime/src/effect.rs` 更适合放在产品层
 
 这是一个关键判断。
 
-当前 `src/effect.rs` 已经包含：
+当前 `led-runtime/src/effect.rs` 已经包含：
 
 - `EffectEngine`
 - `EffectInstance`
@@ -196,50 +203,51 @@ led-runtime/src/
 
 - 基于引擎构建出来的产品运行时层
 
-所以如果未来真的拆分，`src/effect.rs` 优先应该迁移到 `led-runtime`。
+这也正是它现在已经迁移到 `led-runtime` 的原因。
 
-## 6. 当前最推荐的迁移顺序
+## 6. 已执行的迁移顺序
 
-不建议一次性暴力拆分，推荐分阶段进行。
+拆分采用了分阶段推进，而不是一次性暴力迁移。
 
-### Phase A：先认知分层（现在就可以）
+### Phase A：先认知分层（已完成）
 
-即使暂时不改目录，也要明确：
+首先明确了：
 
 - 引擎层：`Context` / VM / parser / runtime
-- 产品层：`effect.rs` / `LED_PROFILE` / effect 脚本 / product tests
+- 产品层：`led-runtime/src/effect.rs` / `led-runtime/docs/LED_PROFILE.md` / `led-runtime/js/effects/` / product tests
 
-### Phase B：建立 workspace 外壳
+### Phase B：建立 workspace 外壳（已完成）
 
-先创建：
+当前实际结构是：
 
-- workspace 根目录
-- `mquickjs-rs/`
-- `led-runtime/`
+- workspace 根目录（当前仓库）
+- 根 crate：`mquickjs-rs`
+- 子 crate：`led-runtime/`
 
-但先不大规模迁移文件，只保证两个成员 crate 能正常编译。
+并先保证两个成员 crate 都能独立编译和测试。
 
-### Phase C：迁移产品层文件
+### Phase C：迁移产品层文件（已完成）
 
-优先迁移：
+已迁移：
 
-- `src/effect.rs`
-- `tests/effect_api.rs`
-- `tests/effects.rs`
-- `js/effects/`
+- `led-runtime/src/effect.rs`
+- `led-runtime/tests/effect_api.rs`
+- `led-runtime/tests/effects.rs`
+- `led-runtime/js/effects/`
 - `led-runtime/docs/LED_PROFILE.md`
 - `led-runtime/docs/PRODUCT_ROADMAP.md`
 - `led-runtime/docs/EFFECT_ENGINE_API.md`
 
-### Phase D：迁移示例
+### Phase D：迁移示例（已完成）
 
-最后迁移：
+已迁移：
 
-- `examples/effects_demo*.rs`
-- `examples/common/`
-- GUI 示例
+- `led-runtime/examples/effects_demo*.rs`
+- `led-runtime/examples/common/`
+- `led-runtime/examples/effects_egui.rs`
+- `led-runtime/examples/effects_slint/`
 
-因为示例经常会引用宿主 API，属于产品层后置迁移对象。
+示例经常会引用宿主 API，因此在前面几步稳定后再迁移是更稳妥的做法。
 
 ## 7. `led-runtime` 如何依赖 `mquickjs-rs`
 
