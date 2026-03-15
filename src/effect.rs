@@ -1,4 +1,4 @@
-﻿use alloc::format;
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -9,8 +9,10 @@ const BYTECODE_VERSION: u8 = 1;
 const EFFECT_GLOBAL: &str = "__mquickjs_effect";
 const CONFIG_GLOBAL: &str = "__mquickjs_config";
 
+/// 效果操作的统一返回类型
 pub type EffectResult<T> = Result<T, String>;
 
+/// Rust 侧配置值，可递归表示 JS 对象/数组/基本类型
 #[derive(Clone, Debug)]
 pub enum ConfigValue {
     Undefined,
@@ -24,6 +26,7 @@ pub enum ConfigValue {
 }
 
 impl ConfigValue {
+    /// 将 ConfigValue 转换为 JS 字面量字符串（如 "{'r': 255, 'g': 0}"）
     fn to_js_literal(&self) -> String {
         match self {
             ConfigValue::Undefined => "undefined".to_string(),
@@ -60,12 +63,14 @@ impl ConfigValue {
     }
 }
 
+/// 颜色配置：支持 RGB 和 HSV 两种模式
 #[derive(Clone, Debug)]
 pub enum ColorConfig {
     Rgb { r: u8, g: u8, b: u8 },
     Hsv { h: f32, s: f32, v: f32 },
 }
 
+/// 将 ColorConfig 转换为 ConfigValue 对象（如 {mode:'rgb', r:255, g:0, b:0}）
 impl From<ColorConfig> for ConfigValue {
     fn from(value: ColorConfig) -> Self {
         match value {
@@ -91,6 +96,7 @@ impl From<ColorConfig> for ConfigValue {
     }
 }
 
+/// Blink 效果的强类型配置
 #[derive(Clone, Debug, Default)]
 pub struct BlinkConfig {
     pub led_count: Option<usize>,
@@ -98,6 +104,7 @@ pub struct BlinkConfig {
     pub color: Option<ColorConfig>,
 }
 
+/// Chase（跑马灯）效果的强类型配置
 #[derive(Clone, Debug, Default)]
 pub struct ChaseConfig {
     pub led_count: Option<usize>,
@@ -106,6 +113,7 @@ pub struct ChaseConfig {
     pub chase_count: Option<i32>,
 }
 
+/// Rainbow（彩虹）效果的强类型配置
 #[derive(Clone, Debug, Default)]
 pub struct RainbowConfig {
     pub led_count: Option<usize>,
@@ -116,6 +124,7 @@ pub struct RainbowConfig {
     pub brightness: Option<f32>,
 }
 
+/// Wave（波浪）效果的强类型配置
 #[derive(Clone, Debug, Default)]
 pub struct WaveConfig {
     pub led_count: Option<usize>,
@@ -123,6 +132,8 @@ pub struct WaveConfig {
     pub color: Option<ColorConfig>,
     pub wave_width: Option<i32>,
 }
+
+// ── 辅助函数：将 Option 字段推入 ConfigValue 对象 ──
 
 fn push_opt_int(entries: &mut Vec<(String, ConfigValue)>, key: &str, value: Option<i32>) {
     if let Some(value) = value {
@@ -148,6 +159,7 @@ fn push_opt_color(entries: &mut Vec<(String, ConfigValue)>, key: &str, value: Op
     }
 }
 
+/// 将 BlinkConfig 转换为 ConfigValue 对象
 impl From<BlinkConfig> for ConfigValue {
     fn from(value: BlinkConfig) -> Self {
         let mut entries = Vec::new();
@@ -158,6 +170,7 @@ impl From<BlinkConfig> for ConfigValue {
     }
 }
 
+/// 将 ChaseConfig 转换为 ConfigValue 对象
 impl From<ChaseConfig> for ConfigValue {
     fn from(value: ChaseConfig) -> Self {
         let mut entries = Vec::new();
@@ -169,6 +182,7 @@ impl From<ChaseConfig> for ConfigValue {
     }
 }
 
+/// 将 RainbowConfig 转换为 ConfigValue 对象
 impl From<RainbowConfig> for ConfigValue {
     fn from(value: RainbowConfig) -> Self {
         let mut entries = Vec::new();
@@ -182,6 +196,7 @@ impl From<RainbowConfig> for ConfigValue {
     }
 }
 
+/// 将 WaveConfig 转换为 ConfigValue 对象
 impl From<WaveConfig> for ConfigValue {
     fn from(value: WaveConfig) -> Self {
         let mut entries = Vec::new();
@@ -193,11 +208,13 @@ impl From<WaveConfig> for ConfigValue {
     }
 }
 
+/// 效果引擎：持有编译后的字节码，可创建多个效果实例
 pub struct EffectEngine {
     bytecode_bytes: Vec<u8>,
     memory_limit: usize,
 }
 
+/// 效果实例：一个正在运行的 JS 效果，内含 Context 和预编译的生命周期方法
 pub struct EffectInstance {
     ctx: Context,
     create_bc: FunctionBytecode,
@@ -210,12 +227,14 @@ pub struct EffectInstance {
     led_count_bc: FunctionBytecode,
 }
 
+/// 被 EffectManager 管理的效果实例（附带名称和所属引擎名）
 struct ManagedEffectInstance {
     name: String,
     engine_name: String,
     instance: EffectInstance,
 }
 
+/// 效果管理器：管理多个引擎和实例，支持激活/切换/删除
 pub struct EffectManager {
     engines: Vec<(String, EffectEngine)>,
     instances: Vec<ManagedEffectInstance>,
@@ -223,6 +242,7 @@ pub struct EffectManager {
 }
 
 impl EffectEngine {
+    /// 从 JS 源码编译为字节码，创建效果引擎（开发阶段用）
     pub fn from_source(source: &str) -> EffectResult<Self> {
         let ctx = Context::new(1024 * 1024);
         let bytecode = ctx.compile(source).map_err(|e| e.to_string())?;
@@ -232,6 +252,7 @@ impl EffectEngine {
         })
     }
 
+    /// 从预编译字节码创建效果引擎（生产环境用，跳过编译）
     pub fn from_bytecode(bytes: &[u8]) -> EffectResult<Self> {
         let payload = if bytes.len() >= 5 && &bytes[0..4] == BYTECODE_MAGIC {
             if bytes[4] != BYTECODE_VERSION {
@@ -254,11 +275,13 @@ impl EffectEngine {
         })
     }
 
+    /// 设置实例的内存上限（链式调用）
     pub fn with_memory_limit(mut self, memory_limit: usize) -> Self {
         self.memory_limit = memory_limit;
         self
     }
 
+    /// 用 JS 字符串配置创建效果实例（如 "{ ledCount: 20 }"）
     pub fn instantiate_expr(&self, config_expr: &str) -> EffectResult<EffectInstance> {
         let config_expr = if config_expr.trim().is_empty() {
             ConfigValue::Object(Vec::new()).to_js_literal()
@@ -268,27 +291,33 @@ impl EffectEngine {
         self.instantiate_from_literal(&config_expr)
     }
 
+    /// 用结构化 ConfigValue 创建效果实例（推荐方式）
     pub fn instantiate_config(&self, config: ConfigValue) -> EffectResult<EffectInstance> {
         self.instantiate_from_literal(&config.to_js_literal())
     }
 
+    /// 内部方法：创建 JS Context，加载字节码，执行 createEffect()，预编译生命周期方法
     fn instantiate_from_literal(&self, config_literal: &str) -> EffectResult<EffectInstance> {
         let mut ctx = Context::new(self.memory_limit);
+        // 反序列化字节码并加载到 Context
         let (bytecode, _) = FunctionBytecode::deserialize(&self.bytecode_bytes)
             .map_err(|e| e.to_string())?;
         ctx.load_bytecode(bytecode).map_err(|e| e.to_string())?;
 
+        // 解析配置对象并存入全局变量
         let config_val = ctx
             .eval(&format!("return {};", config_literal))
             .map_err(|e| e.to_string())?;
         ctx.set_global(CONFIG_GLOBAL, config_val);
 
+        // 调用 createEffect(config) 生成效果实例
         let create_bc = ctx
             .compile(&format!("return createEffect({CONFIG_GLOBAL});"))
             .map_err(|e| e.to_string())?;
         let effect_val = ctx.execute(&create_bc).map_err(|e| e.to_string())?;
         ctx.set_global(EFFECT_GLOBAL, effect_val);
 
+        // 预编译各生命周期方法的调用脚本，后续 tick/start/stop 直接执行
         let start_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.start();")).map_err(|e| e.to_string())?;
         let tick_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.tick();")).map_err(|e| e.to_string())?;
         let pause_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.pause();")).map_err(|e| e.to_string())?;
@@ -312,6 +341,7 @@ impl EffectEngine {
 }
 
 impl EffectManager {
+    /// 创建空的效果管理器
     pub fn new() -> Self {
         Self {
             engines: Vec::new(),
@@ -320,6 +350,7 @@ impl EffectManager {
         }
     }
 
+    /// 注册一个效果引擎（返回引擎索引）
     pub fn add_engine(
         &mut self,
         name: impl Into<String>,
@@ -334,6 +365,7 @@ impl EffectManager {
         Ok(self.engines.len() - 1)
     }
 
+    /// 用 JS 字符串配置创建实例并加入管理列表（返回实例索引）
     pub fn instantiate_expr(
         &mut self,
         engine_name: &str,
@@ -360,6 +392,7 @@ impl EffectManager {
         Ok(self.instances.len() - 1)
     }
 
+    /// 用结构化 ConfigValue 创建实例并加入管理列表（推荐方式）
     pub fn instantiate_config(
         &mut self,
         engine_name: &str,
@@ -386,6 +419,7 @@ impl EffectManager {
         Ok(self.instances.len() - 1)
     }
 
+    /// 按索引激活某个实例（后续 tick/start 等操作将作用于该实例）
     pub fn activate(&mut self, instance_idx: usize) -> EffectResult<()> {
         if instance_idx >= self.instances.len() {
             return Err(format!("invalid effect instance index: {}", instance_idx));
@@ -394,6 +428,7 @@ impl EffectManager {
         Ok(())
     }
 
+    /// 按名称激活某个实例
     pub fn activate_by_name(&mut self, instance_name: &str) -> EffectResult<()> {
         let idx = self
             .instances
@@ -404,22 +439,27 @@ impl EffectManager {
         Ok(())
     }
 
+    /// 返回所有已注册引擎的名称列表
     pub fn engine_names(&self) -> Vec<&str> {
         self.engines.iter().map(|(name, _)| name.as_str()).collect()
     }
 
+    /// 返回已注册引擎数量
     pub fn engine_count(&self) -> usize {
         self.engines.len()
     }
 
+    /// 返回所有实例的名称列表
     pub fn instance_names(&self) -> Vec<&str> {
         self.instances.iter().map(|entry| entry.name.as_str()).collect()
     }
 
+    /// 返回实例数量
     pub fn instance_count(&self) -> usize {
         self.instances.len()
     }
 
+    /// 按索引删除实例（自动修正激活索引）
     pub fn remove_instance(&mut self, instance_idx: usize) -> EffectResult<()> {
         if instance_idx >= self.instances.len() {
             return Err(format!("invalid effect instance index: {}", instance_idx));
@@ -435,6 +475,7 @@ impl EffectManager {
         Ok(())
     }
 
+    /// 按名称删除实例
     pub fn remove_instance_by_name(&mut self, instance_name: &str) -> EffectResult<()> {
         let idx = self
             .instances
@@ -444,6 +485,7 @@ impl EffectManager {
         self.remove_instance(idx)
     }
 
+    /// 返回属于指定引擎的所有实例名称
     pub fn instances_for_engine(&self, engine_name: &str) -> Vec<&str> {
         self.instances
             .iter()
@@ -452,6 +494,7 @@ impl EffectManager {
             .collect()
     }
 
+    /// 删除属于指定引擎的所有实例（返回删除数量）
     pub fn remove_instances_by_engine(&mut self, engine_name: &str) -> usize {
         let mut removed = 0usize;
         let mut idx = 0usize;
@@ -474,18 +517,21 @@ impl EffectManager {
         removed
     }
 
+    /// 返回当前激活实例的名称
     pub fn active_name(&self) -> Option<&str> {
         self.active_instance
             .and_then(|idx| self.instances.get(idx))
             .map(|entry| entry.name.as_str())
     }
 
+    /// 返回当前激活实例所属引擎的名称
     pub fn active_engine_name(&self) -> Option<&str> {
         self.active_instance
             .and_then(|idx| self.instances.get(idx))
             .map(|entry| entry.engine_name.as_str())
     }
 
+    /// 获取当前激活实例的可变引用（内部方法）
     fn active_instance_mut(&mut self) -> EffectResult<&mut EffectInstance> {
         let idx = self
             .active_instance
@@ -496,61 +542,74 @@ impl EffectManager {
             .ok_or_else(|| format!("invalid active effect instance index: {}", idx))
     }
 
+    /// 启动当前激活实例
     pub fn start_active(&mut self) -> EffectResult<()> {
         self.active_instance_mut()?.start()
     }
 
+    /// 驱动当前激活实例执行一帧
     pub fn tick_active(&mut self) -> EffectResult<()> {
         self.active_instance_mut()?.tick()
     }
 
+    /// 暂停当前激活实例
     pub fn pause_active(&mut self) -> EffectResult<()> {
         self.active_instance_mut()?.pause()
     }
 
+    /// 恢复当前激活实例
     pub fn resume_active(&mut self) -> EffectResult<()> {
         self.active_instance_mut()?.resume()
     }
 
+    /// 停止当前激活实例
     pub fn stop_active(&mut self) -> EffectResult<()> {
         self.active_instance_mut()?.stop()
     }
 
+    /// 读取当前激活实例的 LED 颜色数据（&[u8]，格式 [R,G,B,R,G,B,...]）
     pub fn active_led_buffer(&mut self) -> EffectResult<&[u8]> {
         self.active_instance_mut()?.led_buffer()
     }
 
+    /// 返回当前激活实例的 LED 灯珠数量
     pub fn active_led_count(&mut self) -> EffectResult<usize> {
         self.active_instance_mut()?.led_count()
     }
 }
 
 impl EffectInstance {
+    /// 启动效果（调用 JS 的 start()）
     pub fn start(&mut self) -> EffectResult<()> {
         self.ctx.execute(&self.start_bc).map_err(|e| e.to_string())?;
         Ok(())
     }
 
+    /// 执行一帧动画（调用 JS 的 tick()）
     pub fn tick(&mut self) -> EffectResult<()> {
         self.ctx.execute(&self.tick_bc).map_err(|e| e.to_string())?;
         Ok(())
     }
 
+    /// 暂停效果（调用 JS 的 pause()）
     pub fn pause(&mut self) -> EffectResult<()> {
         self.ctx.execute(&self.pause_bc).map_err(|e| e.to_string())?;
         Ok(())
     }
 
+    /// 恢复效果（调用 JS 的 resume()）
     pub fn resume(&mut self) -> EffectResult<()> {
         self.ctx.execute(&self.resume_bc).map_err(|e| e.to_string())?;
         Ok(())
     }
 
+    /// 停止效果（调用 JS 的 stop()）
     pub fn stop(&mut self) -> EffectResult<()> {
         self.ctx.execute(&self.stop_bc).map_err(|e| e.to_string())?;
         Ok(())
     }
 
+    /// 读取 LED 颜色数据（从 JS 的 leds Uint8Array 读取 &[u8]）
     pub fn led_buffer(&mut self) -> EffectResult<&[u8]> {
         let leds_val = self.ctx.execute(&self.leds_bc).map_err(|e| e.to_string())?;
         self.ctx
@@ -558,6 +617,7 @@ impl EffectInstance {
             .ok_or_else(|| "effect leds is not a TypedArray".to_string())
     }
 
+    /// 返回 LED 灯珠数量（从 JS 的 ledCount 属性读取）
     pub fn led_count(&mut self) -> EffectResult<usize> {
         let val = self.ctx.execute(&self.led_count_bc).map_err(|e| e.to_string())?;
         val.to_i32()
@@ -565,6 +625,7 @@ impl EffectInstance {
             .ok_or_else(|| "effect ledCount is not an integer".to_string())
     }
 
+    /// 动态更新配置（调用 JS 的 setConfig(key, value)）
     pub fn set_config(&mut self, key: &str, value: ConfigValue) -> EffectResult<()> {
         let script = format!(
             "{cfg}.{key} = {value}; return {effect}.setConfig('{key}', {value});",
@@ -577,14 +638,15 @@ impl EffectInstance {
         Ok(())
     }
 
+    /// 重置效果实例（重新执行 createEffect(config)）
     pub fn reset(&mut self) -> EffectResult<()> {
         let effect_val = self.ctx.execute(&self.create_bc).map_err(|e| e.to_string())?;
         self.ctx.set_global(EFFECT_GLOBAL, effect_val);
         Ok(())
     }
 
+    /// 返回当前实例的内存统计
     pub fn memory_stats(&self) -> crate::MemoryStats {
         self.ctx.memory_stats()
     }
 }
-
