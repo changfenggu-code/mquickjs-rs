@@ -1,8 +1,8 @@
-# MQuickJS-RS JavaScript 特性规范
+﻿# MQuickJS-RS JavaScript 特性规范
 
 本文档描述 `mquickjs-rs` **当前代码与测试实际覆盖到的 JavaScript 能力**。
 
-- 产品脚本约束以 `docs/LED_PROFILE.md` 为准
+- 产品脚本约束以 `led-runtime/docs/LED_PROFILE.md` 为准
 - 本文档面向“引擎实现现状”，不是 ECMAScript 兼容性承诺
 - 除特别说明外，以下结论基于默认 `std` 构建与当前仓库测试结果
 
@@ -11,7 +11,7 @@
 - `cargo test` 通过，当前共 **316** 个测试通过
 - LED effect 最小闭环已完成，`blink / chase / rainbow / wave` 集成测试通过
 - 引擎已支持源码执行、字节码编译与字节码反序列化执行
-- 宿主产品 API 仍在补齐中，详见 `docs/PRODUCT_ROADMAP.md`
+- 宿主产品 API 仍在补齐中，详见 `led-runtime/docs/PRODUCT_ROADMAP.md`
 
 ## 1. 总体定位
 
@@ -71,7 +71,7 @@
 - `Uint8Array` 作为输出 buffer
 - 原生宿主函数桥接硬件能力
 
-更完整的嵌入式接入说明见 `docs/EMBEDDED_NO_STD.md`。
+更完整的嵌入式接入说明见 `led-runtime/docs/EMBEDDED_NO_STD.md`。
 
 ## 2.2 字节码工作流
 
@@ -575,7 +575,7 @@
 
 ## 6. LED / 产品脚本相关实现状态
 
-对 `docs/LED_PROFILE.md` 最关键的部分，当前已实现：
+对 `led-runtime/docs/LED_PROFILE.md` 最关键的部分，当前已实现：
 
 - `createEffect(config)` 风格脚本可运行
 - `Uint8Array leds` 输出缓冲区可用
@@ -595,7 +595,7 @@
 
 如果你在写产品脚本：
 
-- 以 `docs/LED_PROFILE.md` 为准
+- 以 `led-runtime/docs/LED_PROFILE.md` 为准
 - 只依赖其中明确列出的语法与运行时约定
 
 如果你在写宿主侧集成：
@@ -616,6 +616,7 @@
 
 后续如实现新增语法或宿主 API，应优先同步：
 
-- `docs/LED_PROFILE.md`
-- `docs/PRODUCT_ROADMAP.md`
+- `led-runtime/docs/LED_PROFILE.md`
+- `led-runtime/docs/PRODUCT_ROADMAP.md`
 - 本文件 `docs/JS_FEATURE_SPEC.md`
+

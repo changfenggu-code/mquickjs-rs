@@ -1,4 +1,4 @@
-# MQuickJS-RS
+﻿# MQuickJS-RS
 
 [English](README.md) | 中文
 
@@ -8,11 +8,11 @@ Fabrice Bellard 的 [MQuickJS](https://github.com/bellard/mquickjs) 的 Rust 移
 
 相关文档：
 
-- `docs/LED_PROFILE.md`：产品脚本规范
-- `docs/PRODUCT_ROADMAP.md`：产品化路线图
+- `led-runtime/docs/LED_PROFILE.md`：产品脚本规范
+- `led-runtime/docs/PRODUCT_ROADMAP.md`：产品化路线图
 - `docs/JS_FEATURE_SPEC.md`：当前引擎实现说明
-- `docs/EMBEDDED_NO_STD.md`：`no_std` / ESP32 裸板集成说明
-- `docs/EFFECT_ENGINE_API.md`：最小产品级 effect 宿主 API 说明
+- `led-runtime/docs/EMBEDDED_NO_STD.md`：`no_std` / ESP32 裸板集成说明
+- `led-runtime/docs/EFFECT_ENGINE_API.md`：最小产品级 effect 宿主 API 说明
 
 ## 特性
 
@@ -102,7 +102,7 @@ fn main() {
 
 ## 脚本 Profile
 
-产品脚本应以 `docs/LED_PROFILE.md` 为准。
+产品脚本应以 `led-runtime/docs/LED_PROFILE.md` 为准。
 
 本项目有意采用受限脚本规范，而不是追求完整标准兼容。凡未在 Profile 中明确列出的特性，均不应视为产品可依赖能力。
 
@@ -284,3 +284,4 @@ MIT License
 
 - [Fabrice Bellard](https://bellard.org/) —— 原版 MQuickJS C 实现
 - **整个 Rust 移植版由 [Claude](https://claude.ai)（Anthropic AI 助手）编写**，使用 [Claude Code](https://claude.ai/claude-code) 基于原版 C 参考实现，自主完成了本仓库当前测试集和 Rust 代码实现。
+

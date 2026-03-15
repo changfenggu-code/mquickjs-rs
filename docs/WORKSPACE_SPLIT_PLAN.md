@@ -1,11 +1,29 @@
-# Workspace 拆分方案（引擎层 / LED 产品层）
+﻿# Workspace 拆分方案（引擎层 / LED 产品层）
 
 本文档描述如何把当前仓库逐步整理为一个更清晰的 Rust workspace：
 
 - `mquickjs-rs`：通用 JavaScript 引擎库
 - `led-runtime`：面向 LED / ESP32 的产品运行时项目
 
-目标不是马上物理拆分现有仓库，而是先给出一份**可执行的拆分方案**，让后续迁移有明确方向。
+目标不是一次性暴力拆分现有仓库，而是先给出一份**可执行的拆分方案**，让后续迁移有明确方向。
+
+## 当前进展（已开始执行）
+
+当前 workspace 拆分已经开始，仓库中已经存在：
+
+- `led-runtime/` 子项目
+- `led-runtime/src/effect.rs`
+- `led-runtime/tests/effect_api.rs`
+- `led-runtime/tests/effects.rs`
+- `led-runtime/examples/` 下的产品层示例
+
+这意味着本方案已经进入“渐进迁移”阶段，而不是纯规划状态。
+
+当前仍然保留根目录里的部分产品层文件，主要目的是：
+
+- 保持迁移过程平滑
+- 方便对照
+- 降低一次性大迁移的风险
 
 ## 1. 为什么值得拆分
 
@@ -91,7 +109,7 @@ resolver = "2"
 - `docs/BENCHMARK_ANALYSIS.md`
 - `docs/JS_FEATURE_SPEC.md`
 - `docs/PROJECT_STRUCTURE.md`
-- `docs/EMBEDDED_NO_STD.md`
+- `led-runtime/docs/EMBEDDED_NO_STD.md`
 - `docs/NUMERIC_AUDIT_TODO.md`
 
 #### 其它
@@ -149,10 +167,10 @@ led-runtime/src/
 
 #### 产品文档
 
-- `docs/LED_PROFILE.md`
-- `docs/PRODUCT_ROADMAP.md`
-- `docs/EFFECT_ENGINE_API.md`
-- `WORKLINE.md`
+- `led-runtime/docs/LED_PROFILE.md`
+- `led-runtime/docs/PRODUCT_ROADMAP.md`
+- `led-runtime/docs/EFFECT_ENGINE_API.md`
+- `led-runtime/WORKLINE.md`
 
 ### 这个项目负责什么
 
@@ -209,9 +227,9 @@ led-runtime/src/
 - `tests/effect_api.rs`
 - `tests/effects.rs`
 - `js/effects/`
-- `docs/LED_PROFILE.md`
-- `docs/PRODUCT_ROADMAP.md`
-- `docs/EFFECT_ENGINE_API.md`
+- `led-runtime/docs/LED_PROFILE.md`
+- `led-runtime/docs/PRODUCT_ROADMAP.md`
+- `led-runtime/docs/EFFECT_ENGINE_API.md`
 
 ### Phase D：迁移示例
 
@@ -313,3 +331,4 @@ cargo test --workspace
 
 > 当前最推荐的方向是：先把仓库按职责分层思考和维护，
 > 后续再把 `mquickjs-rs` 和 `led-runtime` 迁移成 workspace 双项目结构。
+

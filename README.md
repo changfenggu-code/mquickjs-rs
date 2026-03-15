@@ -1,4 +1,4 @@
-# MQuickJS-RS
+﻿# MQuickJS-RS
 
 A Rust port of [MQuickJS](https://github.com/bellard/mquickjs) focused on embedded JavaScript execution for ESP32-class devices.
 
@@ -6,11 +6,11 @@ This repository is a product-oriented runtime for LED effect scripts. It does **
 
 See:
 
-- `docs/LED_PROFILE.md` for the product script contract
-- `docs/PRODUCT_ROADMAP.md` for the productization plan
+- `led-runtime/docs/LED_PROFILE.md` for the product script contract
+- `led-runtime/docs/PRODUCT_ROADMAP.md` for the productization plan
 - `docs/JS_FEATURE_SPEC.md` for the engine's broader implementation notes
-- `docs/EMBEDDED_NO_STD.md` for `no_std` / ESP32 bare-metal integration notes
-- `docs/EFFECT_ENGINE_API.md` for the minimal product-facing effect host API
+- `led-runtime/docs/EMBEDDED_NO_STD.md` for `no_std` / ESP32 bare-metal integration notes
+- `led-runtime/docs/EFFECT_ENGINE_API.md` for the minimal product-facing effect host API
 
 ## Features
 
@@ -100,7 +100,7 @@ fn main() {
 
 ## Script Profile
 
-Product scripts should target `docs/LED_PROFILE.md`.
+Product scripts should target `led-runtime/docs/LED_PROFILE.md`.
 
 This project intentionally supports a constrained JavaScript profile rather than the full ECMAScript standard. If a feature is not explicitly included in the profile, it should be treated as unsupported for product scripts.
 
@@ -282,3 +282,4 @@ MIT License
 
 - [Fabrice Bellard](https://bellard.org/) - Original MQuickJS C implementation
 - **This entire Rust port was written by [Claude](https://claude.ai)** (Anthropic's AI assistant), using [Claude Code](https://claude.ai/claude-code) to autonomously implement the current test suite and the Rust code in this repository based on the original C reference implementation
+

@@ -25,21 +25,10 @@ libm = "0.2"
 
 [dev-dependencies]
 criterion = "0.5"
-eframe = "0.30"
-slint = "1.15"
 
 [[bench]]
 name = "js_benchmarks"
 harness = false
-
-[[example]]
-name = "effects_egui"
-required-features = ["std"]
-
-[[example]]
-name = "effects_slint"
-path = "examples/effects_slint/main.rs"
-required-features = ["std"]
 
 [profile.release]
 opt-level = 3

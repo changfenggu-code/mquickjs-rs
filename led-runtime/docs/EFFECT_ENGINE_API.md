@@ -14,9 +14,11 @@
 
 相关源码：
 
-- `src/effect.rs`
-- `tests/effect_api.rs`
-- `docs/LED_PROFILE.md`
+- `led-runtime/src/effect.rs`
+- `led-runtime/tests/effect_api.rs`
+- `LED_PROFILE.md`
+
+> 说明：当前 workspace 拆分已经开始，产品层 API 的主开发位置应优先视为 `led-runtime/`。根目录仍保留部分过渡期文件，用于逐步迁移与对照。
 
 ## 1. 它解决了什么问题
 
@@ -152,7 +154,7 @@
 ### 从源码创建 effect 引擎
 
 ```rust
-use mquickjs::EffectEngine;
+use led_runtime::EffectEngine;
 
 let js = include_str!("../js/effects/blink/effect.js");
 let engine = EffectEngine::from_source(js)?;
@@ -176,7 +178,7 @@ let mut instance = engine.instantiate_from_expr("{ ledCount: 4, speed: 100 }")?;
 ### 创建实例（结构化配置）
 
 ```rust
-use mquickjs::{ConfigValue, EffectEngine};
+use led_runtime::{ConfigValue, EffectEngine};
 
 let engine = EffectEngine::from_source(js)?;
 let config = ConfigValue::Object(vec![
@@ -229,7 +231,7 @@ let led_count = instance.led_count()?;
 ### 动态更新配置
 
 ```rust
-use mquickjs::ConfigValue;
+use led_runtime::ConfigValue;
 
 instance.set_config("speed", ConfigValue::Int(500))?;
 instance.set_config("label", ConfigValue::Str("demo".into()))?;
@@ -265,7 +267,8 @@ instance.reset()?;
 ### 方式 A：直接用 `FunctionBytecode::serialize()` 的结果
 
 ```rust
-use mquickjs::{Context, EffectEngine};
+use mquickjs::Context;
+use led_runtime::EffectEngine;
 
 let ctx = Context::new(64 * 1024);
 let bytecode = ctx.compile(js_source)?;
@@ -338,7 +341,7 @@ let engine = EffectEngine::from_bytecode(&bytes)?;
 一个最小示例：
 
 ```rust
-use mquickjs::{EffectEngine, EffectManager};
+use led_runtime::{EffectEngine, EffectManager};
 
 let mut manager = EffectManager::new();
 manager.add_engine("blink", EffectEngine::from_source(BLINK_JS)?)?;
@@ -363,7 +366,7 @@ let rainbow_leds = manager.active_led_buffer()?;
 如果你希望完全采用结构化配置，也可以这样使用：
 
 ```rust
-use mquickjs::{ConfigValue, EffectEngine, EffectManager};
+use led_runtime::{ConfigValue, EffectEngine, EffectManager};
 
 let mut manager = EffectManager::new();
 manager.add_engine("blink", EffectEngine::from_source(BLINK_JS)?)?;
@@ -421,15 +424,14 @@ let leds = manager.active_led_buffer()?;
 
 | 文件/接口 | 定位 |
 |---|---|
-| `examples/effects_demo.rs` | 旧方式：`Context + driver JS` 终端演示 |
-| `examples/common/effects.rs` | 旧方式 helper：离线采帧工具 |
-| `examples/effects_demo_engine.rs` | 新方式：`EffectEngine` / `EffectInstance` 终端演示 |
-| `examples/common/effects_engine.rs` | 新方式 helper：通过产品 API 采帧 |
-| `examples/effects_demo_manager.rs` | 新方式：`EffectManager + ConfigValue` 调度演示 |
+| `led-runtime/examples/effects_demo.rs` | 旧方式：`Context + driver JS` 终端演示 |
+| `led-runtime/examples/common/effects.rs` | 旧方式 helper：离线采帧工具 |
+| `led-runtime/examples/effects_demo_engine.rs` | 新方式：`EffectEngine` / `EffectInstance` 终端演示 |
+| `led-runtime/examples/effects_demo_manager.rs` | 新方式：`EffectManager + ConfigValue` 调度演示 |
 
-## 7. 与 `examples/common/effects.rs` 的区别
+## 7. 与 `led-runtime/examples/common/effects.rs` 的区别
 
-`examples/common/effects.rs` 仍然是：
+`led-runtime/examples/common/effects.rs` 仍然是：
 
 - 示例级离线采帧 helper
 - 用于 demo / GUI / 测试播放
@@ -440,13 +442,13 @@ let leds = manager.active_led_buffer()?;
 
 一句话区别：
 
-- `examples/common/effects.rs` 产出的是 **一批预采样帧**
+- `led-runtime/examples/common/effects.rs` 产出的是 **一批预采样帧**
 - `EffectInstance` 表达的是 **一个正在运行的 effect 实例**
 
 ## 8. 一个完整示例
 
 ```rust
-use mquickjs::{EffectEngine, ConfigValue};
+use led_runtime::{EffectEngine, ConfigValue};
 
 fn main() -> Result<(), String> {
     let js = include_str!("../js/effects/blink/effect.js");
@@ -478,3 +480,4 @@ fn main() -> Result<(), String> {
 - 已经开始形成面向产品宿主层的 effect API 雏形
 
 后续仍需继续完善，但这已经是从“示例驱动”走向“产品化宿主接口”的关键一步。
+

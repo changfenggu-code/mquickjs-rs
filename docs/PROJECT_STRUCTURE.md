@@ -14,6 +14,7 @@ mquickjs-rs/
 ├── .github/              # GitHub Actions CI/CD 配置
 ├── benches/              # 性能基准测试
 ├── docs/                 # 项目文档
+├── led-runtime/          # LED / ESP32 产品层子项目（workspace 成员）
 ├── examples/             # Rust 示例程序
 ├── js/                   # JavaScript 测试脚本和示例
 ├── src/                  # 核心 Rust 源代码
@@ -42,12 +43,13 @@ mquickjs-rs/
 
 这部分文件明显面向 LED effect 产品脚本运行时，不应简单视为“纯引擎通用能力”：
 
-- `docs/LED_PROFILE.md`：产品脚本规范
-- `docs/PRODUCT_ROADMAP.md`：产品化路线图
-- `docs/EMBEDDED_NO_STD.md`：`no_std` / ESP32 裸板接入说明
+- `led-runtime/`：产品层主开发位置（当前 workspace 子项目）
+- `led-runtime/docs/LED_PROFILE.md`：产品脚本规范
+- `led-runtime/docs/PRODUCT_ROADMAP.md`：产品化路线图
+- `led-runtime/docs/EMBEDDED_NO_STD.md`：`no_std` / ESP32 裸板接入说明
 - `js/effects/`：LED 效果脚本资源
-- `tests/effects.rs`：LED 效果集成测试
-- `examples/common/effects.rs`、`examples/effects_demo.rs`、`examples/effects_egui.rs`、`examples/effects_slint/`：LED 产品演示与采帧示例
+- `led-runtime/tests/effects.rs`：LED 效果集成测试
+- `led-runtime/examples/common/effects.rs`、`led-runtime/examples/effects_demo.rs`、`led-runtime/examples/effects_egui.rs`、`led-runtime/examples/effects_slint/`：LED 产品演示与采帧示例
 
 ### C. 混合层 / 边界说明层
 
@@ -61,6 +63,12 @@ mquickjs-rs/
 - **B 层**回答“为了 LED / ESP32 产品我们额外约束了什么”
 - **C 层**回答“引擎现状与产品边界之间如何对齐”
 
+当前补充说明：
+
+- 根目录仓库仍处于**过渡期双轨状态**
+- `led-runtime/` 已可单独编译和运行产品层测试/示例
+- 根目录中仍保留部分产品层文件，用于迁移过渡和对照，后续会逐步去重
+
 ---
 
 ## 核心源代码 (src/)
@@ -68,8 +76,8 @@ mquickjs-rs/
 ### 入口与 API (src/lib.rs, src/context.rs)
 
 **[src/lib.rs](../src/lib.rs)**
-- **功能**：库入口文件，定义公共 API
-- **导出类型**：`Context`, `Value`, `MemoryStats`, `FunctionBytecode`, `NativeFn`, `EffectEngine`, `EffectInstance`, `EffectManager`, `ConfigValue`
+- **功能**：引擎库入口文件，定义核心引擎 API
+- **导出类型**：`Context`, `Value`, `MemoryStats`, `FunctionBytecode`, `NativeFn`
 - **特性**：支持 `no_std` 模式，条件编译 `std` 特性
 - **模块组织**：
   - 核心模块：context, value
@@ -91,8 +99,12 @@ mquickjs-rs/
   - `ctx.register_native(...)` - 注册宿主原生函数
 - **生命周期**：拥有 `Heap` (GC) 和 `Interpreter`，负责整体资源管理
 
-**[src/effect.rs](../src/effect.rs)**
-- **功能**：最小产品级 effect 宿主 API 封装
+**[led-runtime/src/lib.rs](../led-runtime/src/lib.rs)**
+- **功能**：LED 产品层入口文件，导出 effect 宿主 API
+- **导出类型**：`EffectEngine`, `EffectInstance`, `EffectManager`, `ConfigValue`
+
+**[led-runtime/src/effect.rs](../led-runtime/src/effect.rs)**
+- **功能**：最小产品级 effect 宿主 API 封装（产品层主实现位置）
 - **主要类型**：
   - `EffectEngine` - 从源码或字节码创建可实例化 effect 模板
   - `EffectInstance` - 运行中的 effect 实例
@@ -106,7 +118,7 @@ mquickjs-rs/
   - `manager.tick_active()` / `manager.active_led_buffer()`
   - `instance.start()` / `tick()` / `pause()` / `resume()` / `stop()`
   - `instance.led_buffer()` / `led_count()` / `set_config()` / `reset()`
-- **定位**：当前是最小可用的产品 API 与调度层雏形，后续仍会继续朝路线图中的宿主接口产品化目标完善
+- **定位**：当前是最小可用的产品 API 与调度层雏形，已在 `led-runtime/` 中形成独立产品层开发入口
 
 ---
 
@@ -493,11 +505,11 @@ mquickjs-rs/
 
 ## JavaScript 脚本 (js/)
 
-### 效果脚本 (js/effects/)
+### 效果脚本 (led-runtime/js/effects/)
 
 #### LED 特效脚本，演示产品使用场景
 
-**[js/effects/blink/effect.js](../js/effects/blink/effect.js)**
+**[led-runtime/js/effects/blink/effect.js](../led-runtime/js/effects/blink/effect.js)**
 - **效果**：闪烁灯效
 - **功能**：所有 LED 同时闪烁
 - **配置参数**：
@@ -505,7 +517,7 @@ mquickjs-rs/
   - `color` - 颜色配置（RGB 或 HSV）
   - `ledCount` - LED 数量
 
-**[js/effects/chase/effect.js](../js/effects/chase/effect.js)**
+**[led-runtime/js/effects/chase/effect.js](../led-runtime/js/effects/chase/effect.js)**
 - **效果**：追逐灯效
 - **功能**：颜色在 LED 条上移动
 - **配置参数**：
@@ -514,7 +526,7 @@ mquickjs-rs/
   - `color` - 颜色配置
   - `ledCount` - LED 数量
 
-**[js/effects/rainbow/effect.js](../js/effects/rainbow/effect.js)**
+**[led-runtime/js/effects/rainbow/effect.js](../led-runtime/js/effects/rainbow/effect.js)**
 - **效果**：彩虹渐变
 - **功能**：LED 显示平滑的颜色渐变
 - **配置参数**：
@@ -522,7 +534,7 @@ mquickjs-rs/
   - `hueSpread` - 色相分布
   - `ledCount` - LED 数量
 
-**[js/effects/wave/effect.js](../js/effects/wave/effect.js)**
+**[led-runtime/js/effects/wave/effect.js](../led-runtime/js/effects/wave/effect.js)**
 - **效果**：波浪效果
 - **功能**：颜色波浪在 LED 条上传播
 - **配置参数**：
@@ -607,15 +619,15 @@ mquickjs-rs/
 
 ### 基础示例
 
-**[examples/effects_demo.rs](../examples/effects_demo.rs)**
+**[led-runtime/examples/effects_demo.rs](../led-runtime/examples/effects_demo.rs)**
 - **功能**：终端 LED 效果演示
 - **特性**：
   - 运行所有 4 个 LED 效果
   - 使用 ANSI 24 位颜色渲染
   - 原生函数：`__renderFrame()` 用于渲染
-- **运行**：`cargo run --example effects_demo`
+- **运行**：`cargo run -p led-runtime --example effects_demo`
 
-**[examples/common/effects.rs](../examples/common/effects.rs)**
+**[led-runtime/examples/common/effects.rs](../led-runtime/examples/common/effects.rs)**
 - **功能**：效果引擎公共代码
 - **内容**：
   - 效果加载和管理
@@ -624,21 +636,21 @@ mquickjs-rs/
 
 ### GUI 示例
 
-**[examples/effects_egui.rs](../examples/effects_egui.rs)**
+**[led-runtime/examples/effects_egui.rs](../led-runtime/examples/effects_egui.rs)**
 - **功能**：EGUI 图形界面 LED 效果演示
 - **特性**：
   - 使用 eframe/egui 框架
   - 可视化 LED 条
   - 实时效果切换
-- **运行**：`cargo run --example effects_egui`
+- **运行**：`cargo run -p led-runtime --example effects_egui`
 
-**[examples/effects_slint/main.rs](../examples/effects_slint/main.rs)**
+**[led-runtime/examples/effects_slint/main.rs](../led-runtime/examples/effects_slint/main.rs)**
 - **功能**：Slint GUI 框架 LED 效果演示
 - **特性**：
   - 使用 Slint 框架
   - 跨平台支持
   - 现代 UI 设计
-- **运行**：`cargo run --example effects_slint`
+- **运行**：`cargo run -p led-runtime --example effects_slint`
 
 ---
 
@@ -646,7 +658,7 @@ mquickjs-rs/
 
 ### 集成测试
 
-**[tests/effects.rs](../tests/effects.rs)**
+**[led-runtime/tests/effects.rs](../led-runtime/tests/effects.rs)**
 - LED 效果集成测试
 - **测试覆盖**（22 个测试）：
   - createEffect 基础功能
@@ -655,7 +667,7 @@ mquickjs-rs/
   - 配置更新（setConfig）
   - 颜色转换（HSV → RGB）
   - 生命周期管理（start/pause/resume/stop）
-- **运行**：`cargo test --test effects`
+- **运行**：`cargo test -p led-runtime --test effects`
 
 **[tests/eval_integration.rs](../tests/eval_integration.rs)**
 - eval 功能集成测试
@@ -705,7 +717,7 @@ mquickjs-rs/
 
 ### 产品文档
 
-**[docs/LED_PROFILE.md](../docs/LED_PROFILE.md)**
+**[led-runtime/docs/LED_PROFILE.md](../led-runtime/docs/LED_PROFILE.md)**
 - **内容**：LED 特效脚本的产品规范
 - **定义**：
   - 脚本模型（createEffect, tick, leds 等）
@@ -715,7 +727,7 @@ mquickjs-rs/
   - 宿主运行时要求
   - 安全与资源约束
 
-**[docs/PRODUCT_ROADMAP.md](../docs/PRODUCT_ROADMAP.md)**
+**[led-runtime/docs/PRODUCT_ROADMAP.md](../led-runtime/docs/PRODUCT_ROADMAP.md)**
 - **内容**：产品化路线图
 - **阶段划分**：
   - Phase 1：规范冻结（已完成）
@@ -732,7 +744,7 @@ mquickjs-rs/
   - 支持的特性（语法、内置对象、受限实现边界）
   - 不支持或不应依赖的特性（如 `class`、`async/await`、完整 `ToPrimitive` 等）
 
-**[docs/EFFECT_ENGINE_API.md](../docs/EFFECT_ENGINE_API.md)**
+**[led-runtime/docs/EFFECT_ENGINE_API.md](../led-runtime/docs/EFFECT_ENGINE_API.md)**
 - **内容**：最小产品级 effect 宿主 API 说明
 - **定义**：
   - `EffectEngine` / `EffectInstance` 的定位与职责
@@ -870,7 +882,7 @@ cargo build --release    # Release 构建
 
 ```bash
 cargo test                       # 运行所有测试
-cargo test --test effects         # 运行效果集成测试
+cargo test -p led-runtime --test effects         # 运行效果集成测试
 cargo test --test eval_integration # 运行 eval 集成测试
 cargo test -- --nocapture        # 显示测试输出
 ```
@@ -889,9 +901,9 @@ cargo clippy -- -D warnings     # Clint 检查（零警告）
 cargo run --bin mqjs                          # 启动 REPL
 cargo run --bin mqjs -- script.js             # 运行脚本
 cargo run --bin mqjs -- -e "1 + 2"           # 计算表达式
-cargo run --example effects_demo              # 运行终端演示
-cargo run --example effects_egui              # 运行 EGUI 演示
-cargo run --example effects_slint             # 运行 Slint 演示
+cargo run -p led-runtime --example effects_demo              # 运行终端演示
+cargo run -p led-runtime --example effects_egui              # 运行 EGUI 演示
+cargo run -p led-runtime --example effects_slint             # 运行 Slint 演示
 ```
 
 ### 基准测试
@@ -949,9 +961,10 @@ cargo bench                                   # 运行基准测试
 ## 相关资源
 
 - **主文档**：[README.md](../README.md)
-- **产品规范**：[docs/LED_PROFILE.md](../docs/LED_PROFILE.md)
+- **产品规范**：[led-runtime/docs/LED_PROFILE.md](../led-runtime/docs/LED_PROFILE.md)
 - **特性规范**：[docs/JS_FEATURE_SPEC.md](../docs/JS_FEATURE_SPEC.md)
-- **路线图**：[docs/PRODUCT_ROADMAP.md](../docs/PRODUCT_ROADMAP.md)
+- **路线图**：[led-runtime/docs/PRODUCT_ROADMAP.md](../led-runtime/docs/PRODUCT_ROADMAP.md)
 - **Claude 指导**：[CLAUDE.md](../CLAUDE.md)
+
 
 

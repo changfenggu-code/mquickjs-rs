@@ -39,7 +39,7 @@
 
 目标：先统一"允许什么、不允许什么"。
 
-- ✅ 建立 `docs/LED_PROFILE.md` 作为唯一产品脚本规范
+- ✅ 建立 `LED_PROFILE.md` 作为唯一产品脚本规范
 - ✅ README 与生成器说明统一改为"受限 ES6 风格 Profile"
 - ✅ 将现有 `JS_FEATURE_SPEC` 与 Profile 建立引用关系
 - ✅ 新增禁止特性测试，避免脚本能力漂移
@@ -55,7 +55,7 @@
 
 目标：让核心 effect 用例稳定跑通。
 
-- ✅ 修复 `tests/effects.rs`（22 个测试全部通过）
+- ✅ 修复 `led-runtime/tests/effects.rs`（22 个测试全部通过）
 - ✅ 补齐 `Uint8Array` 在 LED 场景必要方法
 - ✅ 稳定对象字面量、闭包、配置对象路径
 - ✅ 增加 effect 生命周期回归测试
@@ -63,7 +63,7 @@
 
 验收标准：
 
-- ✅ `cargo test --test effects` 全通过
+- ✅ `cargo test -p led-runtime --test effects` 全通过
 - ✅ `blink/chase/rainbow/wave` 四类效果稳定执行
 
 ---
@@ -330,5 +330,6 @@ impl EffectInstance {
 
 - `RegExp`
 - 完整 ES6+ 高级语法与运行时能力（如 `class`、`Promise`、`async/await`、模块系统、`Map/Set` 等）
+
 
 
