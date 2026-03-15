@@ -307,7 +307,7 @@ pub struct EffectData {
 
 ```rust
 let engine = EffectEngine::from_source(js)?;
-let mut instance = engine.instantiate_expr(config)?;
+let mut instance = engine.instantiate_from_expr(config)?;
 
 instance.start()?;
 instance.tick()?;
@@ -366,4 +366,5 @@ Rust 读取 Uint8Array
 
 > 把 effect 脚本和一段 driver JS 拼接后交给 `mquickjs-rs` 执行，
 > 再通过 native 函数把每一帧 `Uint8Array leds` 抓回 Rust，整理成可供 demo 和 GUI 播放的帧数据。
+
 

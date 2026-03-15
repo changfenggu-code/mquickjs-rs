@@ -22,7 +22,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(dead_code)] // During development
 
-#[macro_use]
 extern crate alloc;
 
 #[cfg(feature = "std")]
@@ -53,10 +52,7 @@ pub mod effect;
 
 // Re-export main types
 pub use context::{Context, MemoryStats};
-pub use effect::{
-    BlinkConfig, ChaseConfig, ColorConfig, ConfigValue, EffectEngine, EffectInstance,
-    EffectManager, EffectResult, RainbowConfig, WaveConfig,
-};
+pub use effect::{ConfigValue, EffectEngine, EffectInstance, EffectManager, EffectResult};
 pub use runtime::FunctionBytecode;
 pub use value::Value;
 pub use vm::types::NativeFn;

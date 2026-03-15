@@ -1,22 +1,20 @@
-﻿/// LED effects visual demo (EffectManager + typed config version)
+﻿/// LED effects visual demo (EffectManager + structured ConfigValue version)
 ///
 /// This example demonstrates the newest product-facing API stack:
 /// - `EffectEngine`
 /// - `EffectInstance`
 /// - `EffectManager`
-/// - typed configs (`BlinkConfig`, `ChaseConfig`, `RainbowConfig`, `WaveConfig`)
+/// - structured config values (`ConfigValue::Object` / `Array`)
 ///
 /// Compared to `effects_demo.rs` and `effects_demo_engine.rs`, this version:
 /// - preloads multiple engines up front
-/// - instantiates named effect instances with typed configs
+/// - instantiates named effect instances with structured config values
 /// - switches the active instance through `EffectManager`
 /// - drives rendering via `tick_active()` / `active_led_buffer()`
 ///
 /// Usage: cargo run --example effects_demo_manager
 
-use mquickjs::{
-    ChaseConfig, ColorConfig, ConfigValue, EffectEngine, EffectManager, RainbowConfig, WaveConfig,
-};
+use mquickjs::{ConfigValue, EffectEngine, EffectManager};
 use std::io::Write;
 use std::{thread, time::Duration};
 
@@ -62,7 +60,7 @@ fn main() {
     print!("\x1b[?25l");
 
     println!();
-    println!("  mquickjs LED Effects Demo (EffectManager + typed config)");
+    println!("  mquickjs LED Effects Demo (EffectManager + ConfigValue)");
     println!("  ====================================================");
     println!();
 
@@ -109,7 +107,7 @@ fn build_manager() -> EffectManager {
         .expect("add wave engine");
 
     manager
-        .instantiate_expr(
+        .instantiate_from_expr(
             "blink",
             "blink-main",
             "{ ledCount: 20, speed: 200 }",
@@ -120,17 +118,20 @@ fn build_manager() -> EffectManager {
         .instantiate_config(
             "chase",
             "chase-main",
-            ChaseConfig {
-                led_count: Some(20),
-                speed: Some(80),
-                color: Some(ColorConfig::Rgb {
-                    r: 251,
-                    g: 191,
-                    b: 36,
-                }),
-                chase_count: Some(2),
-            }
-            .into(),
+            ConfigValue::Object(vec![
+                ("ledCount".into(), ConfigValue::Int(20)),
+                ("speed".into(), ConfigValue::Int(80)),
+                (
+                    "color".into(),
+                    ConfigValue::Object(vec![
+                        ("mode".into(), ConfigValue::Str("rgb".into())),
+                        ("r".into(), ConfigValue::Int(251)),
+                        ("g".into(), ConfigValue::Int(191)),
+                        ("b".into(), ConfigValue::Int(36)),
+                    ]),
+                ),
+                ("chaseCount".into(), ConfigValue::Int(2)),
+            ]),
         )
         .expect("instantiate chase-main");
 
@@ -138,15 +139,14 @@ fn build_manager() -> EffectManager {
         .instantiate_config(
             "rainbow",
             "rainbow-main",
-            RainbowConfig {
-                led_count: Some(20),
-                speed: Some(100),
-                hue_step: Some(10),
-                hue_spread: Some(18),
-                saturation: Some(1.0),
-                brightness: Some(1.0),
-            }
-            .into(),
+            ConfigValue::Object(vec![
+                ("ledCount".into(), ConfigValue::Int(20)),
+                ("speed".into(), ConfigValue::Int(100)),
+                ("hueStep".into(), ConfigValue::Int(10)),
+                ("hueSpread".into(), ConfigValue::Int(18)),
+                ("saturation".into(), ConfigValue::Float(1.0)),
+                ("brightness".into(), ConfigValue::Float(1.0)),
+            ]),
         )
         .expect("instantiate rainbow-main");
 
@@ -154,17 +154,20 @@ fn build_manager() -> EffectManager {
         .instantiate_config(
             "wave",
             "wave-main",
-            WaveConfig {
-                led_count: Some(20),
-                speed: Some(100),
-                color: Some(ColorConfig::Rgb {
-                    r: 52,
-                    g: 211,
-                    b: 153,
-                }),
-                wave_width: Some(5),
-            }
-            .into(),
+            ConfigValue::Object(vec![
+                ("ledCount".into(), ConfigValue::Int(20)),
+                ("speed".into(), ConfigValue::Int(100)),
+                (
+                    "color".into(),
+                    ConfigValue::Object(vec![
+                        ("mode".into(), ConfigValue::Str("rgb".into())),
+                        ("r".into(), ConfigValue::Int(52)),
+                        ("g".into(), ConfigValue::Int(211)),
+                        ("b".into(), ConfigValue::Int(153)),
+                    ]),
+                ),
+                ("waveWidth".into(), ConfigValue::Int(5)),
+            ]),
         )
         .expect("instantiate wave-main");
 
@@ -246,4 +249,6 @@ fn enable_ansi_windows() {
         SetConsoleMode(handle as *mut _, mode | 0x0004);
     }
 }
+
+
 

@@ -84,7 +84,7 @@ fn run_effect(name: &str, js: &str) {
         }
     };
 
-    let mut instance = match engine.instantiate_expr("{ ledCount: 20 }") {
+    let mut instance = match engine.instantiate_from_expr("{ ledCount: 20 }") {
         Ok(instance) => instance,
         Err(e) => {
             eprintln!("  ERROR: {}", e);
@@ -137,4 +137,5 @@ fn enable_ansi_windows() {
         SetConsoleMode(handle as *mut _, mode | 0x0004);
     }
 }
+
 

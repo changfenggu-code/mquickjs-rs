@@ -1,4 +1,4 @@
-use alloc::format;
+﻿use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -60,151 +60,6 @@ impl ConfigValue {
                 format!("{{{}}}", parts.join(", "))
             }
         }
-    }
-}
-
-/// 颜色配置：支持 RGB 和 HSV 两种模式
-#[derive(Clone, Debug)]
-pub enum ColorConfig {
-    Rgb { r: u8, g: u8, b: u8 },
-    Hsv { h: f32, s: f32, v: f32 },
-}
-
-/// 将 ColorConfig 转换为 ConfigValue 对象（如 {mode:'rgb', r:255, g:0, b:0}）
-impl From<ColorConfig> for ConfigValue {
-    fn from(value: ColorConfig) -> Self {
-        match value {
-            ColorConfig::Rgb { r, g, b } => {
-                let entries = vec![
-                    ("mode".into(), ConfigValue::Str("rgb".into())),
-                    ("r".into(), ConfigValue::Int(r as i32)),
-                    ("g".into(), ConfigValue::Int(g as i32)),
-                    ("b".into(), ConfigValue::Int(b as i32)),
-                ];
-                ConfigValue::Object(entries)
-            }
-            ColorConfig::Hsv { h, s, v } => {
-                let entries = vec![
-                    ("mode".into(), ConfigValue::Str("hsv".into())),
-                    ("h".into(), ConfigValue::Float(h)),
-                    ("s".into(), ConfigValue::Float(s)),
-                    ("v".into(), ConfigValue::Float(v)),
-                ];
-                ConfigValue::Object(entries)
-            }
-        }
-    }
-}
-
-/// Blink 效果的强类型配置
-#[derive(Clone, Debug, Default)]
-pub struct BlinkConfig {
-    pub led_count: Option<usize>,
-    pub speed: Option<i32>,
-    pub color: Option<ColorConfig>,
-}
-
-/// Chase（跑马灯）效果的强类型配置
-#[derive(Clone, Debug, Default)]
-pub struct ChaseConfig {
-    pub led_count: Option<usize>,
-    pub speed: Option<i32>,
-    pub color: Option<ColorConfig>,
-    pub chase_count: Option<i32>,
-}
-
-/// Rainbow（彩虹）效果的强类型配置
-#[derive(Clone, Debug, Default)]
-pub struct RainbowConfig {
-    pub led_count: Option<usize>,
-    pub speed: Option<i32>,
-    pub hue_step: Option<i32>,
-    pub hue_spread: Option<i32>,
-    pub saturation: Option<f32>,
-    pub brightness: Option<f32>,
-}
-
-/// Wave（波浪）效果的强类型配置
-#[derive(Clone, Debug, Default)]
-pub struct WaveConfig {
-    pub led_count: Option<usize>,
-    pub speed: Option<i32>,
-    pub color: Option<ColorConfig>,
-    pub wave_width: Option<i32>,
-}
-
-// ── 辅助函数：将 Option 字段推入 ConfigValue 对象 ──
-
-fn push_opt_int(entries: &mut Vec<(String, ConfigValue)>, key: &str, value: Option<i32>) {
-    if let Some(value) = value {
-        entries.push((key.into(), ConfigValue::Int(value)));
-    }
-}
-
-fn push_opt_float(entries: &mut Vec<(String, ConfigValue)>, key: &str, value: Option<f32>) {
-    if let Some(value) = value {
-        entries.push((key.into(), ConfigValue::Float(value)));
-    }
-}
-
-fn push_opt_usize(entries: &mut Vec<(String, ConfigValue)>, key: &str, value: Option<usize>) {
-    if let Some(value) = value {
-        entries.push((key.into(), ConfigValue::Int(value as i32)));
-    }
-}
-
-fn push_opt_color(entries: &mut Vec<(String, ConfigValue)>, key: &str, value: Option<ColorConfig>) {
-    if let Some(value) = value {
-        entries.push((key.into(), value.into()));
-    }
-}
-
-/// 将 BlinkConfig 转换为 ConfigValue 对象
-impl From<BlinkConfig> for ConfigValue {
-    fn from(value: BlinkConfig) -> Self {
-        let mut entries = Vec::new();
-        push_opt_usize(&mut entries, "ledCount", value.led_count);
-        push_opt_int(&mut entries, "speed", value.speed);
-        push_opt_color(&mut entries, "color", value.color);
-        ConfigValue::Object(entries)
-    }
-}
-
-/// 将 ChaseConfig 转换为 ConfigValue 对象
-impl From<ChaseConfig> for ConfigValue {
-    fn from(value: ChaseConfig) -> Self {
-        let mut entries = Vec::new();
-        push_opt_usize(&mut entries, "ledCount", value.led_count);
-        push_opt_int(&mut entries, "speed", value.speed);
-        push_opt_color(&mut entries, "color", value.color);
-        push_opt_int(&mut entries, "chaseCount", value.chase_count);
-        ConfigValue::Object(entries)
-    }
-}
-
-/// 将 RainbowConfig 转换为 ConfigValue 对象
-impl From<RainbowConfig> for ConfigValue {
-    fn from(value: RainbowConfig) -> Self {
-        let mut entries = Vec::new();
-        push_opt_usize(&mut entries, "ledCount", value.led_count);
-        push_opt_int(&mut entries, "speed", value.speed);
-        push_opt_int(&mut entries, "hueStep", value.hue_step);
-        push_opt_int(&mut entries, "hueSpread", value.hue_spread);
-        push_opt_float(&mut entries, "saturation", value.saturation);
-        push_opt_float(&mut entries, "brightness", value.brightness);
-        ConfigValue::Object(entries)
-    }
-}
-
-/// 将 WaveConfig 转换为 ConfigValue 对象
-impl From<WaveConfig> for ConfigValue {
-    fn from(value: WaveConfig) -> Self {
-        let mut entries = Vec::new();
-        push_opt_usize(&mut entries, "ledCount", value.led_count);
-        push_opt_int(&mut entries, "speed", value.speed);
-        push_opt_color(&mut entries, "color", value.color);
-        push_opt_int(&mut entries, "waveWidth", value.wave_width);
-        ConfigValue::Object(entries)
     }
 }
 
@@ -282,7 +137,7 @@ impl EffectEngine {
     }
 
     /// 用 JS 字符串配置创建效果实例（如 "{ ledCount: 20 }"）
-    pub fn instantiate_expr(&self, config_expr: &str) -> EffectResult<EffectInstance> {
+    pub fn instantiate_from_expr(&self, config_expr: &str) -> EffectResult<EffectInstance> {
         let config_expr = if config_expr.trim().is_empty() {
             ConfigValue::Object(Vec::new()).to_js_literal()
         } else {
@@ -366,7 +221,7 @@ impl EffectManager {
     }
 
     /// 用 JS 字符串配置创建实例并加入管理列表（返回实例索引）
-    pub fn instantiate_expr(
+    pub fn instantiate_from_expr(
         &mut self,
         engine_name: &str,
         instance_name: impl Into<String>,
@@ -383,7 +238,7 @@ impl EffectManager {
             .find(|(name, _)| name == engine_name)
             .ok_or_else(|| format!("unknown effect engine: {}", engine_name))?;
 
-        let instance = engine.1.instantiate_expr(config_expr)?;
+        let instance = engine.1.instantiate_from_expr(config_expr)?;
         self.instances.push(ManagedEffectInstance {
             name: instance_name,
             engine_name: engine_name.to_string(),
@@ -567,6 +422,16 @@ impl EffectManager {
         self.active_instance_mut()?.stop()
     }
 
+    /// 更新当前激活实例的单项配置
+    pub fn set_active_config(&mut self, key: &str, value: ConfigValue) -> EffectResult<()> {
+        self.active_instance_mut()?.set_config(key, value)
+    }
+
+    /// 重置当前激活实例
+    pub fn reset_active(&mut self) -> EffectResult<()> {
+        self.active_instance_mut()?.reset()
+    }
+
     /// 读取当前激活实例的 LED 颜色数据（&[u8]，格式 [R,G,B,R,G,B,...]）
     pub fn active_led_buffer(&mut self) -> EffectResult<&[u8]> {
         self.active_instance_mut()?.led_buffer()
@@ -575,6 +440,11 @@ impl EffectManager {
     /// 返回当前激活实例的 LED 灯珠数量
     pub fn active_led_count(&mut self) -> EffectResult<usize> {
         self.active_instance_mut()?.led_count()
+    }
+
+    /// 返回当前激活实例的内存统计信息
+    pub fn memory_stats_active(&mut self) -> EffectResult<crate::MemoryStats> {
+        Ok(self.active_instance_mut()?.memory_stats())
     }
 }
 
@@ -650,3 +520,4 @@ impl EffectInstance {
         self.ctx.memory_stats()
     }
 }
+

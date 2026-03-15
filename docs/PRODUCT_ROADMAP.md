@@ -79,7 +79,7 @@
 - ✅ 已有最小可用的 `EffectManager` 调度层
 - ✅ 多实例、生命周期、配置更新、重置等基础场景已有测试覆盖
 - ✅ 多脚本 / 多效果 engine 基础共存场景已有测试覆盖
-- ✅ 基础配置系统已支持对象 / 数组配置与最小领域配置层雏形
+- ✅ 基础配置系统已支持对象 / 数组配置，统一以 `ConfigValue` 作为正式配置入口
 - ⚠️ 仍缺少更完整的产品级宿主接口收口（资源边界、更强调度策略、更多示例与最终文档收口）
 
 **待实现**：
@@ -93,9 +93,9 @@
   - 后续继续完善零拷贝、错误处理与实例状态边界
 
 - **增强加载 bytecode / 重置实例 / 更新配置能力**
-  - 已提供 `from_bytecode()` / `from_source()` / `instantiate()` / `instantiate_config()` / `reset()` / `set_config()`
-  - 已有基础对象/数组配置与领域配置雏形
-  - 后续继续补齐更强类型配置体系与实例隔离语义
+  - 已提供 `from_bytecode()` / `from_source()` / `instantiate_from_expr()` / `instantiate_config()` / `reset()` / `set_config()`
+  - 已有基础对象/数组配置
+  - 后续继续补齐实例隔离语义与资源边界收口
 
 - **明确单脚本/多脚本运行模型**
   - 单脚本多实例基础能力已具备并有测试覆盖
@@ -114,7 +114,7 @@ pub struct EffectManager { /* 最小调度层 */ }
 impl EffectEngine {
     pub fn from_bytecode(bytes: &[u8]) -> Result<Self>;
     pub fn from_source(source: &str) -> Result<Self>;
-    pub fn instantiate_expr(&self, config_expr: &str) -> Result<EffectInstance>;
+    pub fn instantiate_from_expr(&self, config_expr: &str) -> Result<EffectInstance>;
     pub fn instantiate_config(&self, config: ConfigValue) -> Result<EffectInstance>;
 }
 
@@ -330,4 +330,5 @@ impl EffectInstance {
 
 - `RegExp`
 - 完整 ES6+ 高级语法与运行时能力（如 `class`、`Promise`、`async/await`、模块系统、`Map/Set` 等）
+
 

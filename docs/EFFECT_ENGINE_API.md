@@ -6,8 +6,6 @@
 - `EffectInstance`
 - `EffectManager`
 - `ConfigValue`
-- `ColorConfig`
-- `BlinkConfig` / `ChaseConfig` / `RainbowConfig` / `WaveConfig`
 
 这套 API 的目标是：
 
@@ -35,6 +33,30 @@
 
 `EffectEngine` 的作用就是把这条链路收口起来。
 
+### 手动方式 vs 新 API 方式
+
+下面这张表可以直接回答：
+
+- 宿主层如果手动要自己做什么
+- 现在分别由哪个抽象封装起来了
+
+| 宿主手动要做的事 | 现在由谁封装 | 当前推荐用法 |
+|---|---|---|
+| 把 effect 脚本内嵌成字符串后再手动处理 | `EffectEngine` | `EffectEngine::from_source(js)` |
+| 手工创建 `Context` | `EffectEngine` / `EffectInstance` 内部 | `engine.instantiate_from_expr(...)` / `instantiate_config(...)` |
+| 注册 native 函数把 `leds` 传回 Rust | `EffectInstance` | `instance.led_buffer()` |
+| 手工拼接 driver JS | `EffectEngine` / `EffectInstance` 内部 | 不再推荐宿主手拼 |
+| 手工调用 `createEffect()` | `EffectEngine` | `instantiate_from_expr(...)` / `instantiate_config(...)` |
+| 手工调用 `tick()` / `start()` / `stop()` | `EffectInstance` | `instance.tick()` / `start()` / `stop()` |
+| 手工读取 `Uint8Array leds` | `EffectInstance` / `EffectManager` | `led_buffer()` / `active_led_buffer()` |
+| 手工拼配置字符串 | `ConfigValue` | `instantiate_config(config)` |
+| 管理多个 effect / 多实例切换 | `EffectManager` | `add_engine()` / `instantiate_*()` / `activate_*()` |
+
+一句话说：
+
+- **旧方式**：宿主自己驱动 JS 引擎细节
+- **新方式**：宿主优先面向 `EffectManager` 编程；`EffectEngine` / `EffectInstance` 作为底层构件保留
+
 ## 2. 核心类型
 
 ### `EffectEngine`
@@ -48,8 +70,8 @@
 
 - `EffectEngine::from_source(source)` — JS 源码编译为字节码存入内存，开发阶段使用
 - `EffectEngine::from_bytecode(bytes)` — 直接加载预编译字节码，生产环境秒开
-- `engine.instantiate_expr(config_expr)` — 底层接口：直接传 JS 配置表达式字符串
-- `engine.instantiate_config(config)` — 更正式的宿主接口：传 `ConfigValue` / typed config
+- `engine.instantiate_from_expr(config_expr)` — 底层接口：直接传 JS 配置表达式字符串
+- `engine.instantiate_config(config)` — 更正式的宿主接口：传 `ConfigValue`
 
 ### `EffectInstance`
 
@@ -84,17 +106,19 @@
 - `Array(Vec<ConfigValue>)`
 - `Object(Vec<(String, ConfigValue)>)`
 
-### typed config
+### 配置风格
 
-为了避免宿主层每次手工拼 `ConfigValue::Object(...)`，当前已经提供一层最小领域配置对象：
+当前核心库统一采用：
 
-- `ColorConfig`
-- `BlinkConfig`
-- `ChaseConfig`
-- `RainbowConfig`
-- `WaveConfig`
+- `ConfigValue`
 
-这些类型都可以转换成 `ConfigValue`，再交给 `instantiate_config(...)` 或 `set_config(...)` 使用。
+作为正式配置入口。
+
+也就是说：
+
+- 复杂对象配置使用 `ConfigValue::Object(...)`
+- 数组配置使用 `ConfigValue::Array(...)`
+- 不再要求为每个 effect 预先提供专门的强类型配置结构体
 
 ### `EffectManager`
 
@@ -107,7 +131,8 @@
 
 - `EffectManager::new()`
 - `add_engine(name, engine)`
-- `instantiate(engine_name, instance_name, config_expr)`
+- `instantiate_from_expr(engine_name, instance_name, config_expr)`
+- `instantiate_config(engine_name, instance_name, config)`
 - `activate(instance_idx)`
 - `activate_by_name(instance_name)`
 - `active_name()` / `active_engine_name()`
@@ -117,6 +142,9 @@
 - `remove_instance(index)` / `remove_instance_by_name(name)`
 - `remove_instances_by_engine(engine_name)`
 - `start_active()` / `tick_active()` / `pause_active()` / `resume_active()` / `stop_active()`
+- `set_active_config(key, value)`
+- `reset_active()`
+- `memory_stats_active()`
 - `active_led_buffer()` / `active_led_count()`
 
 ## 3. 基本用法
@@ -133,7 +161,7 @@ let engine = EffectEngine::from_source(js)?;
 ### 创建实例（字符串配置）
 
 ```rust
-let mut instance = engine.instantiate_expr("{ ledCount: 4, speed: 100 }")?;
+let mut instance = engine.instantiate_from_expr("{ ledCount: 4, speed: 100 }")?;
 ```
 
 这里的 `config_expr` 当前是一个 **JS 对象字面量字符串**。
@@ -148,16 +176,24 @@ let mut instance = engine.instantiate_expr("{ ledCount: 4, speed: 100 }")?;
 ### 创建实例（结构化配置）
 
 ```rust
-use mquickjs::{BlinkConfig, ColorConfig, EffectEngine};
+use mquickjs::{ConfigValue, EffectEngine};
 
 let engine = EffectEngine::from_source(js)?;
-let config = BlinkConfig {
-    led_count: Some(4),
-    speed: Some(100),
-    color: Some(ColorConfig::Rgb { r: 255, g: 0, b: 0 }),
-};
+let config = ConfigValue::Object(vec![
+    ("ledCount".into(), ConfigValue::Int(4)),
+    ("speed".into(), ConfigValue::Int(100)),
+    (
+        "color".into(),
+        ConfigValue::Object(vec![
+            ("mode".into(), ConfigValue::Str("rgb".into())),
+            ("r".into(), ConfigValue::Int(255)),
+            ("g".into(), ConfigValue::Int(0)),
+            ("b".into(), ConfigValue::Int(0)),
+        ]),
+    ),
+]);
 
-let mut instance = engine.instantiate_config(config.into())?;
+let mut instance = engine.instantiate_config(config)?;
 ```
 
 这是当前更推荐的宿主侧写法。
@@ -202,11 +238,14 @@ instance.set_config("label", ConfigValue::Str("demo".into()))?;
 如果配置值本身是对象，也可以直接传：
 
 ```rust
-use mquickjs::ColorConfig;
-
 instance.set_config(
     "color",
-    ColorConfig::Rgb { r: 255, g: 0, b: 0 }.into(),
+    ConfigValue::Object(vec![
+        ("mode".into(), ConfigValue::Str("rgb".into())),
+        ("r".into(), ConfigValue::Int(255)),
+        ("g".into(), ConfigValue::Int(0)),
+        ("b".into(), ConfigValue::Int(0)),
+    ]),
 )?;
 ```
 
@@ -251,7 +290,7 @@ let engine = EffectEngine::from_bytecode(&bytes)?;
 
 - `from_source()`：编译源码并保存字节码序列化结果
 - `from_bytecode()`：保存字节码 payload
-- `instantiate()`：
+- `instantiate_from_expr()` / `instantiate_config()`：
   - 创建 `Context`
   - 加载 effect 字节码
   - 创建配置对象并放进全局变量
@@ -276,11 +315,11 @@ let engine = EffectEngine::from_bytecode(&bytes)?;
 - 读取 LED buffer
 - 更新配置
 - 重置实例
- - 最小调度层（`EffectManager`）
+- 最小调度层（`EffectManager`）
 
 当前仍未完全产品化的部分：
 
-- 更统一的通用基础配置层（当前已有 typed config 雏形）
+- 更统一的通用基础配置层（当前仍以通用 `ConfigValue` 为正式配置入口）
 - 多实例 / 多脚本运行模型的进一步抽象（当前已有最小 `EffectManager` 雏形）
 - 更正式的错误类型
 - 更完整的文档与示例矩阵
@@ -302,11 +341,11 @@ let engine = EffectEngine::from_bytecode(&bytes)?;
 use mquickjs::{EffectEngine, EffectManager};
 
 let mut manager = EffectManager::new();
-manager.add_engine("blink", EffectEngine::from_source(BLINK_JS)?);
-manager.add_engine("rainbow", EffectEngine::from_source(RAINBOW_JS)?);
+manager.add_engine("blink", EffectEngine::from_source(BLINK_JS)?)?;
+manager.add_engine("rainbow", EffectEngine::from_source(RAINBOW_JS)?)?;
 
-let blink_idx = manager.instantiate_expr("blink", "blink-a", "{ ledCount: 20 }")?;
-let rainbow_idx = manager.instantiate_expr("rainbow", "rainbow-a", "{ ledCount: 20 }")?;
+let blink_idx = manager.instantiate_from_expr("blink", "blink-a", "{ ledCount: 20 }")?;
+let rainbow_idx = manager.instantiate_from_expr("rainbow", "rainbow-a", "{ ledCount: 20 }")?;
 
 manager.activate(blink_idx)?;
 manager.start_active()?;
@@ -321,6 +360,29 @@ let rainbow_leds = manager.active_led_buffer()?;
 
 这说明当前仓库已经不只具备“单 effect 实例 API”，还具备“最小调度层雏形”。
 
+如果你希望完全采用结构化配置，也可以这样使用：
+
+```rust
+use mquickjs::{ConfigValue, EffectEngine, EffectManager};
+
+let mut manager = EffectManager::new();
+manager.add_engine("blink", EffectEngine::from_source(BLINK_JS)?)?;
+
+manager.instantiate_config(
+    "blink",
+    "blink-a",
+    ConfigValue::Object(vec![
+        ("ledCount".into(), ConfigValue::Int(20)),
+        ("speed".into(), ConfigValue::Int(100)),
+    ]),
+)?;
+
+manager.activate_by_name("blink-a")?;
+manager.start_active()?;
+manager.tick_active()?;
+let leds = manager.active_led_buffer()?;
+```
+
 ### 当前 `EffectManager` 能实现什么
 
 当前这层已经可以支持：
@@ -330,7 +392,40 @@ let rainbow_leds = manager.active_led_buffer()?;
 - 通过索引或实例名激活当前实例
 - 查询有哪些 engine / instance 已加载
 - 按实例删除、按 engine 批量删除实例
+- 直接修改当前激活实例配置
+- 直接重置当前激活实例
+- 查询当前激活实例的内存统计信息
 - 读取当前激活实例的 LED buffer 并驱动宿主输出
+
+### 如果以后主要以 `EffectManager` 作为宿主主入口
+
+现在的接口分层可以理解成：
+
+- `EffectEngine` / `EffectInstance`：底层构件层
+- `EffectManager`：宿主主入口层
+
+推荐宿主主流程优先使用：
+
+- `add_engine(...)`
+- `instantiate_config(...)`（优先） / `instantiate_from_expr(...)`（低层兼容）
+- `activate_by_name(...)`
+- `set_active_config(...)`
+- `start_active()` / `tick_active()`
+- `active_led_buffer()` / `active_led_count()`
+- `reset_active()`
+- `memory_stats_active()`
+
+这样宿主层就可以尽量少直接操作底层 `EffectInstance`。
+
+### 新旧示例对照
+
+| 文件/接口 | 定位 |
+|---|---|
+| `examples/effects_demo.rs` | 旧方式：`Context + driver JS` 终端演示 |
+| `examples/common/effects.rs` | 旧方式 helper：离线采帧工具 |
+| `examples/effects_demo_engine.rs` | 新方式：`EffectEngine` / `EffectInstance` 终端演示 |
+| `examples/common/effects_engine.rs` | 新方式 helper：通过产品 API 采帧 |
+| `examples/effects_demo_manager.rs` | 新方式：`EffectManager + ConfigValue` 调度演示 |
 
 ## 7. 与 `examples/common/effects.rs` 的区别
 
@@ -357,7 +452,7 @@ fn main() -> Result<(), String> {
     let js = include_str!("../js/effects/blink/effect.js");
 
     let engine = EffectEngine::from_source(js)?;
-    let mut instance = engine.instantiate_expr("{ ledCount: 4, speed: 100 }")?;
+    let mut instance = engine.instantiate_from_expr("{ ledCount: 4, speed: 100 }")?;
 
     instance.start()?;
     instance.tick()?;
@@ -383,4 +478,3 @@ fn main() -> Result<(), String> {
 - 已经开始形成面向产品宿主层的 effect API 雏形
 
 后续仍需继续完善，但这已经是从“示例驱动”走向“产品化宿主接口”的关键一步。
-

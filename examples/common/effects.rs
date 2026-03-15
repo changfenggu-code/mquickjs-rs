@@ -24,7 +24,6 @@ pub struct EffectData {
     pub frames: Vec<Vec<[u8; 3]>>,
 }
 
-/// 线程本地存储：用于在 JS 执行过程中收集帧数据
 thread_local! {
     static CAPTURED: RefCell<Vec<Vec<[u8; 3]>>> = RefCell::new(Vec::new());
 }

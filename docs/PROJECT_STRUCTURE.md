@@ -101,8 +101,8 @@ mquickjs-rs/
 - **主要能力**：
   - `EffectEngine::from_source()`
   - `EffectEngine::from_bytecode()`
-  - `engine.instantiate_expr(config)`
-  - `manager.add_engine()` / `manager.instantiate_expr()` / `manager.activate()`
+  - `engine.instantiate_from_expr(config)`
+  - `manager.add_engine()` / `manager.instantiate_from_expr()` / `manager.activate()`
   - `manager.tick_active()` / `manager.active_led_buffer()`
   - `instance.start()` / `tick()` / `pause()` / `resume()` / `stop()`
   - `instance.led_buffer()` / `led_count()` / `set_config()` / `reset()`
@@ -953,4 +953,5 @@ cargo bench                                   # 运行基准测试
 - **特性规范**：[docs/JS_FEATURE_SPEC.md](../docs/JS_FEATURE_SPEC.md)
 - **路线图**：[docs/PRODUCT_ROADMAP.md](../docs/PRODUCT_ROADMAP.md)
 - **Claude 指导**：[CLAUDE.md](../CLAUDE.md)
+
 
