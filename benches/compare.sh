@@ -8,12 +8,19 @@
 # Requirements:
 #   - Rust toolchain (cargo)
 #   - Optional: vendor/mquickjs submodule for C comparison
+#   - Optional: GCC (for building C version on Windows)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BENCH_SCRIPTS="$SCRIPT_DIR/scripts"
+
+# Detect platform
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) EXE=".exe"; IS_WIN=true ;;
+    *)                     EXE="";     IS_WIN=false ;;
+esac
 
 # Detect Python (cross-platform)
 if command -v python &> /dev/null; then
@@ -27,55 +34,106 @@ fi
 
 echo "=== MQuickJS Benchmark Comparison ==="
 echo ""
-echo "Using: $PYTHON ($($PYTHON --version 2>&1))"
+echo "Platform: $(uname -s), Python: $($PYTHON --version 2>&1)"
 echo ""
 
-# Check for C implementation
+# --- Locate or build C implementation ---
 ORIGINAL_MQJS=""
+
 if [ -n "$1" ]; then
     # User provided path
     ORIGINAL_MQJS="$1"
-elif [ -x "$PROJECT_DIR/vendor/mquickjs/mqjs" ]; then
-    # Try submodule
-    ORIGINAL_MQJS="$PROJECT_DIR/vendor/mquickjs/mqjs"
+elif [ -x "$PROJECT_DIR/vendor/mquickjs/bin/mqjs${EXE}" ]; then
+    ORIGINAL_MQJS="$PROJECT_DIR/vendor/mquickjs/bin/mqjs${EXE}"
+elif [ -x "$PROJECT_DIR/vendor/mquickjs/mqjs${EXE}" ]; then
+    ORIGINAL_MQJS="$PROJECT_DIR/vendor/mquickjs/mqjs${EXE}"
+elif [ -f "$PROJECT_DIR/vendor/mquickjs/mquickjs.c" ]; then
+    # Submodule exists but binary not built — try to build it
+    echo "[*] C source found but no binary. Attempting to build..."
+    VENDOR_DIR="$PROJECT_DIR/vendor/mquickjs"
+
+    if command -v make &> /dev/null && [ "$IS_WIN" = false ]; then
+        # Unix: use Makefile
+        make -C "$VENDOR_DIR" -j"$(nproc 2>/dev/null || echo 4)" mqjs 2>&1 | tail -3
+        if [ -x "$VENDOR_DIR/mqjs" ]; then
+            ORIGINAL_MQJS="$VENDOR_DIR/mqjs"
+        fi
+    elif command -v gcc &> /dev/null; then
+        # Windows or no make: compile with gcc directly
+        mkdir -p "$VENDOR_DIR/bin"
+        CFLAGS="-Os -Wall -D_GNU_SOURCE -fno-math-errno -fno-trapping-math"
+        C_SRCS="mqjs mquickjs dtoa libm cutils readline readline_tty"
+
+        echo "    Compiling C sources..."
+        for src in $C_SRCS; do
+            gcc $CFLAGS -c "$VENDOR_DIR/${src}.c" -o "$VENDOR_DIR/bin/${src}.o" 2>/dev/null
+        done
+
+        echo "    Linking mqjs${EXE}..."
+        LDLIBS="-lm"
+        if [ "$IS_WIN" = true ]; then
+            LDLIBS="$LDLIBS -lpthread"  # MinGW64 needs -lpthread for nanosleep
+        fi
+        if gcc -g -o "$VENDOR_DIR/bin/mqjs${EXE}" \
+            "$VENDOR_DIR"/bin/mqjs.o \
+            "$VENDOR_DIR"/bin/mquickjs.o \
+            "$VENDOR_DIR"/bin/dtoa.o \
+            "$VENDOR_DIR"/bin/libm.o \
+            "$VENDOR_DIR"/bin/cutils.o \
+            "$VENDOR_DIR"/bin/readline.o \
+            "$VENDOR_DIR"/bin/readline_tty.o \
+            $LDLIBS 2>/dev/null; then
+            ORIGINAL_MQJS="$VENDOR_DIR/bin/mqjs${EXE}"
+            echo "    Built: $ORIGINAL_MQJS"
+        else
+            echo "    Warning: C build failed. Running Rust-only benchmarks."
+        fi
+    else
+        echo "    Warning: No GCC found. Cannot build C version."
+    fi
 fi
 
-# Build Rust version
+# --- Build Rust version ---
 echo "[1/3] Building mquickjs-rs (release)..."
 cd "$PROJECT_DIR"
 cargo build --release --quiet
-RUST_MQJS="$PROJECT_DIR/target/release/mqjs"
+RUST_MQJS="$PROJECT_DIR/target/release/mqjs${EXE}"
 
 if [ ! -f "$RUST_MQJS" ]; then
     echo "Error: Failed to build mquickjs-rs"
     exit 1
 fi
 
-echo "      Built: $RUST_MQJS"
-echo ""
+echo "      Rust: $RUST_MQJS"
 
 # Check C version
-if [ -z "$ORIGINAL_MQJS" ] || [ ! -x "$ORIGINAL_MQJS" ]; then
+if [ -n "$ORIGINAL_MQJS" ] && [ -f "$ORIGINAL_MQJS" ]; then
+    # Verify it's actually a JS engine (not mqjs_stdlib)
+    if "$ORIGINAL_MQJS" -e "print(1)" > /dev/null 2>&1; then
+        echo "      C:    $ORIGINAL_MQJS"
+        HAS_C=true
+    else
+        echo "      Warning: $ORIGINAL_MQJS is not a valid JS engine. Skipping C comparison."
+        HAS_C=false
+    fi
+else
     echo "[2/3] C implementation not found. Running Rust-only benchmarks."
-    echo "      To enable C comparison, run:"
+    echo "      To enable C comparison:"
     echo "        git submodule update --init"
     echo "      Or provide path: ./benches/compare.sh /path/to/mqjs"
-    echo ""
     HAS_C=false
-else
-    echo "[2/3] Found C implementation: $ORIGINAL_MQJS"
-    HAS_C=true
-    echo ""
 fi
+echo ""
 
-# Function to run a benchmark
+# --- Benchmark runner ---
+RUNS=15  # More runs for stability
+
 run_bench() {
     local script="$1"
     local binary="$2"
-    local runs=5
     local total=0
 
-    for i in $(seq 1 $runs); do
+    for i in $(seq 1 $RUNS); do
         local start=$($PYTHON -c 'import time; print(time.time())')
         "$binary" "$script" > /dev/null 2>&1
         local end=$($PYTHON -c 'import time; print(time.time())')
@@ -83,18 +141,18 @@ run_bench() {
         total=$($PYTHON -c "print($total + $elapsed)")
     done
 
-    $PYTHON -c "print(f'{$total / $runs:.4f}')"
+    $PYTHON -c "print(f'{$total / $RUNS:.4f}')"
 }
 
-# Run benchmarks
-echo "[3/3] Running benchmarks (5 runs each, average)..."
+# --- Run benchmarks ---
+echo "[3/3] Running benchmarks ($RUNS runs each, average)..."
 echo ""
 if [ "$HAS_C" = true ]; then
-    echo "Benchmark               Rust (s)    C (s)      Ratio    Notes"
-    echo "-----------------------------------------------------------------"
+    printf "  %-18s %10s %10s %10s    %s\n" "Benchmark" "Rust (s)" "C (s)" "Ratio" "Notes"
+    echo "  -----------------------------------------------------------------"
 else
-    echo "Benchmark               Rust (s)"
-    echo "-----------------------------------------------------"
+    printf "  %-18s %10s\n" "Benchmark" "Rust (s)"
+    echo "  -----------------------------------"
 fi
 
 for script in "$BENCH_SCRIPTS"/*.js; do

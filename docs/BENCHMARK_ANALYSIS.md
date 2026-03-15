@@ -42,20 +42,24 @@ git submodule update --init
 | fib | 0.132 | 0.059 | 2.25x | C 快 2.25 倍 |
 | loop | 0.070 | 0.030 | 2.33x | C 快 2.33 倍 |
 
-**机器 2**：AMD Ryzen 7 5800H, 32 GB RAM, Windows 11 (Rust only)
+**机器 2**：AMD Ryzen 7 5800H, 32 GB RAM, Windows 11 (GCC 15.2, MinGW64)
 
-| 基准 | Rust (s) | 备注 |
-|-----------|----------|------|
-| fib | 0.36 | 最慢 - 递归函数调用 |
-| loop | 0.19 | 循环性能 |
-| sieve | 0.16 | 素数筛法 |
-| json | 0.14 | JSON 解析 |
-| array | 0.14 | 数组操作 |
-| closure | 0.14 | 闭包 |
-| object | 0.14 | 对象操作 |
-| string | 0.14 | 字符串操作 |
+编译方式：`gcc -Os -lpthread` (需要 `-lpthread` 解决 `nanosleep64` 链接问题)
 
-**注意**：由于 Windows 环境下编译 C 版较为复杂，当前主要关注 Rust 版的绝对性能。有条件时可使用 `git submodule update --init` 初始化 C 版进行对比。
+| 基准 | Rust (ms) | C (ms) | 比率 | 获胜者 |
+|-----------|----------|-------|-------|--------|
+| json | 30 | 33 | 0.92x | Rust 快 8% |
+| sieve | 44 | 29 | 1.51x | C 快 51% |
+| loop | 78 | 48 | 1.62x | C 快 62% |
+| fib | 177 | 107 | 1.66x | C 快 66% |
+
+*注：20 次运行取中间 16 次平均值（去除 2 个最高和 2 个最低异常值）。array/closure/object/string 计算时间 <10ms，被进程启动噪声淹没，不列入对比。*
+
+**观察**：
+- Rust 在 `json` 上比 C 快 8%（高效的字符串处理）
+- `fib` 差距从 macOS 的 2.25x 缩小到 1.66x（阶段 9 优化生效）
+- `loop` 差距从 macOS 的 2.33x 缩小到 1.62x
+- 总体 Rust 比 C 慢约 50-66%（macOS 上约慢 100-130%）
 
 ## 为什么 C 通常更快
 

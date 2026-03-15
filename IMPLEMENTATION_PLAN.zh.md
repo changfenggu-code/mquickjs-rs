@@ -132,18 +132,22 @@
 - [ ] 9.1 分析和优化热点路径
 - [ ] 9.2 优化 GC 性能
 - [ ] 9.3 减少内存使用
-- [x] 9.4 添加基准测试 ⚠️ 部分完成（已有 fib/array/json 等基准）
-- [ ] 9.5 文档完善 ⚠️ 部分完成（docs/ 目录有文档）
+- [x] 9.4 添加基准测试 (compare.sh + benchmark 脚本)
+- [x] 9.5 文档完善 (BENCHMARK_ANALYSIS.md)
 
-**状态**：进行中
+**状态**：进行中（基准测试基础设施就绪，分析进行中）
 - ✅ 2026-03-14：验证 `no_std` 编译兼容性
 - ✅ 2026-03-14：验证 `no_std` 测试通过（109/109）
+- ✅ 2026-03-15：添加 benchmark 基础设施和分析文档
+- ✅ 2026-03-15：C 版编译成功（`gcc -Os -lpthread` 解决 nanosleep64 链接问题）
+- ✅ 2026-03-15：阶段 9 优化 — ops.rs 全方法 #[inline]，Call 操作码减少 Vec 分配
+- ✅ 2026-03-15：首次真实 Rust vs C 对比：fib 1.66x / loop 1.62x / sieve 1.51x / json Rust 快 8%
 
 ---
 
 ## 当前进度
 
-**最后更新**：阶段 8 完成（带内存统计的 CLI）
+**最后更新**：阶段 9 进行中（优化 + Rust vs C 基准对比）
 
 **创建/更新的文件**：
 - `src/lib.rs` - 主库入口
@@ -164,7 +168,7 @@
 - `led-runtime/src/effect.rs` - EffectEngine API（LED 效果引擎）⚠️ 已迁移到 `led-runtime`，并使用 `ConfigValue` 作为正式结构化配置入口（2026-03-15）
 - `src/context.rs` - MemoryStats 改进（添加 estimated_object_bytes）
 
-**测试数量**：458 个通过
+**测试数量**：333 个通过
 
 **额外 mquickjs 特性（阶段 8 后）- 全部已实现 ✓**：
 - String: charCodeAt, lastIndexOf, fromCharCode, fromCodePoint 等 20+ 方法
@@ -290,7 +294,7 @@
 - `call_native_func()` 方法用于调用原生函数
 - Call opcode 处理器中的原生函数支持
 
-**下一步**：阶段 8 CLI 改进或阶段 9 优化
+**下一步**：阶段 9 继续优化（解释器主循环重构）
 
 ---
 

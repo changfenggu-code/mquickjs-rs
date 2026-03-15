@@ -136,17 +136,25 @@
 - [x] 9.5 Documentation (BENCHMARK_ANALYSIS.md)
 
 **Status**: In Progress (benchmark infrastructure ready, analysis ongoing)
+- ✅ 2026-03-14: Verified `no_std` compilation compatibility
+- ✅ 2026-03-14: Verified `no_std` tests passing (109/109)
+- ✅ 2026-03-15: Added benchmark infrastructure and analysis docs
+- ✅ 2026-03-15: C version compiled successfully (`gcc -Os -lpthread` to fix nanosleep64 link error)
+- ✅ 2026-03-15: Stage 9 optimizations — ops.rs all methods `#[inline]`, Call opcode reduced Vec allocation
+- ✅ 2026-03-15: First real Rust vs C comparison: fib 1.66x / loop 1.62x / sieve 1.51x / json Rust 8% faster
 
 ---
 
 ## Current Progress
 
-**Last Updated**: Stage 9 In Progress (benchmark infrastructure ready)
+**Last Updated**: Stage 9 In Progress (optimizations + Rust vs C benchmark)
 
 **Stage 9 Status**:
-- Benchmark scripts: Ready (`benches/compare.sh`)
-- Performance baseline: Recorded (Rust-only on Windows)
-- Analysis: Ongoing (see docs/BENCHMARK_ANALYSIS.md)
+- Benchmark scripts: Ready (`benches/compare.sh`, auto-detects and builds C version)
+- C version: Compiled on Windows (`vendor/mquickjs/bin/mqjs.exe`, needs `-lpthread` for MinGW64)
+- Performance: Rust ~50-66% slower than C on compute-heavy benchmarks, 8% faster on JSON
+- Optimizations applied: `#[inline]` on all ops, Call opcode zero-alloc path
+- Analysis: See `docs/BENCHMARK_ANALYSIS.md`
 
 **Files Created/Updated**:
 - `src/lib.rs` - Main library entry
@@ -164,8 +172,10 @@
 - `src/runtime/function.rs` - CFunction, Closure, FunctionBytecode with CaptureInfo
 - `src/util/mod.rs`, `dtoa.rs`, `unicode.rs` - Utilities
 - `src/bin/mqjs.rs` - REPL binary
+- `led-runtime/src/effect.rs` - EffectEngine API (LED effect engine) ⚠️ Migrated to `led-runtime`, uses `ConfigValue` as official structured config entry (2026-03-15)
+- `src/context.rs` - MemoryStats improvement (added estimated_object_bytes)
 
-**Test Count**: 458 passing
+**Test Count**: 333 passing
 
 **Additional mquickjs Features (post-Stage 8)** - All implemented ✓:
 - String: charCodeAt, lastIndexOf, fromCharCode, fromCodePoint, and 20+ methods
@@ -178,6 +188,7 @@
 - Function: toString
 - Global: parseFloat, isFinite, gc, setTimeout, clearTimeout, load
 - performance.now
+- switch/case/do-while/void/debugger statements ✓ implemented
 
 **Stage 8 CLI Features**:
 - Complete argument parsing (-h, -e, -i, -I, -d, -c, --memory-limit)
@@ -472,4 +483,8 @@
 - TypedArray.prototype.subarray(begin, end) for views
 - 9 TypedArray tests
 
-**Next Action**: Stage 8 CLI improvements or Stage 9 optimization
+**Next Action**: Stage 9 continued optimization (interpreter loop refactoring)
+
+---
+
+**Note**: This plan is continuously updated as development progresses. The Chinese version [IMPLEMENTATION_PLAN.zh.md](IMPLEMENTATION_PLAN.zh.md) is kept in sync.

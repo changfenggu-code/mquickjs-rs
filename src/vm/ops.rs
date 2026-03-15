@@ -8,6 +8,7 @@ use alloc::string::ToString;
 
 /// JS ToNumber for a subset of primitive values used by the current runtime.
 /// Supports number/bool/null/undefined and numeric strings.
+#[inline]
 fn to_numeric(interp: &Interpreter, val: Value) -> Option<Float> {
     if let Some(n) = val.to_number_f32() {
         return Some(n);
@@ -59,6 +60,7 @@ fn to_int32(interp: &Interpreter, val: Value) -> Option<i32> {
 }
 
 /// Extract both operands as Float via ToNumber.
+#[inline]
 fn to_numeric_pair(interp: &Interpreter, a: Value, b: Value) -> Option<(Float, Float)> {
     Some((to_numeric(interp, a)?, to_numeric(interp, b)?))
 }
@@ -66,6 +68,7 @@ fn to_numeric_pair(interp: &Interpreter, a: Value, b: Value) -> Option<(Float, F
 impl Interpreter {
     // Arithmetic operations
 
+    #[inline]
     pub(crate) fn op_neg(&self, val: Value) -> InterpreterResult<Value> {
         if let Some(n) = val.to_i32() {
             match n.checked_neg() {
@@ -81,6 +84,7 @@ impl Interpreter {
         }
     }
 
+    #[inline]
     pub(crate) fn op_add(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         // Fast path: both ints
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
@@ -98,6 +102,7 @@ impl Interpreter {
         ))
     }
 
+    #[inline]
     pub(crate) fn op_sub(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return match va.checked_sub(vb) {
@@ -113,6 +118,7 @@ impl Interpreter {
         ))
     }
 
+    #[inline]
     pub(crate) fn op_mul(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return match va.checked_mul(vb) {
@@ -148,6 +154,7 @@ impl Interpreter {
         }
     }
 
+    #[inline]
     pub(crate) fn op_mod(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             if vb == 0 {
@@ -173,7 +180,7 @@ impl Interpreter {
 
     // Comparison operations
 
-    /// Numeric less-than comparison (after ToNumber coercion).
+    #[inline]
     pub(crate) fn op_lt(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return Ok(Value::bool(va < vb));
@@ -187,6 +194,7 @@ impl Interpreter {
         ))
     }
 
+    #[inline]
     pub(crate) fn op_lte(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return Ok(Value::bool(va <= vb));
@@ -199,6 +207,7 @@ impl Interpreter {
         ))
     }
 
+    #[inline]
     pub(crate) fn op_gt(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return Ok(Value::bool(va > vb));
@@ -211,6 +220,7 @@ impl Interpreter {
         ))
     }
 
+    #[inline]
     pub(crate) fn op_gte(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             return Ok(Value::bool(va >= vb));
@@ -223,9 +233,7 @@ impl Interpreter {
         ))
     }
 
-    /// Abstract Equality Comparison (==), per ECMA-262 §7.2.13.
-    /// Handles cross-type coercions: null==undefined, bool→number, etc.
-    /// String == String is NOT handled here — caller must resolve string content.
+    #[inline]
     pub(crate) fn op_eq(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         // 1. Same type (and same bits) — NaN !== NaN
         if a == b {
@@ -255,8 +263,7 @@ impl Interpreter {
         Ok(Value::bool(false))
     }
 
-    /// Strict Equality Comparison (===), per ECMA-262 §7.2.15.
-    /// No type coercion — only same-type comparison.
+    #[inline]
     pub(crate) fn op_strict_eq(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         // NaN !== NaN
         if a.is_nan_value() || b.is_nan_value() {

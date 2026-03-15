@@ -140,6 +140,7 @@ impl Interpreter {
 
     /// Promote a compile-time string value to a runtime string so it can be
     /// safely stored in objects/arrays that outlive the current bytecode scope.
+    #[inline]
     fn promote_string(&mut self, val: Value, bytecode: &FunctionBytecode) -> Value {
         if !val.is_string() {
             return val;
@@ -1635,24 +1636,21 @@ impl Interpreter {
                     let argc = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]) as usize;
                     frame.pc += 2;
 
-                    // Collect arguments (they were pushed in order)
-                    let mut args = Vec::with_capacity(argc);
-                    for _ in 0..argc {
-                        args.push(self.stack.pop().ok_or(InterpreterError::StackUnderflow)?);
-                    }
-                    args.reverse(); // Arguments were pushed left-to-right
-
-                    // Promote compile-time string arguments to runtime strings
-                    // so they remain valid across function boundaries
-                    for arg in &mut args {
-                        *arg = self.promote_string(*arg, bytecode);
-                    }
-
-                    // Pop the function value
-                    let func_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // Args are already on stack in correct order: [func_val][arg0][arg1]...[argN-1]
+                    // Remove func_val from below the args (offset = argc from top)
+                    let func_val = self
+                        .stack
+                        .remove_at_offset(argc)
+                        .ok_or(InterpreterError::StackUnderflow)?;
 
                     // Check if this is a native function call
                     if let Some(native_idx) = func_val.to_native_func_idx() {
+                        // Collect args for native call (needed as slice)
+                        let mut args: Vec<Value> = Vec::with_capacity(argc);
+                        for _ in 0..argc {
+                            args.push(self.stack.pop().ok_or(InterpreterError::StackUnderflow)?);
+                        }
+                        args.reverse();
                         let result =
                             self.call_native_func(native_idx, Value::undefined(), &args)?;
                         self.stack.push(result);
@@ -1661,9 +1659,27 @@ impl Interpreter {
 
                     // Check if this is a builtin object called as a function
                     if let Some(builtin_idx) = func_val.to_builtin_object_idx() {
+                        let mut args: Vec<Value> = Vec::with_capacity(argc);
+                        for _ in 0..argc {
+                            args.push(self.stack.pop().ok_or(InterpreterError::StackUnderflow)?);
+                        }
+                        args.reverse();
                         let result = self.call_builtin_as_function(builtin_idx, &args)?;
                         self.stack.push(result);
                         continue;
+                    }
+
+                    // Promote compile-time string arguments to runtime strings in-place on stack
+                    {
+                        let stack_len = self.stack.len();
+                        for i in 0..argc {
+                            let slot = stack_len - argc + i;
+                            let val = self.stack.get_raw(slot);
+                            if val.is_string() {
+                                let promoted = self.promote_string(val, bytecode);
+                                self.stack.set_raw(slot, promoted);
+                            }
+                        }
                     }
 
                     // Determine if this is a closure or a regular function
@@ -1705,12 +1721,18 @@ impl Interpreter {
                         continue;
                     }
 
-                    let callee_frame_ptr = self.stack.len();
+                    // Args are already on stack starting at callee_frame_ptr
+                    let callee_frame_ptr = self.stack.len() - argc;
 
-                    // Push arguments (pad with undefined if needed)
-                    for i in 0..callee_bytecode.arg_count as usize {
-                        let arg = args.get(i).copied().unwrap_or_default();
-                        self.stack.push(arg);
+                    // Pad or truncate: add undefined for missing args
+                    let expected = callee_bytecode.arg_count as usize;
+                    if argc < expected {
+                        for _ in 0..(expected - argc) {
+                            self.stack.push(Value::undefined());
+                        }
+                    } else if argc > expected {
+                        // Extra args: drop them
+                        self.stack.drop_n(argc - expected);
                     }
 
                     // Allocate space for locals (beyond arguments)
@@ -1726,7 +1748,7 @@ impl Interpreter {
                         CallFrame::new_closure(
                             callee_bytecode as *const _,
                             callee_frame_ptr,
-                            args.len().min(u16::MAX as usize) as u16,
+                            argc.min(u16::MAX as usize) as u16,
                             Value::undefined(), // this value
                             func_val,           // the function value for self-reference
                             closure_idx,
@@ -1735,7 +1757,7 @@ impl Interpreter {
                         CallFrame::new(
                             callee_bytecode as *const _,
                             callee_frame_ptr,
-                            args.len().min(u16::MAX as usize) as u16,
+                            argc.min(u16::MAX as usize) as u16,
                             Value::undefined(), // this value
                             func_val,           // the function value for self-reference
                         )

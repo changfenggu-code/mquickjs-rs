@@ -114,12 +114,39 @@ impl Stack {
     }
 
     /// Drop n values from the stack
+    #[inline]
     pub fn drop_n(&mut self, n: usize) {
         let new_len = self.values.len().saturating_sub(n);
         self.values.truncate(new_len);
     }
 
+    /// Remove element at `offset` positions below the top of the stack.
+    /// offset=0 removes the top, offset=1 removes one below top, etc.
+    /// Returns the removed value, or None if out of range.
+    #[inline]
+    pub fn remove_at_offset(&mut self, offset: usize) -> Option<Value> {
+        let len = self.values.len();
+        if offset >= len {
+            return None;
+        }
+        let idx = len - 1 - offset;
+        Some(self.values.remove(idx))
+    }
+
+    /// Get raw value at absolute stack index
+    #[inline]
+    pub fn get_raw(&self, idx: usize) -> Value {
+        self.values[idx]
+    }
+
+    /// Set raw value at absolute stack index
+    #[inline]
+    pub fn set_raw(&mut self, idx: usize, val: Value) {
+        self.values[idx] = val;
+    }
+
     /// Duplicate the top value
+    #[inline]
     pub fn dup(&mut self) -> Option<()> {
         let val = self.peek()?;
         self.push(val);
@@ -127,6 +154,7 @@ impl Stack {
     }
 
     /// Swap the top two values
+    #[inline]
     pub fn swap(&mut self) -> Option<()> {
         let len = self.values.len();
         if len < 2 {
