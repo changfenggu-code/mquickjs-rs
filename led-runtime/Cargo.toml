@@ -1,0 +1,18 @@
+[package]
+name = "led-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "led_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+mquickjs = { package = "mquickjs-rs", path = ".." }
+
+[dev-dependencies]
+eframe = "0.30"
+slint = "1.15"
+
+[features]
+default = []

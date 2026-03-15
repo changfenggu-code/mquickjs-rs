@@ -1,11 +1,10 @@
-﻿/// LED effects visual demo (EffectEngine API version)
+/// LED effects visual demo
 ///
-/// Runs all 4 LED effects (blink, chase, rainbow, wave) through the
-/// product-facing `EffectEngine` / `EffectInstance` API and renders the LED
-/// strip in the terminal using ANSI 24-bit colors.
+/// Runs all 4 LED effects (blink, chase, rainbow, wave) through the mquickjs
+/// JS engine and renders the LED strip in the terminal using ANSI 24-bit colors.
 ///
-/// Usage:  cargo run --example effects_demo_engine
-use mquickjs::EffectEngine;
+/// Usage:  cargo run --example effects_demo
+use mquickjs::{Context, NativeFn, Value};
 use std::io::Write;
 use std::{thread, time::Duration};
 
@@ -21,11 +20,11 @@ fn main() {
     #[cfg(windows)]
     enable_ansi_windows();
 
-    print!("\x1b[?25l");
+    print!("\x1b[?25l"); // hide cursor
 
     println!();
-    println!("  mquickjs LED Effects Demo (EffectEngine)");
-    println!("  ======================================");
+    println!("  mquickjs LED Effects Demo");
+    println!("  ========================");
     println!();
 
     for (name, js) in &[
@@ -38,15 +37,28 @@ fn main() {
         println!();
     }
 
-    print!("\x1b[?25h");
+    print!("\x1b[?25h"); // show cursor
     println!("  Done.");
     println!();
 }
 
-fn render_frame(data: &[u8], led_count: usize, frame: usize, total: usize) {
+/// Native: __renderFrame(leds, ledCount, frameNum, totalFrames)
+/// Reads Uint8Array, prints ANSI colored LED strip on one line.
+fn native_render(
+    interp: &mut mquickjs::vm::Interpreter,
+    _this: Value,
+    args: &[Value],
+) -> Result<Value, String> {
+    let leds_val = args.first().copied().unwrap_or_default();
+    let led_count = args.get(1).and_then(|v| v.to_i32()).unwrap_or(20) as usize;
+    let frame = args.get(2).and_then(|v| v.to_i32()).unwrap_or(0);
+    let total = args.get(3).and_then(|v| v.to_i32()).unwrap_or(1);
+
+    let data = interp.read_typed_array(leds_val).unwrap_or(&[]);
     let out = std::io::stdout();
     let mut out = out.lock();
 
+    // Overwrite previous line (except first frame)
     if frame > 0 {
         write!(out, "\x1b[1A\r").ok();
     }
@@ -70,56 +82,33 @@ fn render_frame(data: &[u8], led_count: usize, frame: usize, total: usize) {
     out.flush().ok();
 
     thread::sleep(Duration::from_millis(DELAY_MS));
+    Ok(Value::undefined())
 }
 
 fn run_effect(name: &str, js: &str) {
+    let mut ctx = Context::new(256 * 1024);
+    ctx.register_native("__render", native_render as NativeFn, 4);
+
+    // Single eval: effect script + driver loop
+    let program = format!(
+        r#"{js}
+var __m = createEffect();
+__m.start();
+for (var __i = 0; __i < {frames}; __i++) {{
+    __m.tick();
+    __render(__m.leds, __m.ledCount, __i, {frames});
+}}
+"#,
+        js = js,
+        frames = FRAMES,
+    );
+
     print!("  {name} :");
     println!();
 
-    let engine = match EffectEngine::from_source(js) {
-        Ok(engine) => engine,
-        Err(e) => {
-            eprintln!("  ERROR: {}", e);
-            return;
-        }
-    };
-
-    let mut instance = match engine.instantiate_from_expr("{ ledCount: 20 }") {
-        Ok(instance) => instance,
-        Err(e) => {
-            eprintln!("  ERROR: {}", e);
-            return;
-        }
-    };
-
-    if let Err(e) = instance.start() {
-        eprintln!("  ERROR: {}", e);
-        return;
-    }
-
-    for frame in 0..FRAMES {
-        if let Err(e) = instance.tick() {
-            eprintln!("  ERROR: {}", e);
-            return;
-        }
-
-        let led_count = match instance.led_count() {
-            Ok(count) => count,
-            Err(e) => {
-                eprintln!("  ERROR: {}", e);
-                return;
-            }
-        };
-
-        let data = match instance.led_buffer() {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("  ERROR: {}", e);
-                return;
-            }
-        };
-
-        render_frame(data, led_count, frame, FRAMES);
+    match ctx.eval(&program) {
+        Ok(_) => {}
+        Err(e) => eprintln!("  ERROR: {}", e),
     }
 }
 
@@ -137,5 +126,3 @@ fn enable_ansi_windows() {
         SetConsoleMode(handle as *mut _, mode | 0x0004);
     }
 }
-
-

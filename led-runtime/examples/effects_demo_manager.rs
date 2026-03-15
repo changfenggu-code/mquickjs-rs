@@ -14,7 +14,7 @@
 ///
 /// Usage: cargo run --example effects_demo_manager
 
-use mquickjs::{ConfigValue, EffectEngine, EffectManager};
+use led_runtime::{ConfigValue, EffectEngine, EffectManager};
 use std::io::Write;
 use std::{thread, time::Duration};
 
@@ -249,6 +249,7 @@ fn enable_ansi_windows() {
         SetConsoleMode(handle as *mut _, mode | 0x0004);
     }
 }
+
 
 
 

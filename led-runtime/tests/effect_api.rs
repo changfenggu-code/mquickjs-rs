@@ -1,4 +1,5 @@
-﻿use mquickjs::{ConfigValue, Context, EffectEngine, EffectManager};
+﻿use led_runtime::{ConfigValue, EffectEngine, EffectManager};
+use mquickjs::Context;
 
 const BLINK_JS: &str = include_str!("../js/effects/blink/effect.js");
 const CHASE_JS: &str = include_str!("../js/effects/chase/effect.js");
@@ -603,6 +604,8 @@ fn effect_manager_can_instantiate_with_structured_config() {
     assert_eq!(leds.len(), 6);
     assert_eq!(leds[0], 255);
 }
+
+
 
 
 

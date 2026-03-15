@@ -52,3 +52,7 @@ std = ["regex", "rustyline"]
 dump = []
 # Enable debug GC that moves objects on every allocation
 debug-gc = []
+
+[workspace]
+members = ["led-runtime"]
+resolver = "2"
