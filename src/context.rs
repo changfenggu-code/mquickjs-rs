@@ -16,10 +16,10 @@ use crate::vm::Interpreter;
 
 /// Approximate sizes for memory estimation (in bytes)
 /// These are rough estimates used for calculating estimated_object_bytes
-const ESTIMATED_STRING_BYTES: usize = 24;   // Average string size (header + UTF-8 chars)
-const ESTIMATED_ARRAY_BYTES: usize = 32;    // Average array (header + some elements)
-const ESTIMATED_OBJECT_BYTES: usize = 48;   // Average object (header + some properties)
-const ESTIMATED_CLOSURE_BYTES: usize = 56;  // Average closure (header + capture data)
+const ESTIMATED_STRING_BYTES: usize = 24; // Average string size (header + UTF-8 chars)
+const ESTIMATED_ARRAY_BYTES: usize = 32; // Average array (header + some elements)
+const ESTIMATED_OBJECT_BYTES: usize = 48; // Average object (header + some properties)
+const ESTIMATED_CLOSURE_BYTES: usize = 56; // Average closure (header + capture data)
 const ESTIMATED_TYPEDARRAY_BYTES: usize = 24; // Base typed array (header + type info)
 
 /// JavaScript execution context
@@ -287,7 +287,9 @@ impl Context {
         if let Some(s) = crate::value::get_builtin_string(idx) {
             Some(s.to_string())
         } else {
-            self.interpreter.get_string_by_idx(idx).map(|s| s.to_string())
+            self.interpreter
+                .get_string_by_idx(idx)
+                .map(|s| s.to_string())
         }
     }
 

@@ -1,4 +1,4 @@
-﻿use alloc::format;
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -169,8 +169,8 @@ impl EffectEngine {
     fn instantiate_from_literal(&self, config_literal: &str) -> EffectResult<EffectInstance> {
         let mut ctx = Context::new(self.memory_limit);
         // 反序列化字节码并加载到 Context
-        let (bytecode, _) = FunctionBytecode::deserialize(&self.bytecode_bytes)
-            .map_err(|e| e.to_string())?;
+        let (bytecode, _) =
+            FunctionBytecode::deserialize(&self.bytecode_bytes).map_err(|e| e.to_string())?;
         ctx.load_bytecode(bytecode).map_err(|e| e.to_string())?;
 
         // 解析配置对象并存入全局变量
@@ -187,13 +187,27 @@ impl EffectEngine {
         ctx.set_global(EFFECT_GLOBAL, effect_val);
 
         // 预编译各生命周期方法的调用脚本，后续 tick/start/stop 直接执行
-        let start_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.start();")).map_err(|e| e.to_string())?;
-        let tick_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.tick();")).map_err(|e| e.to_string())?;
-        let pause_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.pause();")).map_err(|e| e.to_string())?;
-        let resume_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.resume();")).map_err(|e| e.to_string())?;
-        let stop_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.stop();")).map_err(|e| e.to_string())?;
-        let leds_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.leds;")).map_err(|e| e.to_string())?;
-        let led_count_bc = ctx.compile(&format!("return {EFFECT_GLOBAL}.ledCount;")).map_err(|e| e.to_string())?;
+        let start_bc = ctx
+            .compile(&format!("return {EFFECT_GLOBAL}.start();"))
+            .map_err(|e| e.to_string())?;
+        let tick_bc = ctx
+            .compile(&format!("return {EFFECT_GLOBAL}.tick();"))
+            .map_err(|e| e.to_string())?;
+        let pause_bc = ctx
+            .compile(&format!("return {EFFECT_GLOBAL}.pause();"))
+            .map_err(|e| e.to_string())?;
+        let resume_bc = ctx
+            .compile(&format!("return {EFFECT_GLOBAL}.resume();"))
+            .map_err(|e| e.to_string())?;
+        let stop_bc = ctx
+            .compile(&format!("return {EFFECT_GLOBAL}.stop();"))
+            .map_err(|e| e.to_string())?;
+        let leds_bc = ctx
+            .compile(&format!("return {EFFECT_GLOBAL}.leds;"))
+            .map_err(|e| e.to_string())?;
+        let led_count_bc = ctx
+            .compile(&format!("return {EFFECT_GLOBAL}.ledCount;"))
+            .map_err(|e| e.to_string())?;
 
         Ok(EffectInstance {
             ctx,
@@ -242,7 +256,11 @@ impl EffectManager {
         config_expr: &str,
     ) -> EffectResult<usize> {
         let instance_name = instance_name.into();
-        if self.instances.iter().any(|entry| entry.name == instance_name) {
+        if self
+            .instances
+            .iter()
+            .any(|entry| entry.name == instance_name)
+        {
             return Err(format!("duplicate effect instance name: {}", instance_name));
         }
 
@@ -269,7 +287,11 @@ impl EffectManager {
         config: ConfigValue,
     ) -> EffectResult<usize> {
         let instance_name = instance_name.into();
-        if self.instances.iter().any(|entry| entry.name == instance_name) {
+        if self
+            .instances
+            .iter()
+            .any(|entry| entry.name == instance_name)
+        {
             return Err(format!("duplicate effect instance name: {}", instance_name));
         }
 
@@ -320,7 +342,10 @@ impl EffectManager {
 
     /// 返回所有实例的名称列表
     pub fn instance_names(&self) -> Vec<&str> {
-        self.instances.iter().map(|entry| entry.name.as_str()).collect()
+        self.instances
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect()
     }
 
     /// 返回实例数量
@@ -465,7 +490,9 @@ impl EffectManager {
 impl EffectInstance {
     /// 启动效果（调用 JS 的 start()）
     pub fn start(&mut self) -> EffectResult<()> {
-        self.ctx.execute(&self.start_bc).map_err(|e| e.to_string())?;
+        self.ctx
+            .execute(&self.start_bc)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -477,13 +504,17 @@ impl EffectInstance {
 
     /// 暂停效果（调用 JS 的 pause()）
     pub fn pause(&mut self) -> EffectResult<()> {
-        self.ctx.execute(&self.pause_bc).map_err(|e| e.to_string())?;
+        self.ctx
+            .execute(&self.pause_bc)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     /// 恢复效果（调用 JS 的 resume()）
     pub fn resume(&mut self) -> EffectResult<()> {
-        self.ctx.execute(&self.resume_bc).map_err(|e| e.to_string())?;
+        self.ctx
+            .execute(&self.resume_bc)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -503,7 +534,10 @@ impl EffectInstance {
 
     /// 返回 LED 灯珠数量（从 JS 的 ledCount 属性读取）
     pub fn led_count(&mut self) -> EffectResult<usize> {
-        let val = self.ctx.execute(&self.led_count_bc).map_err(|e| e.to_string())?;
+        let val = self
+            .ctx
+            .execute(&self.led_count_bc)
+            .map_err(|e| e.to_string())?;
         val.to_i32()
             .map(|v| v as usize)
             .ok_or_else(|| "effect ledCount is not an integer".to_string())
@@ -524,7 +558,10 @@ impl EffectInstance {
 
     /// 重置效果实例（重新执行 createEffect(config)）
     pub fn reset(&mut self) -> EffectResult<()> {
-        let effect_val = self.ctx.execute(&self.create_bc).map_err(|e| e.to_string())?;
+        let effect_val = self
+            .ctx
+            .execute(&self.create_bc)
+            .map_err(|e| e.to_string())?;
         self.ctx.set_global(EFFECT_GLOBAL, effect_val);
         Ok(())
     }
@@ -534,5 +571,3 @@ impl EffectInstance {
         self.ctx.memory_stats()
     }
 }
-
-

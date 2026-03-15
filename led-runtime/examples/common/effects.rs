@@ -1,4 +1,4 @@
-﻿//! LED 效果帧捕获逻辑
+//! LED 效果帧捕获逻辑
 //!
 //! 预计算动画帧：运行 effect JS 脚本，将 RGB 数据返回给 GUI 播放。
 
@@ -136,4 +136,3 @@ pub fn capture_all(num_frames: usize) -> Vec<EffectData> {
         capture_effect("Wave", WAVE_JS, num_frames),
     ]
 }
-

@@ -1,4 +1,4 @@
-﻿//! Integration tests for LED effect scripts from webfly.
+//! Integration tests for LED effect scripts from webfly.
 //!
 //! Each effect script defines `createEffect(config)` which returns a state machine
 //! with start/tick/stop/pause/resume methods and a `leds` Uint8Array buffer.
@@ -384,4 +384,3 @@ fn test_stop_clears_leds() {
     );
     assert_eq!(result.to_bool(), Some(true));
 }
-

@@ -1,4 +1,4 @@
-﻿use led_runtime::{ConfigValue, EffectEngine, EffectManager};
+use led_runtime::{ConfigValue, EffectEngine, EffectManager};
 use mquickjs::Context;
 
 const BLINK_JS: &str = include_str!("../js/effects/blink/effect.js");
@@ -39,7 +39,9 @@ fn effect_engine_from_bytecode_runs_blink() {
 #[test]
 fn effect_instance_set_config_and_reset() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let mut instance = engine.instantiate_from_expr("{ ledCount: 2, speed: 100 }").unwrap();
+    let mut instance = engine
+        .instantiate_from_expr("{ ledCount: 2, speed: 100 }")
+        .unwrap();
 
     instance.set_config("speed", ConfigValue::Int(500)).unwrap();
     instance.start().unwrap();
@@ -170,11 +172,12 @@ fn config_value_supports_arrays() {
     ]);
 
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let _ = engine.instantiate_config(ConfigValue::Object(vec![
-        ("ledCount".into(), ConfigValue::Int(2)),
-        ("extra".into(), array_literal),
-    ]))
-    .unwrap();
+    let _ = engine
+        .instantiate_config(ConfigValue::Object(vec![
+            ("ledCount".into(), ConfigValue::Int(2)),
+            ("extra".into(), array_literal),
+        ]))
+        .unwrap();
 }
 
 #[test]
@@ -487,7 +490,10 @@ fn effect_manager_can_query_and_remove_by_engine() {
         .instantiate_from_expr("rainbow", "rainbow-a", "{ ledCount: 2 }")
         .unwrap();
 
-    assert_eq!(manager.instances_for_engine("blink"), vec!["blink-a", "blink-b"]);
+    assert_eq!(
+        manager.instances_for_engine("blink"),
+        vec!["blink-a", "blink-b"]
+    );
     assert_eq!(manager.instances_for_engine("rainbow"), vec!["rainbow-a"]);
 
     let removed = manager.remove_instances_by_engine("blink");
@@ -510,16 +516,17 @@ fn effect_manager_can_set_active_config() {
         .unwrap();
 
     manager.activate_by_name("blink-a").unwrap();
-    manager.set_active_config(
-        "color",
-        ConfigValue::Object(vec![
-            ("mode".into(), ConfigValue::Str("rgb".into())),
-            ("r".into(), ConfigValue::Int(255)),
-            ("g".into(), ConfigValue::Int(0)),
-            ("b".into(), ConfigValue::Int(0)),
-        ]),
-    )
-    .unwrap();
+    manager
+        .set_active_config(
+            "color",
+            ConfigValue::Object(vec![
+                ("mode".into(), ConfigValue::Str("rgb".into())),
+                ("r".into(), ConfigValue::Int(255)),
+                ("g".into(), ConfigValue::Int(0)),
+                ("b".into(), ConfigValue::Int(0)),
+            ]),
+        )
+        .unwrap();
     manager.start_active().unwrap();
     manager.tick_active().unwrap();
 
@@ -604,9 +611,3 @@ fn effect_manager_can_instantiate_with_structured_config() {
     assert_eq!(leds.len(), 6);
     assert_eq!(leds[0], 255);
 }
-
-
-
-
-
-

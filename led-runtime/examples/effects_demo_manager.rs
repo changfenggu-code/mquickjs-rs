@@ -1,4 +1,4 @@
-﻿/// LED effects visual demo (EffectManager + structured ConfigValue version)
+/// LED effects visual demo (EffectManager + structured ConfigValue version)
 ///
 /// This example demonstrates the newest product-facing API stack:
 /// - `EffectEngine`
@@ -13,7 +13,6 @@
 /// - drives rendering via `tick_active()` / `active_led_buffer()`
 ///
 /// Usage: cargo run --example effects_demo_manager
-
 use led_runtime::{ConfigValue, EffectEngine, EffectManager};
 use std::io::Write;
 use std::{thread, time::Duration};
@@ -87,14 +86,23 @@ fn build_manager() -> EffectManager {
 
     // 添加自定义火焰效果引擎
     manager
-        .add_engine("flame", EffectEngine::from_source(FLAME_JS).expect("compile flame"))
+        .add_engine(
+            "flame",
+            EffectEngine::from_source(FLAME_JS).expect("compile flame"),
+        )
         .expect("add flame engine");
 
     manager
-        .add_engine("blink", EffectEngine::from_source(BLINK_JS).expect("compile blink"))
+        .add_engine(
+            "blink",
+            EffectEngine::from_source(BLINK_JS).expect("compile blink"),
+        )
         .expect("add blink engine");
     manager
-        .add_engine("chase", EffectEngine::from_source(CHASE_JS).expect("compile chase"))
+        .add_engine(
+            "chase",
+            EffectEngine::from_source(CHASE_JS).expect("compile chase"),
+        )
         .expect("add chase engine");
     manager
         .add_engine(
@@ -103,15 +111,14 @@ fn build_manager() -> EffectManager {
         )
         .expect("add rainbow engine");
     manager
-        .add_engine("wave", EffectEngine::from_source(WAVE_JS).expect("compile wave"))
+        .add_engine(
+            "wave",
+            EffectEngine::from_source(WAVE_JS).expect("compile wave"),
+        )
         .expect("add wave engine");
 
     manager
-        .instantiate_from_expr(
-            "blink",
-            "blink-main",
-            "{ ledCount: 20, speed: 200 }",
-        )
+        .instantiate_from_expr("blink", "blink-main", "{ ledCount: 20, speed: 200 }")
         .expect("instantiate blink-main");
 
     manager
@@ -176,9 +183,7 @@ fn build_manager() -> EffectManager {
         .instantiate_config(
             "flame",
             "flame-main",
-            ConfigValue::Object(vec![
-                ("ledCount".into(), ConfigValue::Int(20)),
-            ]),
+            ConfigValue::Object(vec![("ledCount".into(), ConfigValue::Int(20))]),
         )
         .expect("instantiate flame-main");
 
@@ -249,7 +254,3 @@ fn enable_ansi_windows() {
         SetConsoleMode(handle as *mut _, mode | 0x0004);
     }
 }
-
-
-
-
