@@ -108,6 +108,7 @@ This is a Cargo workspace with two members:
 
 ## Conventions
 
+- **Always verify after making changes** — After any code changes or running scripts, verify the output is as expected. Don't assume it works — test it.
 - **CI must pass** — run `cargo clippy -- -D warnings` and `cargo fmt --check` before considering work done.
 - **JS scripts** live in `js/examples/` (feature demos) and `js/tests/` (error handling tests). The top-level `examples/` is reserved for Rust examples by Cargo convention.
 - New opcodes go in [src/vm/opcode.rs](src/vm/opcode.rs), with the handler added in the interpreter's main `match` in [src/vm/interpreter.rs](src/vm/interpreter.rs).

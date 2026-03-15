@@ -107,6 +107,7 @@ cargo build --features debug-gc    # GC 每次分配都移动对象
 
 ## 约定
 
+- **修改代码或运行脚本后必须验证结果** — 任何代码变更或运行脚本后，必须验证输出是否符合预期，不要假设它能正常工作。
 - **CI 必须通过** — 在认为工作完成前，运行 `cargo clippy -- -D warnings` 和 `cargo fmt --check`。
 - **JS 脚本** 放在 `js/examples/`（功能演示）和 `js/tests/`（错误处理测试）。按 Cargo 惯例，顶层 `examples/` 保留给 Rust 示例。
 - 新操作码添加到 [src/vm/opcode.rs](src/vm/opcode.rs)，处理程序添加到解释器主 `match` 中（见 [src/vm/interpreter.rs](src/vm/interpreter.rs)）。

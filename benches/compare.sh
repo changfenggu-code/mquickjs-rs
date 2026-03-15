@@ -15,7 +15,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BENCH_SCRIPTS="$SCRIPT_DIR/scripts"
 
+# Detect Python (cross-platform)
+if command -v python &> /dev/null; then
+    PYTHON=python
+elif command -v python3 &> /dev/null; then
+    PYTHON=python3
+else
+    echo "Error: Python not found"
+    exit 1
+fi
+
 echo "=== MQuickJS Benchmark Comparison ==="
+echo ""
+echo "Using: $PYTHON ($($PYTHON --version 2>&1))"
 echo ""
 
 # Check for C implementation
@@ -64,14 +76,14 @@ run_bench() {
     local total=0
 
     for i in $(seq 1 $runs); do
-        local start=$(python3 -c 'import time; print(time.time())')
+        local start=$($PYTHON -c 'import time; print(time.time())')
         "$binary" "$script" > /dev/null 2>&1
-        local end=$(python3 -c 'import time; print(time.time())')
-        local elapsed=$(python3 -c "print($end - $start)")
-        total=$(python3 -c "print($total + $elapsed)")
+        local end=$($PYTHON -c 'import time; print(time.time())')
+        local elapsed=$($PYTHON -c "print($end - $start)")
+        total=$($PYTHON -c "print($total + $elapsed)")
     done
 
-    python3 -c "print(f'{$total / $runs:.4f}')"
+    $PYTHON -c "print(f'{$total / $runs:.4f}')"
 }
 
 # Run benchmarks
@@ -94,14 +106,14 @@ for script in "$BENCH_SCRIPTS"/*.js; do
     if [ "$HAS_C" = true ]; then
         # Original version
         orig_time=$(run_bench "$script" "$ORIGINAL_MQJS")
-        ratio=$(python3 -c "print(f'{$rust_time / $orig_time:.2f}x' if $orig_time > 0 else 'N/A')")
+        ratio=$($PYTHON -c "print(f'{$rust_time / $orig_time:.2f}x' if $orig_time > 0 else 'N/A')")
 
         # Determine notes
         if [ "$orig_time" != "0.0000" ]; then
-            ratio_val=$(python3 -c "print($rust_time / $orig_time)")
-            if python3 -c "exit(0 if $ratio_val < 0.9 else 1)"; then
+            ratio_val=$($PYTHON -c "print($rust_time / $orig_time)")
+            if $PYTHON -c "exit(0 if $ratio_val < 0.9 else 1)"; then
                 notes="Rust faster"
-            elif python3 -c "exit(0 if $ratio_val > 1.1 else 1)"; then
+            elif $PYTHON -c "exit(0 if $ratio_val > 1.1 else 1)"; then
                 notes="C faster"
             else
                 notes="~Equal"
