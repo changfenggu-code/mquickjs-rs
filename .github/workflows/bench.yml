@@ -71,12 +71,37 @@ jobs:
           echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
+          rust_start_total=0
+          for i in $(seq 1 "$BENCH_RUNS"); do
+            start=$(date +%s.%N)
+            ./target/release/mqjs -e "0" > /dev/null 2>&1
+            end=$(date +%s.%N)
+            elapsed=$(echo "$end - $start" | bc)
+            rust_start_total=$(echo "$rust_start_total + $elapsed" | bc)
+          done
+          rust_start=$(echo "scale=4; $rust_start_total / $BENCH_RUNS" | bc)
+
+          if [ -n "${C_BIN:-}" ]; then
+            c_start_total=0
+            for i in $(seq 1 "$BENCH_RUNS"); do
+              start=$(date +%s.%N)
+              "$C_BIN" -e "0" > /dev/null 2>&1
+              end=$(date +%s.%N)
+              elapsed=$(echo "$end - $start" | bc)
+              c_start_total=$(echo "$c_start_total + $elapsed" | bc)
+            done
+            c_start=$(echo "scale=4; $c_start_total / $BENCH_RUNS" | bc)
+          fi
+
           if [ -n "${C_BIN:-}" ]; then
             echo "| Benchmark | Rust (s) | C (s) | Ratio | Notes |" >> $GITHUB_STEP_SUMMARY
             echo "|-----------|----------|-------|-------|-------|" >> $GITHUB_STEP_SUMMARY
+            start_ratio=$(printf "%.2f" "$(echo "scale=4; $rust_start / $c_start" | bc)" 2>/dev/null || echo "N/A")
+            echo "| startup_baseline | $rust_start | $c_start | ${start_ratio}x | process startup |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| Benchmark | Rust (s) | Notes |" >> $GITHUB_STEP_SUMMARY
             echo "|-----------|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| startup_baseline | $rust_start | process startup |" >> $GITHUB_STEP_SUMMARY
           fi
 
           for script in benches/scripts/*.js; do
@@ -106,7 +131,8 @@ jobs:
               c_time=$(echo "scale=4; $c_total / $BENCH_RUNS" | bc)
 
               # Calculate ratio
-              ratio=$(echo "scale=2; $rust_time / $c_time" | bc)
+              raw_ratio=$(echo "scale=2; $rust_time / $c_time" | bc)
+              ratio=$(printf "%.2f" "$raw_ratio" 2>/dev/null || echo "0$raw_ratio")
 
               # Determine notes
               if (( $(echo "$ratio < 0.9" | bc -l) )); then
@@ -127,7 +153,25 @@ jobs:
           echo "_Benchmarks run on GitHub Actions runner (Ubuntu)_" >> $GITHUB_STEP_SUMMARY
 
       - name: Run Criterion benchmarks
-        run: cargo bench --no-run
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo bench --bench js_benchmarks > criterion_output.txt 2>&1
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Criterion Analysis (Rust-only, Ubuntu)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Benchmark | Criterion Time |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|----------------|" >> $GITHUB_STEP_SUMMARY
+
+          grep "time:" criterion_output.txt | while IFS= read -r line; do
+            name=$(echo "$line" | sed -E 's/[[:space:]]+time:.*$//' | sed -E 's/[[:space:]]+$//')
+            time=$(echo "$line" | sed -E 's/^.*time:[[:space:]]+//')
+            echo "| $name | $time |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Criterion table is intended for detailed Rust-side analysis on a stable runner; Rust-vs-C table above is the cross-implementation comparison view._" >> $GITHUB_STEP_SUMMARY
 
   benchmark-macos:
     runs-on: macos-latest

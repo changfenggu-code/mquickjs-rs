@@ -276,6 +276,16 @@ impl Context {
         self.interpreter.register_native(name, func, arity)
     }
 
+    #[cfg(feature = "dump")]
+    pub fn reset_opcode_counts(&mut self) {
+        self.interpreter.reset_opcode_counts();
+    }
+
+    #[cfg(feature = "dump")]
+    pub fn opcode_counts(&self) -> &[u64; 256] {
+        self.interpreter.opcode_counts()
+    }
+
     /// Read raw bytes from a TypedArray value.
     pub fn read_typed_array(&self, value: Value) -> Option<&[u8]> {
         self.interpreter.read_typed_array(value)
@@ -344,5 +354,23 @@ impl Context {
     /// Clear the current exception
     pub fn clear_exception(&mut self) {
         self.current_exception = Value::undefined();
+    }
+}
+
+#[cfg(all(test, feature = "dump"))]
+mod dump_tests {
+    use super::*;
+    use crate::vm::opcode::OpCode;
+
+    #[test]
+    fn test_opcode_counts_record_execution() {
+        let mut ctx = Context::new(64 * 1024);
+        ctx.reset_opcode_counts();
+        let result = ctx.eval("return 1 + 2;").unwrap();
+        assert_eq!(result.to_i32(), Some(3));
+
+        let counts = ctx.opcode_counts();
+        assert!(counts[OpCode::Add as usize] > 0);
+        assert!(counts.iter().copied().sum::<u64>() > 0);
     }
 }

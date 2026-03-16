@@ -298,7 +298,7 @@ pub(crate) fn native_array_map(
     let mut result = Vec::with_capacity(arr_clone.len());
 
     for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = vec![*element, Value::int(i as i32), this];
+        let call_args = [*element, Value::int(i as i32), this];
         let mapped = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -339,7 +339,7 @@ pub(crate) fn native_array_filter(
     let mut result = Vec::new();
 
     for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = vec![*element, Value::int(i as i32), this];
+        let call_args = [*element, Value::int(i as i32), this];
         let keep = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -382,7 +382,7 @@ pub(crate) fn native_array_foreach(
         .clone();
 
     for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = vec![*element, Value::int(i as i32), this];
+        let call_args = [*element, Value::int(i as i32), this];
         interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -429,7 +429,7 @@ pub(crate) fn native_array_reduce(
     };
 
     for (i, element) in arr_clone.iter().enumerate().skip(start_idx) {
-        let call_args = vec![accumulator, *element, Value::int(i as i32), this];
+        let call_args = [accumulator, *element, Value::int(i as i32), this];
         accumulator = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -465,7 +465,7 @@ pub(crate) fn native_array_find(
         .clone();
 
     for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = vec![*element, Value::int(i as i32), this];
+        let call_args = [*element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -505,7 +505,7 @@ pub(crate) fn native_array_find_index(
         .clone();
 
     for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = vec![*element, Value::int(i as i32), this];
+        let call_args = [*element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -545,7 +545,7 @@ pub(crate) fn native_array_some(
         .clone();
 
     for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = vec![*element, Value::int(i as i32), this];
+        let call_args = [*element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -585,7 +585,7 @@ pub(crate) fn native_array_every(
         .clone();
 
     for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = vec![*element, Value::int(i as i32), this];
+        let call_args = [*element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -3649,7 +3649,7 @@ pub(crate) fn native_array_reduce_right(
     // Iterate from right to left
     for i in (0..end_idx).rev() {
         let element = arr_clone[i];
-        let call_args = vec![accumulator, element, Value::int(i as i32), this];
+        let call_args = [accumulator, element, Value::int(i as i32), this];
         accumulator = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;

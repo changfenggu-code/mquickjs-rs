@@ -7,6 +7,7 @@ use crate::value::Value;
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::Stack;
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
+use core::fmt::Write;
 
 // Native function implementations and format helpers (defined in natives.rs)
 use super::natives::*;
@@ -46,6 +47,8 @@ impl Interpreter {
             next_timer_id: 1,
             gc_count: 0,
             random_seed: 12345,
+            #[cfg(feature = "dump")]
+            opcode_counts: [0; 256],
         };
         interp.register_builtins();
         interp
@@ -77,6 +80,8 @@ impl Interpreter {
             next_timer_id: 1,
             gc_count: 0,
             random_seed: 12345,
+            #[cfg(feature = "dump")]
+            opcode_counts: [0; 256],
         };
         interp.register_builtins();
         interp
@@ -136,6 +141,25 @@ impl Interpreter {
         let idx = self.runtime_strings.len();
         self.runtime_strings.push(s);
         Value::string(Self::RUNTIME_STRING_OFFSET + idx as u16)
+    }
+
+    #[inline]
+    fn append_value_to_string(&self, out: &mut String, val: Value, bytecode: &FunctionBytecode) {
+        if val.is_string() {
+            out.push_str(self.get_string_content(val, bytecode).unwrap_or_default());
+        } else if let Some(n) = val.to_i32() {
+            let _ = write!(out, "{}", n);
+        } else if let Some(f) = val.to_f32() {
+            out.push_str(&crate::value::format_float(f));
+        } else if let Some(b) = val.to_bool() {
+            out.push_str(if b { "true" } else { "false" });
+        } else if val.is_null() {
+            out.push_str("null");
+        } else if val.is_undefined() {
+            out.push_str("undefined");
+        } else {
+            out.push_str("[object]");
+        }
     }
 
     /// Promote a compile-time string value to a runtime string so it can be
@@ -322,11 +346,29 @@ impl Interpreter {
     }
 
     /// Get a property from an object
+    #[inline]
     fn object_get_property(&self, obj_idx: u32, key: &str) -> Value {
         if let Some(obj) = self.get_object(obj_idx) {
-            for (k, v) in obj.properties.iter() {
-                if k == key {
-                    return *v;
+            match obj.properties.as_slice() {
+                [(k0, v0)] => {
+                    if k0 == key {
+                        return *v0;
+                    }
+                }
+                [(k0, v0), (k1, v1)] => {
+                    if k0 == key {
+                        return *v0;
+                    }
+                    if k1 == key {
+                        return *v1;
+                    }
+                }
+                _ => {
+                    for (k, v) in obj.properties.iter() {
+                        if k == key {
+                            return *v;
+                        }
+                    }
                 }
             }
         }
@@ -339,6 +381,85 @@ impl Interpreter {
                 .get_native_func("Object.prototype.toString")
                 .unwrap_or_default(),
             _ => Value::undefined(),
+        }
+    }
+
+    #[inline]
+    fn for_of_next_value(&mut self, iter_idx: usize) -> Option<Value> {
+        let iter = self.for_of_iterators.get_mut(iter_idx)?;
+        match iter {
+            ForOfIterator::Array { arr_idx, index } => {
+                let value = self
+                    .arrays
+                    .get(*arr_idx as usize)
+                    .and_then(|arr| arr.get(*index).copied());
+                if value.is_some() {
+                    *index += 1;
+                }
+                value
+            }
+            ForOfIterator::Values { values, index } => {
+                let value = values.get(*index).copied();
+                if value.is_some() {
+                    *index += 1;
+                }
+                value
+            }
+        }
+    }
+
+    #[inline]
+    fn for_in_next_key(&mut self, iter_idx: usize) -> Option<String> {
+        let iter = self.for_in_iterators.get_mut(iter_idx)?;
+        match iter {
+            ForInIterator::Object { obj_idx, len, index } => {
+                if *index >= *len {
+                    return None;
+                }
+                let key = self
+                    .objects
+                    .get(*obj_idx as usize)
+                    .and_then(|obj| obj.properties.get(*index))
+                    .map(|(k, _)| k.clone());
+                *index += 1;
+                key
+            }
+            ForInIterator::Array { len, index } => {
+                if *index >= *len {
+                    return None;
+                }
+                let key = index.to_string();
+                *index += 1;
+                Some(key)
+            }
+            ForInIterator::Empty => None,
+        }
+    }
+
+    #[inline]
+    fn get_field_value(&mut self, obj: Value, prop_name: &str) -> Value {
+        if let Some(obj_idx) = obj.to_object_idx() {
+            self.object_get_property(obj_idx, prop_name)
+        } else if let Some(builtin_idx) = obj.to_builtin_object_idx() {
+            self.get_builtin_property(builtin_idx, prop_name)
+        } else if let Some(typed_idx) = obj.to_typed_array_idx() {
+            self.get_typed_array_property(typed_idx, prop_name)
+        } else if let Some(ab_idx) = obj.to_array_buffer_idx() {
+            self.get_array_buffer_property(ab_idx, prop_name)
+        } else if obj.is_array() {
+            self.get_array_property(obj, prop_name)
+        } else if let Some(err_idx) = obj.to_error_object_idx() {
+            self.get_error_property(err_idx, prop_name)
+        } else if let Some(regex_idx) = obj.to_regexp_object_idx() {
+            self.get_regexp_property(regex_idx, prop_name)
+        } else if obj.is_string() {
+            self.get_string_property(obj, prop_name)
+        } else if obj.is_number() {
+            self.get_number_property(obj, prop_name)
+        } else if obj.is_closure() || obj.to_func_ptr().is_some() {
+            self.get_function_property(prop_name)
+        } else {
+            Value::undefined()
         }
     }
 
@@ -452,6 +573,16 @@ impl Interpreter {
         self.call_function(bytecode, Value::undefined(), &[])
     }
 
+    #[cfg(feature = "dump")]
+    pub fn reset_opcode_counts(&mut self) {
+        self.opcode_counts = [0; 256];
+    }
+
+    #[cfg(feature = "dump")]
+    pub fn opcode_counts(&self) -> &[u64; 256] {
+        &self.opcode_counts
+    }
+
     /// Call a function with the given `this` value and arguments
     pub fn call_function(
         &mut self,
@@ -521,23 +652,23 @@ impl Interpreter {
         self.error_objects.push(err_obj);
         let exception = Value::error_object(err_idx);
 
-        // Route through exception handler (same logic as Throw opcode)
-        let handler = self.exception_handlers.pop().unwrap();
+        self.route_exception_to_handler(exception)
+    }
 
-        // Unwind call stack to the handler's frame
-        while self.call_stack.len() > handler.frame_depth {
-            self.call_stack.pop();
-        }
+    #[inline]
+    fn route_exception_to_handler(&mut self, exception: Value) -> InterpreterResult<()> {
+        let handler = match self.exception_handlers.pop() {
+            Some(handler) => handler,
+            None => {
+                let msg = format_value(self, exception);
+                return Err(InterpreterError::UncaughtException(msg));
+            }
+        };
 
-        // Restore stack to handler's depth
-        while self.stack.len() > handler.stack_depth {
-            self.stack.pop();
-        }
-
-        // Push the exception value for the catch block
+        self.call_stack.truncate(handler.frame_depth);
+        self.stack.drop_n(self.stack.len().saturating_sub(handler.stack_depth));
         self.stack.push(exception);
 
-        // Jump to catch block
         if let Some(frame) = self.call_stack.last_mut() {
             frame.pc = handler.catch_pc;
             Ok(())
@@ -586,6 +717,11 @@ impl Interpreter {
             // Fetch opcode
             let opcode_byte = bc[frame.pc];
             frame.pc += 1;
+
+            #[cfg(feature = "dump")]
+            {
+                self.opcode_counts[opcode_byte as usize] += 1;
+            }
 
             // Decode and execute
             match opcode_byte {
@@ -766,7 +902,8 @@ impl Interpreter {
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
                     } else {
-                        self.stack.get_local_at(frame_ptr, 0).unwrap_or_default()
+                        // SAFETY: local slot 0 is valid for well-formed bytecode frames
+                        unsafe { self.stack.get_local_at_unchecked(frame_ptr, 0) }
                     };
                     self.stack.push(val);
                 }
@@ -780,7 +917,8 @@ impl Interpreter {
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
                     } else {
-                        self.stack.get_local_at(frame_ptr, 1).unwrap_or_default()
+                        // SAFETY: local slot 1 is valid for well-formed bytecode frames
+                        unsafe { self.stack.get_local_at_unchecked(frame_ptr, 1) }
                     };
                     self.stack.push(val);
                 }
@@ -794,7 +932,8 @@ impl Interpreter {
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
                     } else {
-                        self.stack.get_local_at(frame_ptr, 2).unwrap_or_default()
+                        // SAFETY: local slot 2 is valid for well-formed bytecode frames
+                        unsafe { self.stack.get_local_at_unchecked(frame_ptr, 2) }
                     };
                     self.stack.push(val);
                 }
@@ -808,7 +947,8 @@ impl Interpreter {
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
                     } else {
-                        self.stack.get_local_at(frame_ptr, 3).unwrap_or_default()
+                        // SAFETY: local slot 3 is valid for well-formed bytecode frames
+                        unsafe { self.stack.get_local_at_unchecked(frame_ptr, 3) }
                     };
                     self.stack.push(val);
                 }
@@ -825,7 +965,8 @@ impl Interpreter {
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
                     } else {
-                        self.stack.set_local_at(frame_ptr, 0, val);
+                        // SAFETY: local slot 0 is valid for well-formed bytecode frames
+                        unsafe { self.stack.set_local_at_unchecked(frame_ptr, 0, val) };
                     }
                 }
                 op if op == OpCode::PutLoc1 as u8 => {
@@ -839,7 +980,8 @@ impl Interpreter {
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
                     } else {
-                        self.stack.set_local_at(frame_ptr, 1, val);
+                        // SAFETY: local slot 1 is valid for well-formed bytecode frames
+                        unsafe { self.stack.set_local_at_unchecked(frame_ptr, 1, val) };
                     }
                 }
                 op if op == OpCode::PutLoc2 as u8 => {
@@ -853,7 +995,8 @@ impl Interpreter {
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
                     } else {
-                        self.stack.set_local_at(frame_ptr, 2, val);
+                        // SAFETY: local slot 2 is valid for well-formed bytecode frames
+                        unsafe { self.stack.set_local_at_unchecked(frame_ptr, 2, val) };
                     }
                 }
                 op if op == OpCode::PutLoc3 as u8 => {
@@ -867,7 +1010,8 @@ impl Interpreter {
                     if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize] = val;
                     } else {
-                        self.stack.set_local_at(frame_ptr, 3, val);
+                        // SAFETY: local slot 3 is valid for well-formed bytecode frames
+                        unsafe { self.stack.set_local_at_unchecked(frame_ptr, 3, val) };
                     }
                 }
 
@@ -1055,51 +1199,34 @@ impl Interpreter {
 
                 // Arithmetic: Add (also handles string concatenation)
                 op if op == OpCode::Add as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
 
                     // String concatenation: if either operand is a string, convert both to strings and concat
                     if a.is_string() || b.is_string() {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
 
-                        let str_a = if a.is_string() {
+                        let len_a = if a.is_string() {
                             self.get_string_content(a, bytecode)
                                 .unwrap_or_default()
-                                .to_string()
-                        } else if let Some(n) = a.to_i32() {
-                            n.to_string()
-                        } else if let Some(f) = a.to_f32() {
-                            crate::value::format_float(f)
-                        } else if let Some(b) = a.to_bool() {
-                            if b { "true" } else { "false" }.to_string()
-                        } else if a.is_null() {
-                            "null".to_string()
-                        } else if a.is_undefined() {
-                            "undefined".to_string()
+                                .len()
                         } else {
-                            "[object]".to_string()
+                            0
                         };
-
-                        let str_b = if b.is_string() {
+                        let len_b = if b.is_string() {
                             self.get_string_content(b, bytecode)
                                 .unwrap_or_default()
-                                .to_string()
-                        } else if let Some(n) = b.to_i32() {
-                            n.to_string()
-                        } else if let Some(f) = b.to_f32() {
-                            crate::value::format_float(f)
-                        } else if let Some(bv) = b.to_bool() {
-                            if bv { "true" } else { "false" }.to_string()
-                        } else if b.is_null() {
-                            "null".to_string()
-                        } else if b.is_undefined() {
-                            "undefined".to_string()
+                                .len()
                         } else {
-                            "[object]".to_string()
+                            0
                         };
 
-                        let result = self.create_runtime_string(str_a + &str_b);
+                        let mut out = String::with_capacity(len_a + len_b + 16);
+                        self.append_value_to_string(&mut out, a, bytecode);
+                        self.append_value_to_string(&mut out, b, bytecode);
+
+                        let result = self.create_runtime_string(out);
                         self.stack.push(result);
                     } else {
                         match self.try_op(self.op_add(a, b))? {
@@ -1111,8 +1238,8 @@ impl Interpreter {
 
                 // Arithmetic: Subtract
                 op if op == OpCode::Sub as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     match self.try_op(self.op_sub(a, b))? {
                         Some(result) => self.stack.push(result),
                         None => continue,
@@ -1121,8 +1248,8 @@ impl Interpreter {
 
                 // Arithmetic: Multiply
                 op if op == OpCode::Mul as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     match self.try_op(self.op_mul(a, b))? {
                         Some(result) => self.stack.push(result),
                         None => continue,
@@ -1131,8 +1258,8 @@ impl Interpreter {
 
                 // Arithmetic: Divide
                 op if op == OpCode::Div as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     match self.try_op(self.op_div(a, b))? {
                         Some(result) => self.stack.push(result),
                         None => continue,
@@ -1141,9 +1268,19 @@ impl Interpreter {
 
                 // Arithmetic: Modulo
                 op if op == OpCode::Mod as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     match self.try_op(self.op_mod(a, b))? {
+                        Some(result) => self.stack.push(result),
+                        None => continue,
+                    }
+                }
+
+                // Exponentiation: a ** b
+                op if op == OpCode::Pow as u8 => {
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
+                    match self.try_op(self.op_pow(a, b))? {
                         Some(result) => self.stack.push(result),
                         None => continue,
                     }
@@ -1151,8 +1288,8 @@ impl Interpreter {
 
                 // Comparison: Less than
                 op if op == OpCode::Lt as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     // String lexicographic comparison
                     if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
@@ -1176,8 +1313,8 @@ impl Interpreter {
 
                 // Comparison: Less than or equal
                 op if op == OpCode::Lte as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
@@ -1200,8 +1337,8 @@ impl Interpreter {
 
                 // Comparison: Greater than
                 op if op == OpCode::Gt as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
@@ -1224,8 +1361,8 @@ impl Interpreter {
 
                 // Comparison: Greater than or equal
                 op if op == OpCode::Gte as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
@@ -1248,8 +1385,8 @@ impl Interpreter {
 
                 // Comparison: Equal (==) — abstract equality with type coercion
                 op if op == OpCode::Eq as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     // String == String: compare content
                     if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
@@ -1267,8 +1404,8 @@ impl Interpreter {
 
                 // Comparison: Not equal (!=) — abstract inequality
                 op if op == OpCode::Neq as u8 => {
-                    let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // SAFETY: Stack operations are valid for well-formed bytecode
+                    let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
@@ -1287,8 +1424,16 @@ impl Interpreter {
                 op if op == OpCode::StrictEq as u8 => {
                     let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    if a == b {
+                        self.stack.push(Value::bool(!a.is_nan_value()));
+                    } else if let (Some(ia), Some(ib)) = (a.to_i32(), b.to_i32()) {
+                        self.stack.push(Value::bool(ia == ib));
+                    } else if let (Some(ba), Some(bb)) = (a.to_bool(), b.to_bool()) {
+                        self.stack.push(Value::bool(ba == bb));
+                    } else if (a.is_null() && b.is_undefined()) || (a.is_undefined() && b.is_null()) {
+                        self.stack.push(Value::bool(false));
                     // String === String: compare content
-                    if a.is_string() && b.is_string() {
+                    } else if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
                         let sa = self.get_string_content(a, bytecode).unwrap_or_default();
@@ -1304,7 +1449,15 @@ impl Interpreter {
                 op if op == OpCode::StrictNeq as u8 => {
                     let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    if a.is_string() && b.is_string() {
+                    if a == b {
+                        self.stack.push(Value::bool(a.is_nan_value()));
+                    } else if let (Some(ia), Some(ib)) = (a.to_i32(), b.to_i32()) {
+                        self.stack.push(Value::bool(ia != ib));
+                    } else if let (Some(ba), Some(bb)) = (a.to_bool(), b.to_bool()) {
+                        self.stack.push(Value::bool(ba != bb));
+                    } else if (a.is_null() && b.is_undefined()) || (a.is_undefined() && b.is_null()) {
+                        self.stack.push(Value::bool(true));
+                    } else if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
                         let sa = self.get_string_content(a, bytecode).unwrap_or_default();
@@ -2065,30 +2218,67 @@ impl Interpreter {
                     let argc = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]) as usize;
                     frame.pc += 2;
 
-                    // Collect arguments (they were pushed in order)
+                    // Remove method and object from below the arguments so that
+                    // native fast paths can consume arguments directly from the stack.
+                    let method_val = self
+                        .stack
+                        .remove_at_offset(argc)
+                        .ok_or(InterpreterError::StackUnderflow)?;
+
+                    let this_val = self
+                        .stack
+                        .remove_at_offset(argc)
+                        .ok_or(InterpreterError::StackUnderflow)?;
+
+                    // Promote compile-time string arguments in-place on stack.
+                    {
+                        let stack_len = self.stack.len();
+                        for i in 0..argc {
+                            let slot = stack_len - argc + i;
+                            let val = self.stack.get_raw(slot);
+                            if val.is_string() {
+                                let promoted = self.promote_string(val, bytecode);
+                                self.stack.set_raw(slot, promoted);
+                            }
+                        }
+                    }
+
+                    // Check if this is a native function call
+                    if let Some(native_idx) = method_val.to_native_func_idx() {
+                        let result = match argc {
+                            0 => self.call_native_func(native_idx, this_val, &[]),
+                            1 => {
+                                let a0 = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0];
+                                self.call_native_func(native_idx, this_val, &args)
+                            }
+                            2 => {
+                                let a1 = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a0 = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0, a1];
+                                self.call_native_func(native_idx, this_val, &args)
+                            }
+                            _ => {
+                                let mut args = Vec::with_capacity(argc);
+                                for _ in 0..argc {
+                                    args.push(
+                                        self.stack.pop().ok_or(InterpreterError::StackUnderflow)?
+                                    );
+                                }
+                                args.reverse();
+                                self.call_native_func(native_idx, this_val, &args)
+                            }
+                        }?;
+                        self.stack.push(result);
+                        continue;
+                    }
+
+                    // Collect arguments for non-native method calls (they were pushed in order)
                     let mut args = Vec::with_capacity(argc);
                     for _ in 0..argc {
                         args.push(self.stack.pop().ok_or(InterpreterError::StackUnderflow)?);
                     }
-                    args.reverse(); // Arguments were pushed left-to-right
-
-                    // Promote compile-time string arguments to runtime strings
-                    for arg in &mut args {
-                        *arg = self.promote_string(*arg, bytecode);
-                    }
-
-                    // Pop the method value
-                    let method_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-
-                    // Pop the object (this value)
-                    let this_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-
-                    // Check if this is a native function call
-                    if let Some(native_idx) = method_val.to_native_func_idx() {
-                        let result = self.call_native_func(native_idx, this_val, &args)?;
-                        self.stack.push(result);
-                        continue;
-                    }
+                    args.reverse();
 
                     // Determine if this is a closure or a regular function
                     let (callee_bytecode, callee_closure_idx): (&FunctionBytecode, Option<usize>) =
@@ -2390,35 +2580,7 @@ impl Interpreter {
                 // Throw - throw exception
                 op if op == OpCode::Throw as u8 => {
                     let exception = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-
-                    // Find the nearest exception handler
-                    if let Some(handler) = self.exception_handlers.pop() {
-                        // Unwind call stack to the handler's frame
-                        while self.call_stack.len() > handler.frame_depth {
-                            self.call_stack.pop();
-                        }
-
-                        // Restore stack to handler's depth
-                        while self.stack.len() > handler.stack_depth {
-                            self.stack.pop();
-                        }
-
-                        // Push the exception value for the catch block
-                        self.stack.push(exception);
-
-                        // Jump to catch block
-                        if let Some(frame) = self.call_stack.last_mut() {
-                            frame.pc = handler.catch_pc;
-                        } else {
-                            // No more frames - unhandled exception
-                            let msg = format_value(self, exception);
-                            return Err(InterpreterError::UncaughtException(msg));
-                        }
-                    } else {
-                        // No handler - unhandled exception
-                        let msg = format_value(self, exception);
-                        return Err(InterpreterError::UncaughtException(msg));
-                    }
+                    self.route_exception_to_handler(exception)?;
                 }
 
                 // ArrayFrom - create array from stack elements
@@ -2622,46 +2784,8 @@ impl Interpreter {
                         ))
                     })?;
 
-                    // Check if this is a builtin object (Math, JSON, etc.)
-                    if let Some(builtin_idx) = obj.to_builtin_object_idx() {
-                        let val = self.get_builtin_property(builtin_idx, prop_name);
-                        self.stack.push(val);
-                    } else if let Some(typed_idx) = obj.to_typed_array_idx() {
-                        // TypedArray property access
-                        let val = self.get_typed_array_property(typed_idx, prop_name);
-                        self.stack.push(val);
-                    } else if let Some(ab_idx) = obj.to_array_buffer_idx() {
-                        // ArrayBuffer property access
-                        let val = self.get_array_buffer_property(ab_idx, prop_name);
-                        self.stack.push(val);
-                    } else if obj.is_array() {
-                        // Array property access - check for Array.prototype methods
-                        let val = self.get_array_property(obj, prop_name);
-                        self.stack.push(val);
-                    } else if let Some(err_idx) = obj.to_error_object_idx() {
-                        // Error object property access
-                        let val = self.get_error_property(err_idx, prop_name);
-                        self.stack.push(val);
-                    } else if let Some(regex_idx) = obj.to_regexp_object_idx() {
-                        // RegExp object property access
-                        let val = self.get_regexp_property(regex_idx, prop_name);
-                        self.stack.push(val);
-                    } else if let Some(obj_idx) = obj.to_object_idx() {
-                        // Get property from regular object
-                        let val = self.object_get_property(obj_idx, prop_name);
-                        self.stack.push(val);
-                    } else if obj.is_string() {
-                        // String property access - check for String.prototype methods
-                        let val = self.get_string_property(obj, prop_name);
-                        self.stack.push(val);
-                    } else if obj.is_number() {
-                        // Number property access - check for Number.prototype methods
-                        let val = self.get_number_property(obj, prop_name);
-                        self.stack.push(val);
-                    } else {
-                        // For non-objects, return undefined
-                        self.stack.push(Value::undefined());
-                    }
+                    let val = self.get_field_value(obj, prop_name);
+                    self.stack.push(val);
                 }
 
                 // GetField2 - get object property but keep object: obj -> obj value
@@ -2684,30 +2808,7 @@ impl Interpreter {
                         ))
                     })?;
 
-                    // Get the property value (same logic as GetField)
-                    let val = if let Some(builtin_idx) = obj.to_builtin_object_idx() {
-                        self.get_builtin_property(builtin_idx, prop_name)
-                    } else if let Some(typed_idx) = obj.to_typed_array_idx() {
-                        self.get_typed_array_property(typed_idx, prop_name)
-                    } else if let Some(ab_idx) = obj.to_array_buffer_idx() {
-                        self.get_array_buffer_property(ab_idx, prop_name)
-                    } else if obj.is_array() {
-                        self.get_array_property(obj, prop_name)
-                    } else if let Some(regex_idx) = obj.to_regexp_object_idx() {
-                        self.get_regexp_property(regex_idx, prop_name)
-                    } else if let Some(obj_idx) = obj.to_object_idx() {
-                        self.object_get_property(obj_idx, prop_name)
-                    } else if obj.is_string() {
-                        self.get_string_property(obj, prop_name)
-                    } else if obj.is_number() {
-                        // Number.prototype methods
-                        self.get_number_property(obj, prop_name)
-                    } else if obj.is_closure() || obj.to_func_ptr().is_some() {
-                        // Function.prototype methods (call, apply, bind)
-                        self.get_function_property(prop_name)
-                    } else {
-                        Value::undefined()
-                    };
+                    let val = self.get_field_value(obj, prop_name);
 
                     // Push the property value (object is still on stack below it)
                     self.stack.push(val);
@@ -2934,28 +3035,19 @@ impl Interpreter {
                     // Create iterator based on value type
                     let iter = if let Some(obj_idx) = obj.to_object_idx() {
                         if let Some(obj_instance) = self.get_object(obj_idx) {
-                            ForInIterator::from_object(obj_instance)
+                            ForInIterator::from_object_idx(obj_idx, obj_instance.properties.len())
                         } else {
-                            ForInIterator {
-                                keys: Vec::new(),
-                                index: 0,
-                            }
+                            ForInIterator::empty()
                         }
                     } else if let Some(arr_idx) = obj.to_array_idx() {
                         if let Some(arr) = self.get_array(arr_idx) {
-                            ForInIterator::from_array(arr)
+                            ForInIterator::from_array_len(arr.len())
                         } else {
-                            ForInIterator {
-                                keys: Vec::new(),
-                                index: 0,
-                            }
+                            ForInIterator::empty()
                         }
                     } else {
                         // For non-objects/arrays, create empty iterator
-                        ForInIterator {
-                            keys: Vec::new(),
-                            index: 0,
-                        }
+                        ForInIterator::empty()
                     };
 
                     // Store iterator and push reference
@@ -2969,8 +3061,8 @@ impl Interpreter {
                     let iter_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
 
                     if let Some(iter_idx) = iter_val.to_iterator_idx() {
-                        if let Some(iter) = self.for_in_iterators.get_mut(iter_idx as usize) {
-                            if let Some(key) = iter.next() {
+                        if self.for_in_iterators.get(iter_idx as usize).is_some() {
+                            if let Some(key) = self.for_in_next_key(iter_idx as usize) {
                                 // Push key and false (not done)
                                 let key_val = self.create_runtime_string(key);
                                 self.stack.push(key_val);
@@ -2998,29 +3090,20 @@ impl Interpreter {
 
                     // Create iterator based on value type
                     let iter = if let Some(arr_idx) = obj.to_array_idx() {
-                        if let Some(arr) = self.get_array(arr_idx) {
-                            ForOfIterator::from_array(arr)
+                        if self.get_array(arr_idx).is_some() {
+                            ForOfIterator::from_array_idx(arr_idx)
                         } else {
-                            ForOfIterator {
-                                values: Vec::new(),
-                                index: 0,
-                            }
+                            ForOfIterator::empty()
                         }
                     } else if let Some(obj_idx) = obj.to_object_idx() {
                         if let Some(obj_instance) = self.get_object(obj_idx) {
                             ForOfIterator::from_object(obj_instance)
                         } else {
-                            ForOfIterator {
-                                values: Vec::new(),
-                                index: 0,
-                            }
+                            ForOfIterator::empty()
                         }
                     } else {
                         // For non-objects/arrays, create empty iterator
-                        ForOfIterator {
-                            values: Vec::new(),
-                            index: 0,
-                        }
+                        ForOfIterator::empty()
                     };
 
                     // Store iterator and push reference
@@ -3034,8 +3117,8 @@ impl Interpreter {
                     let iter_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
 
                     if let Some(iter_idx) = iter_val.to_for_of_iterator_idx() {
-                        if let Some(iter) = self.for_of_iterators.get_mut(iter_idx as usize) {
-                            if let Some(val) = iter.next() {
+                        if self.for_of_iterators.get(iter_idx as usize).is_some() {
+                            if let Some(val) = self.for_of_next_value(iter_idx as usize) {
                                 // Push value and false (not done)
                                 self.stack.push(val);
                                 self.stack.push(Value::bool(false)); // not done

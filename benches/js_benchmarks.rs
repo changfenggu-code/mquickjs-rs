@@ -325,6 +325,52 @@ fn bench_deep_property(c: &mut Criterion) {
     });
 }
 
+fn bench_try_catch(c: &mut Criterion) {
+    let code = r#"
+        var sum = 0;
+        for (var i = 0; i < 5000; i = i + 1) {
+            try {
+                throw i;
+            } catch (e) {
+                sum = sum + e;
+            }
+        }
+        return sum;
+    "#;
+
+    c.bench_function("try_catch 5k", |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(256 * 1024);
+            black_box(ctx.eval(code).unwrap())
+        })
+    });
+}
+
+fn bench_for_in_object(c: &mut Criterion) {
+    let code = r#"
+        var obj = {
+            k0: 0,  k1: 1,  k2: 2,  k3: 3,  k4: 4,
+            k5: 5,  k6: 6,  k7: 7,  k8: 8,  k9: 9,
+            k10: 10, k11: 11, k12: 12, k13: 13, k14: 14,
+            k15: 15, k16: 16, k17: 17, k18: 18, k19: 19
+        };
+        var sum = 0;
+        for (var round = 0; round < 2000; round = round + 1) {
+            for (var k in obj) {
+                sum = sum + k.length;
+            }
+        }
+        return sum;
+    "#;
+
+    c.bench_function("for_in_object 20x2000", |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(256 * 1024);
+            black_box(ctx.eval(code).unwrap())
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_fib,
@@ -342,6 +388,8 @@ criterion_group!(
     bench_runtime_string_pressure,
     bench_for_of_array,
     bench_deep_property,
+    bench_try_catch,
+    bench_for_in_object,
 );
 
 criterion_main!(benches);

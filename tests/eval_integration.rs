@@ -824,6 +824,28 @@ fn test_try_catch_exception_with_finally() {
 }
 
 #[test]
+fn test_try_catch_repeated_throw_loop() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var sum = 0;
+        for (var i = 0; i < 5; i = i + 1) {
+            try {
+                throw i;
+            } catch (e) {
+                sum = sum + e;
+            }
+        }
+        return sum;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(10));
+}
+
+#[test]
 fn test_throw_statement() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -973,6 +995,22 @@ fn test_array_extend_on_assignment() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(100));
+}
+
+#[test]
+fn test_array_assignment_expression_returns_value() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var arr = [];
+        var x = (arr[0] = 7);
+        return x + arr[0];
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(14));
 }
 
 #[test]
@@ -1590,6 +1628,32 @@ fn test_for_in_break() {
 }
 
 #[test]
+fn test_for_in_object_observes_value_updates() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var obj = { a: 1, b: 2, c: 3 };
+        var sum = 0;
+        for (var k in obj) {
+            if (k === 'a') {
+                sum = sum + obj.a;
+                obj.b = 20;
+            } else if (k === 'b') {
+                sum = sum + obj.b;
+            } else if (k === 'c') {
+                sum = sum + obj.c;
+            }
+        }
+        return sum;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(24)); // 1 + 20 + 3
+}
+
+#[test]
 fn test_for_of_array() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -1713,6 +1777,28 @@ fn test_for_of_continue() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(9)); // 1+3+5=9
+}
+
+#[test]
+fn test_for_of_array_observes_element_updates() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var arr = [1, 2, 3];
+        var sum = 0;
+        for (var val of arr) {
+            sum = sum + val;
+            if (val === 1) {
+                arr[1] = 20;
+            }
+        }
+        return sum;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(24)); // 1 + 20 + 3
 }
 
 // =========================================================================
@@ -2078,6 +2164,22 @@ fn test_array_length_property() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(5));
+}
+
+#[test]
+fn test_array_push_multiple_args_order() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var arr = [];
+        arr.push(10, 20);
+        return arr[0] + arr[1];
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(30));
 }
 
 #[test]
@@ -3710,6 +3812,21 @@ fn test_has_own_property_false() {
 }
 
 #[test]
+fn test_deep_property_chain_access() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var root = { a: { b: { c: { d: 7 } } } };
+        return root.a.b.c.d;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(7));
+}
+
+#[test]
 fn test_object_get_prototype_of() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -4292,6 +4409,24 @@ fn test_array_reduce_no_initial() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(10));
+}
+
+#[test]
+fn test_array_method_chain_map_filter_reduce() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var arr = [1, 2, 3, 4, 5, 6];
+        function double(x) { return x * 2; }
+        function divByThree(x) { return x % 3 == 0; }
+        function add(acc, x) { return acc + x; }
+        return arr.map(double).filter(divByThree).reduce(add, 0);
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(18)); // [6, 12] -> 18
 }
 
 #[test]
@@ -5382,6 +5517,21 @@ fn test_string_numeric_relational_coercion() {
     assert_eq!(ctx.eval("return '5' < 10;").unwrap().to_bool(), Some(true));
 }
 
+#[test]
+fn test_runtime_string_pressure_concat_shape() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var s = 'item-' + 12 + '-' + 3;
+        return s;
+    ",
+        )
+        .unwrap();
+    let result_str = ctx.string_value(result).unwrap();
+    assert_eq!(result_str, "item-12-3");
+}
+
 // ===== debugger / void / do...while / switch tests =====
 
 #[test]
@@ -5508,6 +5658,82 @@ fn test_switch_break_in_loop() {
             .unwrap().to_i32(),
         Some(111) // 1 + 10 + 100
     );
+}
+
+// --- Math additional methods ---
+
+#[test]
+fn test_math_tan() {
+    let mut ctx = Context::new(64 * 1024);
+    // tan(0) === 0
+    assert_eq!(ctx.eval("return Math.tan(0);").unwrap().to_i32(), Some(0));
+}
+
+#[test]
+fn test_math_exp() {
+    let mut ctx = Context::new(64 * 1024);
+    // exp(0) === 1
+    assert_eq!(ctx.eval("return Math.exp(0);").unwrap().to_i32(), Some(1));
+}
+
+#[test]
+fn test_math_log() {
+    let mut ctx = Context::new(64 * 1024);
+    // log(1) === 0
+    assert_eq!(ctx.eval("return Math.log(1);").unwrap().to_i32(), Some(0));
+}
+
+#[test]
+fn test_math_atan2() {
+    let mut ctx = Context::new(64 * 1024);
+    // atan2(0, 1) === 0
+    assert_eq!(
+        ctx.eval("return Math.atan2(0, 1);").unwrap().to_i32(),
+        Some(0)
+    );
+    // atan2(1, 0) should be ~PI/2 > 1
+    assert_eq!(
+        ctx.eval("return Math.atan2(1, 0) > 1;").unwrap().to_bool(),
+        Some(true)
+    );
+}
+
+// --- String.substring ---
+
+#[test]
+fn test_string_substring() {
+    let mut ctx = Context::new(64 * 1024);
+    // substring(0, 5) extracts first 5 chars
+    assert_eq!(
+        ctx.eval("return 'hello world'.substring(0, 5).length;")
+            .unwrap()
+            .to_i32(),
+        Some(5)
+    );
+    // Verify content via charCodeAt: 'h' = 104
+    assert_eq!(
+        ctx.eval("return 'hello world'.substring(0, 5).charCodeAt(0);")
+            .unwrap()
+            .to_i32(),
+        Some(104)
+    );
+    // No end parameter — to end of string
+    assert_eq!(
+        ctx.eval("return 'hello world'.substring(6).length;")
+            .unwrap()
+            .to_i32(),
+        Some(5) // "world".length
+    );
+}
+
+// --- Exponentiation operator ---
+
+#[test]
+fn test_exponentiation_operator() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(ctx.eval("return 2 ** 10;").unwrap().to_i32(), Some(1024));
+    assert_eq!(ctx.eval("return 3 ** 0;").unwrap().to_i32(), Some(1));
+    assert_eq!(ctx.eval("return 5 ** 2;").unwrap().to_i32(), Some(25));
 }
 
 #[test]

@@ -10,7 +10,9 @@
 
 本文档**不包含** `led-runtime` 产品层工作。
 
-相关 benchmark 分析见：`docs/BENCHMARK_ANALYSIS.md`。
+相关 benchmark 分析见：
+- `docs/BENCHMARK_ANALYSIS.md`
+- `docs/BENCHMARK_ANALYSIS.zh.md`
 
 ## 适用范围
 
@@ -90,6 +92,14 @@
 - benchmark 多次运行结果可复现。
 - `docs/BENCHMARK_ANALYSIS.md` 内部口径一致。
 
+**当前已完成**
+
+- 2026-03-16：已定义当前规范的 benchmark 集合。
+- 2026-03-16：已区分并文档化本地 Criterion、本地 Rust-vs-C 对比、CI Summary 三者的职责。
+- 2026-03-16：`.github/workflows/bench.yml` 现在会同时输出 Rust-vs-C 对比表和 Rust-only 的 Criterion 表。
+- 2026-03-16：`docs/BENCHMARK_ANALYSIS.md` 已重写为当前基线参考文档。
+- 状态：对当前这一轮引擎优化而言，本任务可以视为已完成。
+
 ### 9.1.2 调用热路径优化
 
 **优先级**：P0
@@ -116,6 +126,12 @@
 - 主要改善 `fib`
 - 次要改善 `loop`
 
+**当前已完成**
+
+- 2026-03-16：已完成第一轮 `method_chain` 相关优化，在数组高阶方法中去掉了每个元素回调时的临时 `Vec<Value>` 参数分配。
+- 已补对应的 `map().filter().reduce()` 链式调用回归测试。
+- benchmark 结果：Criterion 下 `method_chain 5k` 大约从 `1.88–2.54 ms` 降到 `0.80–0.82 ms`。
+
 ### 9.1.3 native/builtin 参数传递优化
 
 **优先级**：P0
@@ -141,6 +157,13 @@
 
 - 改善内建函数密集型脚本
 - 对 `array`、`json`、数值函数调用密集场景更有帮助
+
+**当前已完成**
+
+- 2026-03-16：已为 `CallMethod` 的 native 路径增加小参数 fast path，在 `argc <= 2` 时去掉临时参数 `Vec` 分配。
+- 已补 `Array.prototype.push` 多参数顺序回归测试。
+- benchmark 结果：Criterion 下 `array push 10k` 大约从 `0.897–0.911 ms` 降到 `0.672–0.691 ms`。
+- benchmark 结果：Criterion 下 `method_chain 5k` 进一步从 `0.986–1.182 ms` 降到 `0.720–0.763 ms`。
 
 ### 9.1.4 dense array 快速路径
 
@@ -169,6 +192,12 @@
 - 主要改善 `array`
 - 对 `sieve` 也应有明显帮助
 
+**当前已完成**
+
+- 2026-03-16：已完成第一轮深度属性访问优化，为普通对象属性读取增加了小对象 fast path，并统一了 `GetField` / `GetField2` 的属性分发路径。
+- 已补深度属性链访问回归测试。
+- benchmark 结果：Criterion 下 `deep_property 200k` 大约从 `28–29 ms` 降到 `15.7–17.0 ms`。
+
 ### 9.1.5 opcode dispatch 精简
 
 **优先级**：P1
@@ -194,6 +223,19 @@
 - 是 `loop` 的第二主要优化方向
 - 对多数 benchmark 都会有普遍收益
 
+**当前已完成**
+
+- 2026-03-16：已补 `try_catch` benchmark，用于覆盖高频 throw/catch 控制流。
+- 2026-03-16：已收口异常路由路径，把重复 `pop` 展开改成基于 `truncate` / `drop_n` 的回退方式，降低异常展开开销。
+- 已补“循环中重复 throw/catch”回归测试。
+- benchmark 结果：Criterion 下 `try_catch 5k` 当前基线为 `340–349 µs`。
+- 2026-03-16：已在 `dump` 特性下加入运行期 opcode 计数，并通过 `Context` 暴露给 profiling 分析使用。
+- 已补 `dump` 模式回归测试，确认 opcode 计数会记录真实执行。
+- 运行期热点结论：
+  - `loop` 主要被 `GetLoc1`、`Goto`、`Add`、`Dup`、`Drop`、`GetLoc0`、`PutLoc0`、`PutLoc1`、`Lt`、`IfFalse` 主导。
+  - `sieve` 主要被 `Goto`、`Drop`、`IfFalse`、`GetLoc3`、`Add`、`Dup`、`GetLoc0`、`Lte`、`GetLoc2`、`PutArrayEl`、`PutLoc3`、`GetArrayEl`、`CallMethod` 主导。
+- 当前判断：下一轮最值得打的应是 `Dup/Drop` 与局部变量存储配合模式，或分支/控制流成本，而不是继续拍脑袋优化单个算术 helper。
+
 ### 9.1.6 算术/比较微优化复盘
 
 **优先级**：P1
@@ -216,6 +258,15 @@
 **预期收益**
 
 - 小而广的增益
+
+**当前已完成**
+
+- 2026-03-16：已优化字符串拼接热路径，改为直接写入单个结果缓冲区，而不是先构造两个临时拥有所有权的 `String` 再拼接。
+- 已补“字符串 + 数字 + 字符串”链式拼接回归测试。
+- benchmark 结果：Criterion 下 `runtime_string_pressure 4k` 大约从 `2.89–3.38 ms` 降到 `1.53–1.55 ms`。
+- 2026-03-16：已优化 `StrictEq` / `StrictNeq` 热 opcode 路径，为“值完全相同”“整数比较”“布尔比较”增加直接 fast path，再回退到较慢通用逻辑。
+- 已重新验证现有 switch 语义回归测试。
+- benchmark 结果：Criterion 下 `switch 1k` 大约改善到 `132–136 µs`。
 
 ## 9.2 优化 GC 性能
 
@@ -445,6 +496,22 @@
 - 让 benchmark 驱动的优化更接近真实 JS 使用方式
 - 暴露调用密集、迭代器密集、对象访问密集、字符串压力密集的路径
 - 让引擎优化不再只盯算术和纯循环
+
+**当前已完成**
+
+- 2026-03-16：已补第一波 benchmark 脚本与 Criterion 覆盖：
+  - `method_chain`
+  - `runtime_string_pressure`
+  - `for_of_array`
+  - `deep_property`
+- 2026-03-16：已补第二波 `switch_case` benchmark 脚本，用于 CLI 形式的 Rust-vs-C 对比。
+- 已通过 `cargo bench --no-run` 验证 benchmark 可编译。
+- 2026-03-16：已完成第一轮 `for_of_array` 优化，`ForOfStart` 不再整数组复制，而是改为基于数组索引直接迭代。
+- 已补回归测试，确认 `for-of` 在数组迭代过程中能够观察到后续元素更新。
+- benchmark 结果：Criterion 下 `for_of_array 20k` 大约从 `4.22–4.47 ms` 降到 `2.36–2.42 ms`。
+- 2026-03-16：已补 `for_in_object` benchmark，并完成第一轮迭代器初始化优化，把“预先整批克隆全部 key”改成“基于索引按需生成 key”。
+- 已补回归测试，确认 `for-in` 在对象迭代过程中仍能通过静态属性访问观察到更新后的值。
+- benchmark 基线已记录：Criterion 下 `for_in_object 20x2000` 为 `3.74–3.80 ms`。
 
 ## 推荐执行顺序
 

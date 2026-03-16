@@ -364,9 +364,9 @@ impl Clone for JSArray {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[allow(unused_imports)]
     use alloc::vec;
-    use super::*;
 
     #[test]
     fn test_new() {

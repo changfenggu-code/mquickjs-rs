@@ -6,7 +6,7 @@
 use crate::runtime::FunctionBytecode;
 use crate::value::{float_to_value, Value};
 use crate::vm::stack::Stack;
-use alloc::{string::String, string::ToString, vec, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 
 // Builtin object indices
 /// Math object index
@@ -123,81 +123,75 @@ impl ObjectInstance {
 
 /// For-in iterator state
 #[derive(Debug, Clone)]
-pub struct ForInIterator {
-    /// Keys to iterate over
-    pub keys: Vec<String>,
-    /// Current index in keys array
-    pub index: usize,
+pub enum ForInIterator {
+    /// Iterate object keys by index with snapshot length
+    Object {
+        obj_idx: u32,
+        len: usize,
+        index: usize,
+    },
+    /// Iterate array indices with snapshot length
+    Array {
+        len: usize,
+        index: usize,
+    },
+    /// Empty iterator
+    Empty,
 }
 
 impl ForInIterator {
-    /// Create a new for-in iterator from an object
-    pub fn from_object(obj: &ObjectInstance) -> Self {
-        let keys = obj.properties.iter().map(|(k, _)| k.clone()).collect();
-        ForInIterator { keys, index: 0 }
-    }
-
-    /// Create a new for-in iterator from an array
-    pub fn from_array(arr: &[Value]) -> Self {
-        let keys = (0..arr.len()).map(|i| i.to_string()).collect();
-        ForInIterator { keys, index: 0 }
-    }
-
-    /// Check if iteration is done
-    pub fn is_done(&self) -> bool {
-        self.index >= self.keys.len()
-    }
-}
-
-impl Iterator for ForInIterator {
-    type Item = String;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.keys.len() {
-            let key = self.keys[self.index].clone();
-            self.index += 1;
-            Some(key)
-        } else {
-            None
+    /// Create a new for-in iterator from an object index and property count snapshot
+    pub fn from_object_idx(obj_idx: u32, len: usize) -> Self {
+        ForInIterator::Object {
+            obj_idx,
+            len,
+            index: 0,
         }
+    }
+
+    /// Create a new for-in iterator from an array length snapshot
+    pub fn from_array_len(len: usize) -> Self {
+        ForInIterator::Array { len, index: 0 }
+    }
+
+    /// Create an empty iterator
+    pub fn empty() -> Self {
+        ForInIterator::Empty
     }
 }
 
 /// For-of iterator state (iterates over values)
 #[derive(Debug, Clone)]
-pub struct ForOfIterator {
-    /// Values to iterate over
-    pub values: Vec<Value>,
-    /// Current index in values array
-    pub index: usize,
+pub enum ForOfIterator {
+    /// Iterate directly over an array stored in the interpreter
+    Array {
+        arr_idx: u32,
+        index: usize,
+    },
+    /// Iterate over a captured list of values
+    Values {
+        values: Vec<Value>,
+        index: usize,
+    },
 }
 
 impl ForOfIterator {
-    /// Create a new for-of iterator from an array
-    pub fn from_array(arr: &[Value]) -> Self {
-        ForOfIterator {
-            values: arr.to_vec(),
-            index: 0,
-        }
+    /// Create a new for-of iterator from an array index
+    pub fn from_array_idx(arr_idx: u32) -> Self {
+        ForOfIterator::Array { arr_idx, index: 0 }
     }
 
     /// Create a new for-of iterator from an object (iterates over property values)
     pub fn from_object(obj: &ObjectInstance) -> Self {
         let values = obj.properties.iter().map(|(_, v)| *v).collect();
-        ForOfIterator { values, index: 0 }
+        ForOfIterator::Values { values, index: 0 }
     }
-}
 
-impl Iterator for ForOfIterator {
-    type Item = Value;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.values.len() {
-            let val = self.values[self.index];
-            self.index += 1;
-            Some(val)
-        } else {
-            None
+    /// Create an empty for-of iterator
+    pub fn empty() -> Self {
+        ForOfIterator::Values {
+            values: Vec::new(),
+            index: 0,
         }
     }
 }
@@ -459,6 +453,9 @@ pub struct Interpreter {
     pub(crate) gc_count: u32,
     /// PRNG seed for Math.random() (no_std compatible)
     pub(crate) random_seed: u64,
+    /// Runtime opcode execution counters (enabled only for dump/profiling work)
+    #[cfg(feature = "dump")]
+    pub(crate) opcode_counts: [u64; 256],
 }
 
 /// Error object storage

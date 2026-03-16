@@ -1,287 +1,188 @@
-﻿# 鍩哄噯鍒嗘瀽锛歊ust vs C 瀹炵幇
+# Benchmark Analysis
+
+Chinese version: `docs/BENCHMARK_ANALYSIS.zh.md`
 
 Related optimization backlogs:
 - `docs/ENGINE_OPTIMIZATION_TASKLIST.md`
 - `docs/ENGINE_OPTIMIZATION_TASKLIST.zh.md`
 
-鏈枃妗ｈВ閲?MQuickJS-RS (Rust) 涓庡師濮?MQuickJS (C) 涔嬮棿鐨勬€ц兘宸紓銆?
+## Purpose
 
-## 杩愯鍩哄噯娴嬭瘯
+This document defines the current benchmark baseline and interpretation rules for the
+`mquickjs-rs` engine.
 
-### 鏈湴杩愯
+It is engine-only documentation and does not cover `led-runtime` product-layer behavior.
 
-```bash
-# 鏂瑰紡1: 鍙祴 Rust 鐗?
-./benches/compare.sh
+## Baseline Policy
 
-# 鏂瑰紡2: 鑷姩妫€娴?C 鐗堝姣?(闇€瑕佸垵濮嬪寲 submodule)
-git submodule update --init
-./benches/compare.sh
+Benchmark analysis uses three complementary sources.
 
-# 鏂瑰紡3: 鎸囧畾 C 浜岃繘鍒惰矾寰?
-./benches/compare.sh /path/to/mqjs
-```
+### 1. Local Criterion (`cargo bench`)
 
-**娉ㄦ剰**锛氶娆¤繍琛屼細缂栬瘧 Rust release 鐗堟湰锛岄渶瑕佷竴浜涙椂闂淬€?
+Primary use:
 
-### GitHub Actions
+- precise Rust-only timing analysis
+- before/after optimization validation
+- hotspot confirmation
 
-鎻愪氦鍒?`main` 鍒嗘敮鎴栨彁浜?PR 鏃朵細鑷姩瑙﹀彂 benchmark workflow锛?
-- `.github/workflows/bench.yml`
+This is the preferred source when deciding whether an engine optimization actually helped.
 
-缁撴灉浼氬湪 Actions 椤甸潰鏄剧ず銆?
+### 2. Local Rust-vs-C comparison (`benches/compare.sh` or equivalent local comparison)
 
-## 鍩哄噯缁撴灉
+Primary use:
 
-**鏈哄櫒 1**锛欰pple M4 Max, 64 GB RAM, macOS (鍙傝€?
+- compare current Rust engine performance against the C `mqjs` implementation
+- estimate how far a path still is from the C implementation
 
-| 鍩哄噯 | Rust (s) | C (s) | 姣旂巼 | 鑾疯儨鑰?|
-|-----------|----------|-------|-------|--------|
-| json | 0.021 | 0.024 | 0.88x | Rust 蹇?12% |
-| string | 0.016 | 0.016 | 1.01x | 鎸佸钩 |
-| closure | 0.016 | 0.016 | 1.02x | 鎸佸钩 |
-| object | 0.019 | 0.017 | 1.12x | C 蹇?12% |
-| array | 0.019 | 0.016 | 1.21x | C 蹇?21% |
-| sieve | 0.039 | 0.021 | 1.84x | C 蹇?84% |
-| fib | 0.132 | 0.059 | 2.25x | C 蹇?2.25 鍊?|
-| loop | 0.070 | 0.030 | 2.33x | C 蹇?2.33 鍊?|
+This is the preferred source when evaluating cross-implementation distance.
 
-**鏈哄櫒 2**锛欰MD Ryzen 7 5800H, 32 GB RAM, Windows 11 (GCC 15.2, MinGW64)
+### 3. CI benchmark summary (`.github/workflows/bench.yml`)
 
-缂栬瘧鏂瑰紡锛歚gcc -Os -lpthread` (闇€瑕?`-lpthread` 瑙ｅ喅 `nanosleep64` 閾炬帴闂)
+Primary use:
 
-| 鍩哄噯 | Rust (ms) | C (ms) | 姣旂巼 | 鑾疯儨鑰?|
-|-----------|----------|-------|-------|--------|
-| json | 30 | 33 | 0.92x | Rust 蹇?8% |
-| sieve | 44 | 29 | 1.51x | C 蹇?51% |
-| loop | 78 | 48 | 1.62x | C 蹇?62% |
-| fib | 177 | 107 | 1.66x | C 蹇?66% |
+- trend tracking in GitHub Actions
+- quick regression visibility on pushes and PRs
+- GitHub-visible summary tables
 
-*娉細20 娆¤繍琛屽彇涓棿 16 娆″钩鍧囧€硷紙鍘婚櫎 2 涓渶楂樺拰 2 涓渶浣庡紓甯稿€硷級銆俛rray/closure/object/string 璁＄畻鏃堕棿 <10ms锛岃杩涚▼鍚姩鍣０娣规病锛屼笉鍒楀叆瀵规瘮銆?
+The CI summary now provides:
 
-**瑙傚療**锛?
-- Rust 鍦?`json` 涓婃瘮 C 蹇?8%锛堥珮鏁堢殑瀛楃涓插鐞嗭級
-- `fib` 宸窛浠?macOS 鐨?2.25x 缂╁皬鍒?1.66x锛堥樁娈?9 浼樺寲鐢熸晥锛?
-- `loop` 宸窛浠?macOS 鐨?2.33x 缂╁皬鍒?1.62x
-- 鎬讳綋 Rust 姣?C 鎱㈢害 50-66%锛坢acOS 涓婄害鎱?100-130%锛?
+- a Rust-vs-C comparison table
+- a Rust-only Criterion table
+- a startup baseline row
 
-## 涓轰粈涔?C 閫氬父鏇村揩
+CI results are useful and visible on GitHub, but local Criterion and local Rust-vs-C
+comparison remain the main sources for detailed investigation.
 
-### 1. 璁＄畻璺宠浆 vs 鍖归厤璇彞
+## Canonical Benchmark Set
 
-**C 瀹炵幇**浣跨敤璁＄畻璺宠浆锛圙CC 鎵╁睍锛夛細
-```c
-#define CASE(op)  op_label:
-#define NEXT      goto *dispatch_table[*pc++]
+The current engine baseline set is:
 
-static void *dispatch_table[] = {
-    &&op_push_i32, &&op_push_const, ...
-};
+- legacy core set:
+  - `fib`
+  - `loop`
+  - `array`
+  - `json`
+  - `sieve`
+- first-wave expansion set:
+  - `method_chain`
+  - `runtime_string_pressure`
+  - `for_of_array`
+  - `deep_property`
+- current secondary tracked benchmark:
+  - `switch_case`
 
-// 鐩存帴璺宠浆鍒颁笅涓€涓搷浣滅爜
-CASE(OP_add):
-    // ... 鍔犳硶浠ｇ爜
-    NEXT;
-```
+Deferred for the current `no_std`-first path:
 
-**Rust 瀹炵幇**浣跨敤鍖归厤璇彞锛?
-```rust
-loop {
-    let opcode = bc[frame.pc];
-    frame.pc += 1;
+- `regexp_test`
+- `regexp_exec`
 
-    match opcode {
-        op if op == OpCode::Push0 as u8 => { ... }
-        op if op == OpCode::Add as u8 => { ... }
-        // 杩樻湁 80 澶氫釜鍒嗘敮
-    }
-}
-```
+Future secondary additions:
 
-**褰卞搷**锛氳绠楄烦杞秷闄や簡涓ぎ switch/match 鐨勫垎鍙戝紑閿€銆傛瘡涓搷浣滅爜澶勭悊鍣ㄧ洿鎺ヨ烦杞埌涓嬩竴涓鐞嗗櫒锛岃€屾棤闇€杩斿洖鍒板垎鍙戝惊鐜€傝繖涓烘瘡涓搷浣滅爜鑺傜渷绾?2-3 鏉℃寚浠ゃ€?
+- `switch_case`
+- `for_in_object`
 
-### 2. 鍐呰仈缂撳瓨鍜岀煭璺矾寰?
+Currently tracked secondary benchmarks:
 
-C 鐗堟湰瀵瑰睘鎬ф煡鎵句娇鐢ㄦ縺杩涚殑鍐呭瓨鍐呰仈缂撳瓨锛?
-```c
-// C: 甯︾紦瀛樺舰鐘剁殑蹇€熻矾寰?
-if (likely(prop_cache->shape == obj->shape)) {
-    return obj->props[prop_cache->slot];
-}
-// 鎱㈤€熻矾寰?
-```
-
-Rust 鐗堟湰姣忔閮借繘琛屽畬鏁村睘鎬ф煡鎵撅細
-```rust
-// Rust: 姣忔閮藉畬鏁存煡鎵?
-self.objects[obj_idx].properties.get(&key)
-```
-
-### 3. 鏍囪鍊艰〃绀?
-
-涓よ€呴兘浣跨敤鏍囪鍊硷紝浣?C 鐗堟湰鏈夋洿浼樺寲鐨勬爣璁版柟寮忥細
-
-**C** - 32 浣嶅€硷紝浣跨敤 NaN boxing 鎴栨寚閽堟爣璁帮細
-```c
-// 鐭暣鏁帮細閫傚悎 31 浣嶏紝鏃犲垎閰?
-// 鐭诞鐐规暟锛氶€傚悎 IEEE-754 闈欓粯 NaN payload
-typedef uint32_t JSValue;
-```
+- `switch_case`
+- `try_catch`
+- `for_in_object`
 
-**Rust** - 64 浣嶅€硷紝浣跨敤鏇寸洿鎺ョ殑鏍囪鍊肩紪鐮侊細
-```rust
-// 鎵€鏈夊€奸兘鏄?64 浣嶏紝鍖呭惈 int / ptr / special / short-float 鏍囩
-struct RawValue(u64);
-```
-
-C 鐗堟湰鐨勭揣鍑戣〃绀烘彁楂樹簡缂撳瓨鏁堢巼锛汻ust 鐗堟湰鍒欑敤鏇存竻鏅扮殑 tagged-value 妯″瀷鎹㈠彇瀹炵幇绠€鍗曟€т笌鍙淮鎶ゆ€с€?
-
-## 涓轰粈涔?Rust 鍦?`json` 涓婃洿蹇?(12%)
-
-### 楂樻晥鐨勫瓧绗︿覆澶勭悊
-
-Rust 鐨?`serde_json`锛堟蹇典笂绫讳技浜庢垜浠殑瑙ｆ瀽鍣ㄦ柟娉曪級楂樻晥鍦板鐞?JSON 瑙ｆ瀽锛?
-
-```rust
-// Rust: 灏藉彲鑳介浂鎷疯礉瀛楃涓茶В鏋?
-let s: &str = ...;  // 鍊熺敤鍒囩墖锛屾棤鍒嗛厤
-
-// 楂樻晥鐨勫瓧绗︿覆鏋勫缓
-let mut s = String::with_capacity(estimated_len);
-```
-
-C 鐗堟湰蹇呴』鎵嬪姩绠＄悊瀛楃涓插唴瀛橈紝鍙兘鏈夋洿澶氱殑鍒嗛厤銆?
-
-## 涓轰粈涔?C 鍦?`loop` (2.3x) 鍜?`fib` (2.25x) 涓婂揩寰楀
-
-### Loop 鍩哄噯
-
-`loop` 鍩哄噯杩愯 100 涓囨绠€鍗曠畻鏈繍绠楋細
-```javascript
-for (var i = 0; i < 1000000; i = i + 1) {
-    sum = (sum + i) % mod;
-}
-```
-
-**C 鏇村揩鐨勫師鍥狅細**
-1. **鏇寸揣鍑戠殑鍒嗗彂寰幆**锛氳绠楄烦杞秷闄や簡鍖归厤寮€閿€
-2. **鏇村ソ鐨勫垎鏀娴?*锛氱洿鎺ヨ烦杞湁鍙娴嬬殑妯″紡
-3. **鏇村皬鐨勪唬鐮?*锛欳 鎿嶄綔鐮佸鐞嗗櫒鏇寸揣鍑戯紝I-cache 浣跨敤鏇村ソ
-
-### Fib 鍩哄噯
-
-`fib` 鍩哄噯杩涜閫掑綊鍑芥暟璋冪敤锛?
-```javascript
-function fib(n) {
-    if (n <= 1) return n;
-    return fib(n-1) + fib(n-2);
-}
-fib(30);
-```
-
-**C 鏇村揩鐨勫師鍥狅細**
-1. **浼樺寲鐨勮皟鐢?杩斿洖**锛欳 鐗堟湰鏈夋墜宸ヨ皟浼樼殑鍑芥暟璋冪敤浠ｇ爜璺緞
-2. **鏇村皬鐨勮皟鐢ㄥ抚**锛欳 浣跨敤绱у噾鐨?8 瀛楄妭璋冪敤甯?
-3. **瀵勫瓨鍣ㄥ垎閰?*锛欳 缂栬瘧鍣ㄥ彲浠ュ湪瀵勫瓨鍣ㄤ腑淇濇寔鏇村鍊?
+## Current Baseline (Local Criterion, Rust-only)
 
-**娉ㄦ剰**锛歊ust 鐗堟湰浣跨敤鏃犳爤瑙ｉ噴鍣ㄨ璁★紙鍫嗗垎閰嶇殑璋冪敤甯э級锛岃繖鍙互澶勭悊娣卞害閫掑綊鑰屼笉浼氭爤婧㈠嚭銆傝繖浠ヤ竴浜涙€ц兘鎹㈠彇浜嗘繁搴﹀祵濂楄皟鐢ㄧ殑姝ｇ‘鎬с€?
-
-## 涓轰粈涔?C 鍦?`sieve` (1.84x) 鍜?`array` (1.21x) 涓婃洿蹇?
-
-### 鏁扮粍璁块棶妯″紡
-
-涓や釜鍩哄噯閮芥槸鏁扮粍瀵嗛泦鍨嬶細
-
-**C** - 鐩存帴鎸囬拡绠楁湳锛?
-```c
-// 鏃犺竟鐣屾鏌ワ紝鐩存帴鍐呭瓨璁块棶
-val = arr->values[i];
-arr->values[i] = val;
-```
-
-**Rust** - 甯﹁竟鐣屾鏌ョ殑瀹夊叏璁块棶锛?
-```rust
-// 姣忔璁块棶閮芥湁杈圭晫妫€鏌?
-let val = self.arrays[arr_idx].get(i)?;
-self.arrays[arr_idx].set(i, val)?;
-```
-
-鍗充娇鍦ㄧ儹璺緞涓娇鐢?`unsafe` 浼樺寲锛孯ust 浠嶇劧鏈夋洿澶氱殑闂存帴鎬э細
-```rust
-// Rust 浼樺寲璺緞浠嶆秹鍙婃洿澶氭楠わ細
-// 1. 浠庤В閲婂櫒鑾峰彇鏁扮粍寮曠敤
-// 2. 妫€鏌ユ暟缁勭被鍨?
-// 3. 璁块棶搴曞眰 Vec
-// 4. 鑾峰彇/璁剧疆鍏冪礌
-```
-
-### 鏂规硶璋冪敤寮€閿€
-
-JavaScript 涓殑姣忔 `array.push()` 璋冪敤闇€瑕侊細
-1. 鏌ユ壘 "push" 灞炴€?
-2. 鍑芥暟璋冪敤璁剧疆
-3. 鍘熺敓鍑芥暟鍒嗗彂
-
-C 鐗堟湰浣跨敤涓撶敤鎿嶄綔鐮佷紭鍖栧父瑙佺殑鏁扮粍鏂规硶锛岃€?Rust 浣跨敤閫氱敤灞炴€ф煡鎵俱€?
-
-## 鎬荤粨
-
-| 绫诲埆 | 鑾疯儨鑰?| 鍘熷洜 |
-|----------|--------|--------|
-| **JSON 瑙ｆ瀽** | Rust | 楂樻晥鐨勫瓧绗︿覆澶勭悊 |
-| **瀛楃涓?闂寘鎿嶄綔** | 鎸佸钩 | 绫讳技鐨勫疄鐜扮瓥鐣?|
-| **瀵硅薄璁块棶** | C | 鍐呰仈缂撳瓨锛屾洿灏忕殑瀵硅薄 |
-| **鏁扮粍鎿嶄綔** | C | 鐩存帴鎸囬拡绠楁湳锛屾棤杈圭晫妫€鏌?|
-| **寰幆** | C | 璁＄畻璺宠浆锛屾洿绱у噾鐨勫垎鍙?|
-| **閫掑綊** | C | 浼樺寲鐨勮皟鐢?杩斿洖璺緞 |
-
-## 璁捐鏉冭　
-
-Rust 瀹炵幇浼樺厛鑰冭檻锛?
-- **瀹夊叏鎬?*锛氳竟鐣屾鏌ワ紝鏃犳湭瀹氫箟琛屼负
-- **姝ｇ‘鎬?*锛氬鐞嗚竟缂樻儏鍐碉紙娣卞害閫掑綊銆佸ぇ鍊硷級
-- **鍙淮鎶ゆ€?*锛氭竻鏅般€佸湴閬撶殑 Rust 浠ｇ爜
-- **宸ョ▼鍙鎬?*锛氭枃妗ｅ畬鍠勶紝渚夸簬璋冭瘯銆佹墿灞曚笌瀹夸富闆嗘垚
-
-C 瀹炵幇浼樺厛鑰冭檻锛?
-- **鎬ц兘**锛氬祵鍏ュ紡绯荤粺涓瘡涓懆鏈熼兘寰堥噸瑕?
-- **鍐呭瓨鏁堢巼**锛氬彈闄愯澶囩殑鏈€灏忓唴瀛樺崰鐢?
-- **鍏煎鎬?*锛氬凡鍦ㄨ澶氬钩鍙颁笂楠岃瘉
-
-## 娼滃湪鐨勮繘涓€姝ヤ紭鍖?
-
-1. **璁＄畻璺宠浆绛夋晥鏂规**锛氫娇鐢?`#[cold]` 鍜岄厤缃枃浠跺紩瀵间紭鍖?
-2. **鍐呰仈缂撳瓨**锛氭坊鍔犲熀浜庡舰鐘剁殑灞炴€х紦瀛?
-3. **鍩轰簬瀵勫瓨鍣ㄧ殑 VM**锛氫粠鍩轰簬鏍堣浆鎹负鍩轰簬瀵勫瓨鍣ㄧ殑瀛楄妭鐮?
-4. **Unsafe 鐑矾寰?*锛氬湪瑙ｉ噴鍣ㄥ惊鐜腑鏇存縺杩涘湴浣跨敤 unsafe
-5. **閰嶇疆鏂囦欢寮曞浼樺寲**锛氫娇鐢?PGO 浼樺寲鍒嗗彂妯″紡
-
-## Stage 9: 浼樺寲璁″垝
-
-### 褰撳墠浼樺厛绾?
-
-| 浼樺寲椤?| 棰勬湡鏀剁泭 | 澶嶆潅搴?| 鐘舵€?|
-|--------|----------|--------|------|
-| 鍑忓皯 match 鍒嗘敮寮€閿€ | 涓?| 浣?| 寰呰瘎浼?|
-| 鍑芥暟璋冪敤浼樺寲 (fib/loop) | 楂?| 涓?| 寰呰瘎浼?|
-| 灞炴€ц闂紭鍖?| 涓?| 涓?| 寰呰瘎浼?|
-| GC 浼樺寲 | 浣?| 楂?| 寰呰瘎浼?|
-
-### 蹇€熶紭鍖栨柟鍚?
-
-1. **鐑偣浠ｇ爜鍐呰仈**锛氫娇鐢?`#[inline]` 鏍囪棰戠箒璋冪敤鐨勫嚱鏁?
-2. **鍑忓皯鍫嗗垎閰?*锛氬湪鏍堜笂缂撳瓨涓存椂鍊?
-3. **浼樺寲 dispatch**锛氫娇鐢ㄥ嚱鏁版寚閽堟暟缁勪唬鏇?match
-
-### 璇勪及鏂规硶
-
-```bash
-# 杩愯鍩哄噯娴嬭瘯
-./benches/compare.sh
-
-# 杩愯 Criterion 寰熀鍑?
-cargo bench
-
-# 鏌ョ湅鐢熸垚鐨勪唬鐮?
-cargo show --lib -Z timings
-```
+The following values are the current local Criterion baseline after the first benchmark
+expansion pass and initial optimization rounds.
+
+| Benchmark | Current Rust-only baseline |
+|-----------|----------------------------|
+| `fib_iter 1k` | `2.056–2.102 ms` |
+| `loop 10k` | `0.512–0.528 ms` |
+| `array push 10k` | `0.672–0.691 ms` |
+| `json parse 1k` | `0.856–0.919 ms` |
+| `sieve 10k` | `2.556–2.687 ms` |
+| `method_chain 5k` | `0.720–0.763 ms` |
+| `runtime_string_pressure 4k` | `2.893–3.379 ms` |
+| `for_of_array 20k` | `3.471–4.071 ms` |
+| `deep_property 200k` | `19.510–22.446 ms` |
+| `switch 1k` | `0.132–0.136 ms` |
+| `try_catch 5k` | `0.341–0.349 ms` |
+| `for_in_object 20x2000` | `3.743–3.804 ms` |
+
+## Current Baseline (Local Rust vs C, process-inclusive)
+
+These values are based on local repeated process execution averages and are useful for
+cross-implementation comparison. They include process startup cost.
+
+### Startup baseline
+
+| Case | Rust | C | Ratio |
+|------|------|---|-------|
+| `mqjs -e "0"` | `18.130 ms` | `17.407 ms` | `1.042x` |
+
+### Script comparisons
+
+| Benchmark | Rust | C | Ratio | Notes |
+|-----------|------|---|-------|-------|
+| `fib` | `183.099 ms` | `118.815 ms` | `1.541x` | C faster |
+| `loop` | `94.261 ms` | `62.165 ms` | `1.516x` | C faster |
+| `array` | `17.673 ms` | `16.467 ms` | `1.073x` | C slightly faster |
+| `json` | `44.048 ms` | `64.280 ms` | `0.685x` | Rust faster |
+| `sieve` | `52.476 ms` | `35.676 ms` | `1.471x` | C faster |
+| `method_chain` | `15.795 ms` | `14.109 ms` | `1.119x` | C slightly faster |
+| `runtime_string_pressure` | `22.470 ms` | `19.185 ms` | `1.171x` | C faster |
+| `for_of_array` | `19.509 ms` | `17.358 ms` | `1.124x` | C faster |
+| `deep_property` | `32.465 ms` | `24.001 ms` | `1.353x` | C faster |
+| `switch_case` | `18.495 ms` | `16.856 ms` | `1.097x` | C slightly faster |
+| `try_catch` | `16.097 ms` | `14.508 ms` | `1.110x` | C slightly faster |
+| `for_in_object` | `22.356 ms` | `17.633 ms` | `1.268x` | C faster |
+
+## Interpretation Notes
+
+### Strongest current signals
+
+- `json` remains a relative strength for the Rust engine.
+- `fib` and `loop` still point to call-path and dispatch cost.
+- `array` and `sieve` still point to dense array access/write cost.
+- `runtime_string_pressure` remains a meaningful memory/string creation path.
+- `for_of_array` and `deep_property` are now part of the canonical baseline and should be
+  treated as first-class optimization targets.
+- `switch_case` is now tracked as a secondary control-flow benchmark and already shows measurable improvement from the latest `StrictEq` hot-path tuning.
+- `try_catch` is now tracked as a secondary exception-control benchmark and has a recorded post-cleanup baseline.
+- `for_in_object` is now tracked as a secondary iterator/control-flow benchmark with a first recorded baseline after iterator setup cleanup.
+
+### Important caution
+
+- Criterion numbers and process-inclusive Rust-vs-C numbers answer different questions.
+- Short-running script comparisons can be more sensitive to startup overhead.
+- Use Criterion first when validating an optimization inside the Rust engine.
+
+## Already Completed Optimization Work Reflected In This Baseline
+
+The current baseline already includes the first completed optimization rounds for:
+
+- `deep_property`
+  - small-object property lookup fast path
+  - unified `GetField` / `GetField2` property dispatch
+- `method_chain`
+  - removed per-element temporary `Vec<Value>` allocation in array higher-order builtins
+  - added `CallMethod` native small-argument fast path
+- `for_of_array`
+  - removed full array cloning from `ForOfStart`
+
+These changes are tracked in:
+
+- `docs/ENGINE_OPTIMIZATION_TASKLIST.md`
+- `docs/ENGINE_OPTIMIZATION_TASKLIST.zh.md`
+
+## What “9.1.1 Benchmark Baseline Cleanup” Means Now
+
+This baseline cleanup task is considered complete when:
+
+- benchmark roles are clearly separated:
+  - local Criterion -> precise Rust-only analysis
+  - local Rust-vs-C comparison -> cross-implementation comparison
+  - CI summary -> trend tracking + GitHub-visible analysis table
+- the canonical benchmark set is defined
+- the current baseline tables are recorded in one place
+- future optimization rounds can use this document as the baseline reference
+
+This document is the current baseline reference.

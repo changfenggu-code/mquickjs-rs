@@ -155,6 +155,17 @@ impl Interpreter {
     }
 
     #[inline]
+    pub(crate) fn op_pow(&self, a: Value, b: Value) -> InterpreterResult<Value> {
+        if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
+            Ok(float_to_value(libm::powf(fa, fb)))
+        } else {
+            Err(InterpreterError::TypeError(
+                "cannot exponentiate non-numbers".to_string(),
+            ))
+        }
+    }
+
+    #[inline]
     pub(crate) fn op_mod(&self, a: Value, b: Value) -> InterpreterResult<Value> {
         if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
             if vb == 0 {

@@ -216,6 +216,26 @@ impl Stack {
             self.values[abs_index] = value;
         }
     }
+
+    /// Get value at absolute local slot without bounds checks.
+    ///
+    /// # Safety
+    /// Caller must guarantee that `frame_ptr + index < self.values.len()`.
+    #[inline]
+    pub unsafe fn get_local_at_unchecked(&self, frame_ptr: usize, index: usize) -> Value {
+        let abs_index = frame_ptr + index;
+        unsafe { *self.values.get_unchecked(abs_index) }
+    }
+
+    /// Set value at absolute local slot without bounds checks.
+    ///
+    /// # Safety
+    /// Caller must guarantee that `frame_ptr + index < self.values.len()`.
+    #[inline]
+    pub unsafe fn set_local_at_unchecked(&mut self, frame_ptr: usize, index: usize, value: Value) {
+        let abs_index = frame_ptr + index;
+        unsafe { *self.values.get_unchecked_mut(abs_index) = value; }
+    }
 }
 
 #[cfg(test)]
