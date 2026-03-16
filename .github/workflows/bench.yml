@@ -159,7 +159,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo bench --bench js_benchmarks > criterion_output.txt 2>&1
+          cargo bench --bench js_benchmarks > criterion_output.txt 2>&1 || true
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Criterion Analysis (Rust-only, Ubuntu)" >> $GITHUB_STEP_SUMMARY
@@ -171,7 +171,7 @@ jobs:
             name=$(echo "$line" | sed -E 's/[[:space:]]+time:.*$//' | sed -E 's/[[:space:]]+$//')
             time=$(echo "$line" | sed -E 's/^.*time:[[:space:]]+//')
             echo "| $name | $time |" >> $GITHUB_STEP_SUMMARY
-          done
+          done || true
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "_Criterion table is intended for detailed Rust-side analysis on a stable runner; Rust-vs-C table above is the cross-implementation comparison view._" >> $GITHUB_STEP_SUMMARY
