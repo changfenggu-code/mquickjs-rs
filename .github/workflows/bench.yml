@@ -45,17 +45,23 @@ jobs:
           set -euo pipefail
           C_BIN=""
 
-          if [ -x vendor/mquickjs/bin/mqjs ]; then
-            C_BIN="vendor/mquickjs/bin/mqjs"
-          elif [ -x vendor/mquickjs/mqjs ]; then
-            C_BIN="vendor/mquickjs/mqjs"
-          elif [ -f vendor/mquickjs/mquickjs.c ]; then
-            echo "C source found but no mqjs binary; building..."
+          try_bin() {
+            local bin="$1"
+            if [ -x "$bin" ] && "$bin" -e "0" > /dev/null 2>&1; then
+              C_BIN="$bin"
+            fi
+          }
+
+          try_bin "vendor/mquickjs/bin/mqjs"
+          if [ -z "$C_BIN" ]; then
+            try_bin "vendor/mquickjs/mqjs"
+          fi
+          if [ -z "$C_BIN" ] && [ -f vendor/mquickjs/mquickjs.c ]; then
+            echo "C source found but no runnable binary; building..."
             make -C vendor/mquickjs -j"$(nproc 2>/dev/null || echo 4)" mqjs
-            if [ -x vendor/mquickjs/bin/mqjs ]; then
-              C_BIN="vendor/mquickjs/bin/mqjs"
-            elif [ -x vendor/mquickjs/mqjs ]; then
-              C_BIN="vendor/mquickjs/mqjs"
+            try_bin "vendor/mquickjs/bin/mqjs"
+            if [ -z "$C_BIN" ]; then
+              try_bin "vendor/mquickjs/mqjs"
             fi
           fi
 
@@ -63,7 +69,7 @@ jobs:
             echo "Using C benchmark binary: $C_BIN"
             echo "C_BIN=$C_BIN" >> "$GITHUB_ENV"
           else
-            echo "Warning: C benchmark binary not found; Rust-only benchmark summary will be generated."
+            echo "Warning: no runnable C binary found; Rust-only mode."
             echo "C_BIN=" >> "$GITHUB_ENV"
           fi
 
@@ -196,17 +202,23 @@ jobs:
           set -euo pipefail
           C_BIN=""
 
-          if [ -x vendor/mquickjs/bin/mqjs ]; then
-            C_BIN="vendor/mquickjs/bin/mqjs"
-          elif [ -x vendor/mquickjs/mqjs ]; then
-            C_BIN="vendor/mquickjs/mqjs"
-          elif [ -f vendor/mquickjs/mquickjs.c ]; then
-            echo "C source found but no mqjs binary; building..."
+          try_bin() {
+            local bin="$1"
+            if [ -x "$bin" ] && "$bin" -e "0" > /dev/null 2>&1; then
+              C_BIN="$bin"
+            fi
+          }
+
+          try_bin "vendor/mquickjs/bin/mqjs"
+          if [ -z "$C_BIN" ]; then
+            try_bin "vendor/mquickjs/mqjs"
+          fi
+          if [ -z "$C_BIN" ] && [ -f vendor/mquickjs/mquickjs.c ]; then
+            echo "C source found but no runnable binary; building..."
             make -C vendor/mquickjs mqjs
-            if [ -x vendor/mquickjs/bin/mqjs ]; then
-              C_BIN="vendor/mquickjs/bin/mqjs"
-            elif [ -x vendor/mquickjs/mqjs ]; then
-              C_BIN="vendor/mquickjs/mqjs"
+            try_bin "vendor/mquickjs/bin/mqjs"
+            if [ -z "$C_BIN" ]; then
+              try_bin "vendor/mquickjs/mqjs"
             fi
           fi
 
@@ -214,7 +226,7 @@ jobs:
             echo "Using C benchmark binary: $C_BIN"
             echo "C_BIN=$C_BIN" >> "$GITHUB_ENV"
           else
-            echo "Warning: C benchmark binary not found; Rust-only benchmark summary will be generated."
+            echo "Warning: no runnable C binary found; Rust-only mode."
             echo "C_BIN=" >> "$GITHUB_ENV"
           fi
 
