@@ -36,9 +36,6 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y bc
-
       - name: Locate and build C implementation
         shell: bash
         run: |
@@ -82,30 +79,30 @@ jobs:
 
           rust_start_total=0
           for i in $(seq 1 "$BENCH_RUNS"); do
-            start=$(date +%s.%N)
-            ./target/release/mqjs -e "0" > /dev/null 2>&1
-            end=$(date +%s.%N)
-            elapsed=$(echo "$end - $start" | bc)
-            rust_start_total=$(echo "$rust_start_total + $elapsed" | bc)
+            start=$(python3 -c 'import time; print(time.time())')
+            ./target/release/mqjs -e "0" > /dev/null 2>&1 || true
+            end=$(python3 -c 'import time; print(time.time())')
+            elapsed=$(python3 -c "print($end - $start)")
+            rust_start_total=$(python3 -c "print($rust_start_total + $elapsed)")
           done
-          rust_start=$(echo "scale=4; $rust_start_total / $BENCH_RUNS" | bc)
+          rust_start=$(python3 -c "print(f'{$rust_start_total / $BENCH_RUNS:.4f}')")
 
           if [ -n "${C_BIN:-}" ]; then
             c_start_total=0
             for i in $(seq 1 "$BENCH_RUNS"); do
-              start=$(date +%s.%N)
-              "$C_BIN" -e "0" > /dev/null 2>&1
-              end=$(date +%s.%N)
-              elapsed=$(echo "$end - $start" | bc)
-              c_start_total=$(echo "$c_start_total + $elapsed" | bc)
+              start=$(python3 -c 'import time; print(time.time())')
+              "$C_BIN" -e "0" > /dev/null 2>&1 || true
+              end=$(python3 -c 'import time; print(time.time())')
+              elapsed=$(python3 -c "print($end - $start)")
+              c_start_total=$(python3 -c "print($c_start_total + $elapsed)")
             done
-            c_start=$(echo "scale=4; $c_start_total / $BENCH_RUNS" | bc)
+            c_start=$(python3 -c "print(f'{$c_start_total / $BENCH_RUNS:.4f}')")
           fi
 
           if [ -n "${C_BIN:-}" ]; then
             echo "| Benchmark | Rust (s) | C (s) | Ratio | Notes |" >> $GITHUB_STEP_SUMMARY
             echo "|-----------|----------|-------|-------|-------|" >> $GITHUB_STEP_SUMMARY
-            start_ratio=$(printf "%.2f" "$(echo "scale=4; $rust_start / $c_start" | bc)" 2>/dev/null || echo "N/A")
+            start_ratio=$(python3 -c "r=$rust_start; c=$c_start; print(f'{r/c:.2f}' if c > 0 else 'N/A')")
             echo "| startup_baseline | $rust_start | $c_start | ${start_ratio}x | process startup |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| Benchmark | Rust (s) | Notes |" >> $GITHUB_STEP_SUMMARY
@@ -119,38 +116,29 @@ jobs:
             # Run Rust version (${BENCH_RUNS} runs, take average)
             rust_total=0
             for i in $(seq 1 "$BENCH_RUNS"); do
-              start=$(date +%s.%N)
-              ./target/release/mqjs "$script" > /dev/null 2>&1
-              end=$(date +%s.%N)
-              elapsed=$(echo "$end - $start" | bc)
-              rust_total=$(echo "$rust_total + $elapsed" | bc)
+              start=$(python3 -c 'import time; print(time.time())')
+              ./target/release/mqjs "$script" > /dev/null 2>&1 || true
+              end=$(python3 -c 'import time; print(time.time())')
+              elapsed=$(python3 -c "print($end - $start)")
+              rust_total=$(python3 -c "print($rust_total + $elapsed)")
             done
-            rust_time=$(echo "scale=4; $rust_total / $BENCH_RUNS" | bc)
+            rust_time=$(python3 -c "print(f'{$rust_total / $BENCH_RUNS:.4f}')")
 
             if [ -n "${C_BIN:-}" ]; then
               # Run C version (${BENCH_RUNS} runs, take average)
               c_total=0
               for i in $(seq 1 "$BENCH_RUNS"); do
-                start=$(date +%s.%N)
-                "$C_BIN" "$script" > /dev/null 2>&1
-                end=$(date +%s.%N)
-                elapsed=$(echo "$end - $start" | bc)
-                c_total=$(echo "$c_total + $elapsed" | bc)
+                start=$(python3 -c 'import time; print(time.time())')
+                "$C_BIN" "$script" > /dev/null 2>&1 || true
+                end=$(python3 -c 'import time; print(time.time())')
+                elapsed=$(python3 -c "print($end - $start)")
+                c_total=$(python3 -c "print($c_total + $elapsed)")
               done
-              c_time=$(echo "scale=4; $c_total / $BENCH_RUNS" | bc)
+              c_time=$(python3 -c "print(f'{$c_total / $BENCH_RUNS:.4f}')")
 
-              # Calculate ratio
-              raw_ratio=$(echo "scale=2; $rust_time / $c_time" | bc)
-              ratio=$(printf "%.2f" "$raw_ratio" 2>/dev/null || echo "0$raw_ratio")
-
-              # Determine notes
-              if (( $(echo "$ratio < 0.9" | bc -l) )); then
-                notes="Rust faster"
-              elif (( $(echo "$ratio > 1.1" | bc -l) )); then
-                notes="C faster"
-              else
-                notes="Equal"
-              fi
+              # Calculate ratio and notes
+              ratio=$(python3 -c "r=$rust_time; c=$c_time; print(f'{r/c:.2f}' if c > 0 else 'N/A')")
+              notes=$(python3 -c "r=$rust_time; c=$c_time; ratio=r/c if c>0 else 0; print('Rust faster' if ratio<0.9 else ('C faster' if ratio>1.1 else 'Equal'))")
 
               echo "| $name | $rust_time | $c_time | ${ratio}x | $notes |" >> $GITHUB_STEP_SUMMARY
             else
@@ -252,7 +240,7 @@ jobs:
             rust_total=0
             for i in $(seq 1 "$BENCH_RUNS"); do
               start=$(python3 -c 'import time; print(time.time())')
-              ./target/release/mqjs "$script" > /dev/null 2>&1
+              ./target/release/mqjs "$script" > /dev/null 2>&1 || true
               end=$(python3 -c 'import time; print(time.time())')
               elapsed=$(python3 -c "print($end - $start)")
               rust_total=$(python3 -c "print($rust_total + $elapsed)")
@@ -263,7 +251,7 @@ jobs:
               c_total=0
               for i in $(seq 1 "$BENCH_RUNS"); do
                 start=$(python3 -c 'import time; print(time.time())')
-                "$C_BIN" "$script" > /dev/null 2>&1
+                "$C_BIN" "$script" > /dev/null 2>&1 || true
                 end=$(python3 -c 'import time; print(time.time())')
                 elapsed=$(python3 -c "print($end - $start)")
                 c_total=$(python3 -c "print($c_total + $elapsed)")
