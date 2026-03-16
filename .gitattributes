@@ -1,0 +1,19 @@
+# Normalize line endings to LF for all text files
+* text=auto eol=lf
+
+# Explicitly mark Markdown as UTF-8 text with LF
+*.md text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.js text eol=lf
+*.sh text eol=lf
+
+# Binary files — never touch line endings or encoding
+*.pdb binary
+*.exe binary
+*.png binary
+*.jpg binary
+*.gif binary
