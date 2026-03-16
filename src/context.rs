@@ -1,4 +1,4 @@
-//! JavaScript execution context
+﻿//! JavaScript execution context
 //!
 //! The Context is the main entry point for the JavaScript engine.
 //! It owns all memory and provides the API for evaluating JavaScript code.
@@ -12,6 +12,8 @@ use crate::parser::compiler::{CompileError, Compiler};
 use crate::runtime::FunctionBytecode;
 use crate::value::Value;
 use crate::vm::types::NativeFn;
+#[cfg(feature = "dump")]
+use crate::vm::types::RuntimeStringSourceStats;
 use crate::vm::Interpreter;
 
 /// Approximate sizes for memory estimation (in bytes)
@@ -80,7 +82,7 @@ pub struct MemoryStats {
     ///
     /// Note: This represents the allocation boundary position, not the actual
     /// object memory usage. For accurate object memory tracking, a full GC
-    /// implementation would be needed. This is the "inconsistent口径" issue
+    /// implementation would be needed. This is the "inconsistent鍙ｅ緞" issue
     /// documented in PRODUCT_ROADMAP.md.
     pub used: usize,
     /// Estimated object memory usage in bytes
@@ -95,10 +97,16 @@ pub struct MemoryStats {
     pub free: usize,
     /// Number of runtime strings
     pub runtime_strings: usize,
+    /// Total bytes of runtime string contents
+    pub runtime_string_bytes: usize,
     /// Number of arrays
     pub arrays: usize,
+    /// Total number of array elements across all arrays
+    pub array_elements: usize,
     /// Number of objects
     pub objects: usize,
+    /// Total number of object properties across all objects
+    pub object_properties: usize,
     /// Number of closures
     pub closures: usize,
     /// Number of error objects
@@ -107,6 +115,12 @@ pub struct MemoryStats {
     pub regex_objects: usize,
     /// Number of typed arrays
     pub typed_arrays: usize,
+    /// Total bytes held by typed arrays
+    pub typed_array_bytes: usize,
+    /// Number of array buffers
+    pub array_buffers: usize,
+    /// Total bytes held by array buffers
+    pub array_buffer_bytes: usize,
 }
 
 impl Context {
@@ -253,12 +267,18 @@ impl Context {
             stack_used: self.heap.stack_used(),
             free: self.heap.free_space(),
             runtime_strings: interp_stats.runtime_strings,
+            runtime_string_bytes: interp_stats.runtime_string_bytes,
             arrays: interp_stats.arrays,
+            array_elements: interp_stats.array_elements,
             objects: interp_stats.objects,
+            object_properties: interp_stats.object_properties,
             closures: interp_stats.closures,
             error_objects: interp_stats.error_objects,
             regex_objects: interp_stats.regex_objects,
             typed_arrays: interp_stats.typed_arrays,
+            typed_array_bytes: interp_stats.typed_array_bytes,
+            array_buffers: interp_stats.array_buffers,
+            array_buffer_bytes: interp_stats.array_buffer_bytes,
             estimated_object_bytes,
         }
     }
@@ -284,6 +304,11 @@ impl Context {
     #[cfg(feature = "dump")]
     pub fn opcode_counts(&self) -> &[u64; 256] {
         self.interpreter.opcode_counts()
+    }
+
+    #[cfg(feature = "dump")]
+    pub fn runtime_string_source_stats(&self) -> RuntimeStringSourceStats {
+        self.interpreter.runtime_string_source_stats
     }
 
     /// Read raw bytes from a TypedArray value.
@@ -337,6 +362,7 @@ impl Context {
         self.interpreter.arrays.clear();
         self.interpreter.objects.clear();
         self.interpreter.runtime_strings.clear();
+        self.interpreter.for_in_key_cache.clear();
         self.interpreter.error_objects.clear();
         self.interpreter.timers.clear();
         self.interpreter.stack.clear();
@@ -345,18 +371,7 @@ impl Context {
         self.bytecodes.clear();
         self.current_exception = Value::undefined();
     }
-
-    /// Get the current exception (if any)
-    pub fn get_exception(&self) -> Value {
-        self.current_exception
-    }
-
-    /// Clear the current exception
-    pub fn clear_exception(&mut self) {
-        self.current_exception = Value::undefined();
-    }
 }
-
 #[cfg(all(test, feature = "dump"))]
 mod dump_tests {
     use super::*;
@@ -372,5 +387,15 @@ mod dump_tests {
         let counts = ctx.opcode_counts();
         assert!(counts[OpCode::Add as usize] > 0);
         assert!(counts.iter().copied().sum::<u64>() > 0);
+    }
+
+    #[test]
+    fn test_runtime_string_source_stats_record_categories() {
+        let mut ctx = Context::new(64 * 1024);
+        let _ = ctx.eval("var s = \"a\" + 1; var obj = { a: 1 }; for (var k in obj) { s = s + k; } return s;").unwrap();
+        let stats = ctx.runtime_string_source_stats();
+        assert!(stats.total > 0);
+        assert!(stats.concat > 0);
+        assert!(stats.total >= stats.concat);
     }
 }

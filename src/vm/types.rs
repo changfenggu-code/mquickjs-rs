@@ -1,4 +1,4 @@
-//! Data types used by the interpreter.
+﻿//! Data types used by the interpreter.
 //
 //! Constants, structs, and enums for objects, closures, call frames,
 //! error objects, regex, typed arrays, and interpreter statistics.
@@ -131,10 +131,7 @@ pub enum ForInIterator {
         index: usize,
     },
     /// Iterate array indices with snapshot length
-    Array {
-        len: usize,
-        index: usize,
-    },
+    Array { len: usize, index: usize },
     /// Empty iterator
     Empty,
 }
@@ -164,15 +161,9 @@ impl ForInIterator {
 #[derive(Debug, Clone)]
 pub enum ForOfIterator {
     /// Iterate directly over an array stored in the interpreter
-    Array {
-        arr_idx: u32,
-        index: usize,
-    },
+    Array { arr_idx: u32, index: usize },
     /// Iterate over a captured list of values
-    Values {
-        values: Vec<Value>,
-        index: usize,
-    },
+    Values { values: Vec<Value>, index: usize },
 }
 
 impl ForOfIterator {
@@ -409,6 +400,8 @@ pub struct Interpreter {
     /// Indices start from 0x8000 to distinguish from compile-time strings
     pub(crate) runtime_strings: Vec<String>,
     /// Closures created during execution
+    /// Small cache for repeated for-in key runtime strings.
+    pub(crate) for_in_key_cache: Vec<(String, u16)>,
     /// Values on the stack can reference closures by index
     pub(crate) closures: Vec<ClosureData>,
     /// Shared mutable variable cells for closure captures.
@@ -428,6 +421,8 @@ pub struct Interpreter {
     pub(crate) for_of_iterators: Vec<ForOfIterator>,
     /// Native function registry
     pub(crate) native_functions: Vec<NativeFunction>,
+    /// Cached native index for Array.prototype.push
+    pub(crate) native_array_push_idx: Option<u32>,
     /// Global variables set by top-level function declarations (SetGlobal opcode)
     pub(crate) global_vars: Vec<(String, Value)>,
     /// Error objects created during execution
@@ -453,11 +448,15 @@ pub struct Interpreter {
     pub(crate) gc_count: u32,
     /// PRNG seed for Math.random() (no_std compatible)
     pub(crate) random_seed: u64,
+    /// Runtime string source counters (dump-only)
+    #[cfg(feature = "dump")]
+    pub(crate) runtime_string_source_stats: RuntimeStringSourceStats,
     /// Runtime opcode execution counters (enabled only for dump/profiling work)
     #[cfg(feature = "dump")]
     pub(crate) opcode_counts: [u64; 256],
 }
 
+/// Error object storage
 /// Error object storage
 #[derive(Debug, Clone)]
 pub struct ErrorObject {
@@ -466,7 +465,6 @@ pub struct ErrorObject {
     /// Error message
     pub message: String,
 }
-
 /// RegExp object storage
 #[cfg(feature = "std")]
 #[derive(Clone)]
@@ -739,10 +737,16 @@ pub struct Timer {
 pub struct InterpreterStats {
     /// Number of runtime strings
     pub runtime_strings: usize,
+    /// Total bytes of runtime string contents
+    pub runtime_string_bytes: usize,
     /// Number of arrays
     pub arrays: usize,
+    /// Total number of array elements across all arrays
+    pub array_elements: usize,
     /// Number of objects
     pub objects: usize,
+    /// Total number of object properties across all objects
+    pub object_properties: usize,
     /// Number of closures
     pub closures: usize,
     /// Number of error objects
@@ -751,6 +755,21 @@ pub struct InterpreterStats {
     pub regex_objects: usize,
     /// Number of typed arrays
     pub typed_arrays: usize,
+    /// Total bytes held by typed arrays
+    pub typed_array_bytes: usize,
     /// Number of array buffers
     pub array_buffers: usize,
+    /// Total bytes held by array buffers
+    pub array_buffer_bytes: usize,
+
+}
+
+/// Runtime string creation counters for profiling (`dump` feature only)
+#[cfg(feature = "dump")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeStringSourceStats {
+    pub total: u64,
+    pub concat: u64,
+    pub for_in_key: u64,
+    pub other: u64,
 }

@@ -311,12 +311,18 @@ fn dump_memory_stats(ctx: &Context) {
     println!("  Heap size:       {} bytes", stats.heap_size);
     println!("  Used:            {} bytes", stats.used);
     println!("  Runtime strings: {}", stats.runtime_strings);
+    println!("  Runtime str bytes:{}", stats.runtime_string_bytes);
     println!("  Arrays:          {}", stats.arrays);
+    println!("  Array elements:  {}", stats.array_elements);
     println!("  Objects:         {}", stats.objects);
+    println!("  Object props:    {}", stats.object_properties);
     println!("  Closures:        {}", stats.closures);
     println!("  Error objects:   {}", stats.error_objects);
     println!("  RegExp objects:  {}", stats.regex_objects);
     println!("  TypedArrays:     {}", stats.typed_arrays);
+    println!("  TypedArray bytes:{}", stats.typed_array_bytes);
+    println!("  ArrayBuffers:    {}", stats.array_buffers);
+    println!("  ArrayBuffer bytes:{}", stats.array_buffer_bytes);
 }
 
 /// Bytecode file magic bytes

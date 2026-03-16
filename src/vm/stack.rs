@@ -234,7 +234,9 @@ impl Stack {
     #[inline]
     pub unsafe fn set_local_at_unchecked(&mut self, frame_ptr: usize, index: usize, value: Value) {
         let abs_index = frame_ptr + index;
-        unsafe { *self.values.get_unchecked_mut(abs_index) = value; }
+        unsafe {
+            *self.values.get_unchecked_mut(abs_index) = value;
+        }
     }
 }
 

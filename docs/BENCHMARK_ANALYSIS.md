@@ -95,10 +95,10 @@ expansion pass and initial optimization rounds.
 | Benchmark | Current Rust-only baseline |
 |-----------|----------------------------|
 | `fib_iter 1k` | `2.056–2.102 ms` |
-| `loop 10k` | `0.512–0.528 ms` |
+| `loop 10k` | `0.484–0.499 ms` |
 | `array push 10k` | `0.672–0.691 ms` |
 | `json parse 1k` | `0.856–0.919 ms` |
-| `sieve 10k` | `2.556–2.687 ms` |
+| `sieve 10k` | `2.014–2.074 ms` |
 | `method_chain 5k` | `0.720–0.763 ms` |
 | `runtime_string_pressure 4k` | `2.893–3.379 ms` |
 | `for_of_array 20k` | `3.471–4.071 ms` |
@@ -123,10 +123,10 @@ cross-implementation comparison. They include process startup cost.
 | Benchmark | Rust | C | Ratio | Notes |
 |-----------|------|---|-------|-------|
 | `fib` | `183.099 ms` | `118.815 ms` | `1.541x` | C faster |
-| `loop` | `94.261 ms` | `62.165 ms` | `1.516x` | C faster |
+| `loop` | `127.598 ms` | `86.453 ms` | `1.476x` | C faster |
 | `array` | `17.673 ms` | `16.467 ms` | `1.073x` | C slightly faster |
 | `json` | `44.048 ms` | `64.280 ms` | `0.685x` | Rust faster |
-| `sieve` | `52.476 ms` | `35.676 ms` | `1.471x` | C faster |
+| `sieve` | `37.343 ms` | `27.791 ms` | `1.344x` | C faster |
 | `method_chain` | `15.795 ms` | `14.109 ms` | `1.119x` | C slightly faster |
 | `runtime_string_pressure` | `22.470 ms` | `19.185 ms` | `1.171x` | C faster |
 | `for_of_array` | `19.509 ms` | `17.358 ms` | `1.124x` | C faster |
@@ -165,8 +165,12 @@ The current baseline already includes the first completed optimization rounds fo
 - `method_chain`
   - removed per-element temporary `Vec<Value>` allocation in array higher-order builtins
   - added `CallMethod` native small-argument fast path
+  - added direct `Array.prototype.push` native fast path with an `argc == 1` shortcut
 - `for_of_array`
   - removed full array cloning from `ForOfStart`
+- `loop` / `sieve`
+  - added a `Dup + PutLocX + Drop` peephole fast path for common statement-update patterns
+  - added `Lt/Lte` + `IfFalse/IfTrue` branch fusion
 
 These changes are tracked in:
 

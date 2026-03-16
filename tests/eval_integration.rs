@@ -1,4 +1,4 @@
-//! Integration tests for Context::eval()
+﻿//! Integration tests for Context::eval()
 //
 //! Tests the full pipeline: source -> lexer -> compiler -> bytecode -> VM -> result.
 
@@ -9,6 +9,41 @@ fn test_create_context() {
     let ctx = Context::new(64 * 1024);
     let stats = ctx.memory_stats();
     assert!(stats.heap_size >= 64 * 1024);
+}
+
+#[test]
+fn test_memory_stats_track_array_and_object_shape() {
+    let mut ctx = Context::new(64 * 1024);
+    ctx.eval(
+        "
+        var arr = [1, 2, 3];
+        var obj = { a: 1, b: 2 };
+        return 0;
+    ",
+    )
+    .unwrap();
+
+    let stats = ctx.memory_stats();
+    assert!(stats.arrays >= 1);
+    assert!(stats.array_elements >= 3);
+    assert!(stats.objects >= 1);
+    assert!(stats.object_properties >= 2);
+}
+
+#[test]
+fn test_memory_stats_track_runtime_string_bytes() {
+    let mut ctx = Context::new(64 * 1024);
+    ctx.eval(
+        "
+        var s = 'item-' + 12 + '-' + 3;
+        return s;
+    ",
+    )
+    .unwrap();
+
+    let stats = ctx.memory_stats();
+    assert!(stats.runtime_strings >= 1);
+    assert!(stats.runtime_string_bytes >= 9);
 }
 
 #[test]
@@ -1011,6 +1046,23 @@ fn test_array_assignment_expression_returns_value() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(14));
+}
+
+#[test]
+fn test_local_assignment_statement_update() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var i = 0;
+        i = i + 1;
+        i = i + 1;
+        return i;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(2));
 }
 
 #[test]
@@ -2180,6 +2232,26 @@ fn test_array_push_multiple_args_order() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(30));
+}
+
+#[test]
+fn test_array_element_used_in_if_condition() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var arr = [0, 1, 0, 2];
+        var sum = 0;
+        if (arr[0]) { sum = sum + 100; }
+        if (arr[1]) { sum = sum + 1; }
+        if (arr[2]) { sum = sum + 100; }
+        if (arr[3]) { sum = sum + 2; }
+        return sum;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(3));
 }
 
 #[test]
@@ -5278,7 +5350,7 @@ fn test_null_plus_number() {
 #[test]
 fn test_undefined_plus_number() {
     let mut ctx = Context::new(64 * 1024);
-    // undefined → NaN, NaN + 1 = NaN
+    // undefined 鈫?NaN, NaN + 1 = NaN
     assert!(ctx.eval("return undefined + 1;").unwrap().is_nan_value());
 }
 
@@ -5365,7 +5437,7 @@ fn test_null_not_equals_false() {
 #[test]
 fn test_bool_coercion_in_eq() {
     let mut ctx = Context::new(64 * 1024);
-    // true→1, false→0
+    // true鈫?, false鈫?
     assert_eq!(ctx.eval("return true == 1;").unwrap().to_bool(), Some(true));
     assert_eq!(
         ctx.eval("return false == 0;").unwrap().to_bool(),
@@ -5500,7 +5572,7 @@ fn test_string_concat_with_undefined() {
 #[test]
 fn test_number_plus_string_coercion() {
     let mut ctx = Context::new(64 * 1024);
-    // When one side is a string, + does concatenation (number→string)
+    // When one side is a string, + does concatenation (number鈫抯tring)
     let result = ctx.eval("return 123 + 'abc';").unwrap();
     assert!(result.is_string());
 }
@@ -5717,7 +5789,7 @@ fn test_string_substring() {
             .to_i32(),
         Some(104)
     );
-    // No end parameter — to end of string
+    // No end parameter 鈥?to end of string
     assert_eq!(
         ctx.eval("return 'hello world'.substring(6).length;")
             .unwrap()
@@ -5745,3 +5817,4 @@ fn test_switch_string_cases() {
         Some(2)
     );
 }
+

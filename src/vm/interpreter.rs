@@ -1,4 +1,4 @@
-//! Bytecode interpreter
+﻿//! Bytecode interpreter
 //!
 //! Executes JavaScript bytecode using a stack-based virtual machine.
 
@@ -22,12 +22,14 @@ impl Interpreter {
     const DEFAULT_MAX_RECURSION: usize = 512;
 
     /// Create a new interpreter
+    /// Create a new interpreter
     pub fn new() -> Self {
         let mut interp = Interpreter {
             stack: Stack::new(Self::DEFAULT_STACK_SIZE),
             call_stack: Vec::with_capacity(64),
             max_recursion: Self::DEFAULT_MAX_RECURSION,
             runtime_strings: Vec::new(),
+            for_in_key_cache: Vec::new(),
             closures: Vec::new(),
             var_cells: Vec::new(),
             exception_handlers: Vec::new(),
@@ -36,6 +38,7 @@ impl Interpreter {
             for_in_iterators: Vec::new(),
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
+            native_array_push_idx: None,
             global_vars: Vec::new(),
             error_objects: Vec::new(),
             regex_objects: Vec::new(),
@@ -47,6 +50,8 @@ impl Interpreter {
             next_timer_id: 1,
             gc_count: 0,
             random_seed: 12345,
+            #[cfg(feature = "dump")]
+            runtime_string_source_stats: RuntimeStringSourceStats::default(),
             #[cfg(feature = "dump")]
             opcode_counts: [0; 256],
         };
@@ -61,6 +66,7 @@ impl Interpreter {
             call_stack: Vec::with_capacity(64),
             max_recursion,
             runtime_strings: Vec::new(),
+            for_in_key_cache: Vec::new(),
             closures: Vec::new(),
             var_cells: Vec::new(),
             exception_handlers: Vec::new(),
@@ -69,6 +75,7 @@ impl Interpreter {
             for_in_iterators: Vec::new(),
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
+            native_array_push_idx: None,
             global_vars: Vec::new(),
             error_objects: Vec::new(),
             regex_objects: Vec::new(),
@@ -81,6 +88,8 @@ impl Interpreter {
             gc_count: 0,
             random_seed: 12345,
             #[cfg(feature = "dump")]
+            runtime_string_source_stats: RuntimeStringSourceStats::default(),
+            #[cfg(feature = "dump")]
             opcode_counts: [0; 256],
         };
         interp.register_builtins();
@@ -91,13 +100,18 @@ impl Interpreter {
     pub fn get_stats(&self) -> InterpreterStats {
         InterpreterStats {
             runtime_strings: self.runtime_strings.len(),
+            runtime_string_bytes: self.runtime_strings.iter().map(|s| s.len()).sum(),
             arrays: self.arrays.len(),
+            array_elements: self.arrays.iter().map(|a| a.len()).sum(),
             objects: self.objects.len(),
+            object_properties: self.objects.iter().map(|o| o.properties.len()).sum(),
             closures: self.closures.len(),
             error_objects: self.error_objects.len(),
             regex_objects: self.regex_objects.len(),
             typed_arrays: self.typed_arrays.len(),
+            typed_array_bytes: self.typed_arrays.iter().map(|ta| ta.data.len()).sum(),
             array_buffers: self.array_buffers.len(),
+            array_buffer_bytes: self.array_buffers.iter().map(|ab| ab.data.len()).sum(),
         }
     }
 
@@ -106,6 +120,7 @@ impl Interpreter {
 
     /// Runtime string index offset (indices >= this are runtime strings)
     pub(crate) const RUNTIME_STRING_OFFSET: u16 = 0x8000;
+
 
     /// Get string content from a string value
     fn get_string_content<'a>(
@@ -136,11 +151,76 @@ impl Interpreter {
             .map(|s| s.as_str())
     }
 
-    /// Create a runtime string and return its Value
-    pub(crate) fn create_runtime_string(&mut self, s: String) -> Value {
+    /// Create a runtime string without updating profiling counters.
+    #[inline]
+    fn create_runtime_string_raw(&mut self, s: String) -> Value {
         let idx = self.runtime_strings.len();
         self.runtime_strings.push(s);
         Value::string(Self::RUNTIME_STRING_OFFSET + idx as u16)
+    }
+
+    /// Create a runtime string and return its Value.
+    pub(crate) fn create_runtime_string(&mut self, s: String) -> Value {
+        self.bump_runtime_string_other();
+        self.create_runtime_string_raw(s)
+    }
+
+    #[cfg(feature = "dump")]
+    #[inline]
+    fn bump_runtime_string_other(&mut self) {
+        self.runtime_string_source_stats.total += 1;
+        self.runtime_string_source_stats.other += 1;
+    }
+
+    #[cfg(feature = "dump")]
+    #[inline]
+    fn bump_runtime_string_concat(&mut self) {
+        self.runtime_string_source_stats.total += 1;
+        self.runtime_string_source_stats.concat += 1;
+    }
+
+    #[cfg(feature = "dump")]
+    #[inline]
+    fn bump_runtime_string_for_in_key(&mut self) {
+        self.runtime_string_source_stats.total += 1;
+        self.runtime_string_source_stats.for_in_key += 1;
+    }
+
+    #[cfg(not(feature = "dump"))]
+    #[inline]
+    fn bump_runtime_string_other(&mut self) {}
+
+    #[cfg(not(feature = "dump"))]
+    #[inline]
+    fn bump_runtime_string_concat(&mut self) {}
+
+    #[cfg(not(feature = "dump"))]
+    #[inline]
+    fn bump_runtime_string_for_in_key(&mut self) {}
+
+    /// Create or reuse a recently-created runtime string.
+    ///
+    /// This is intended for highly repetitive key-generation paths such as
+    /// `for-in`, where the same small key set can otherwise create unbounded
+    /// duplicate runtime strings.
+    #[inline]
+    #[inline]
+    fn create_runtime_string_reuse_recent(&mut self, s: &str) -> Value {
+        self.bump_runtime_string_for_in_key();
+        for (cached, idx) in self.for_in_key_cache.iter().rev() {
+            if cached == s {
+                return Value::string(Self::RUNTIME_STRING_OFFSET + *idx);
+            }
+        }
+        let value = self.create_runtime_string_raw(s.to_string());
+        if let Some(idx) = value.to_string_idx() {
+            let runtime_idx = idx - Self::RUNTIME_STRING_OFFSET;
+            self.for_in_key_cache.push((s.to_string(), runtime_idx));
+            if self.for_in_key_cache.len() > 32 {
+                self.for_in_key_cache.remove(0);
+            }
+        }
+        value
     }
 
     #[inline]
@@ -175,7 +255,7 @@ impl Interpreter {
             {
                 return val;
             }
-            // Compile-time string — promote to runtime
+            // Compile-time string 鈥?promote to runtime
             if let Some(s) = bytecode.string_constants.get(idx as usize) {
                 return self.create_runtime_string(s.clone());
             }
@@ -412,7 +492,11 @@ impl Interpreter {
     fn for_in_next_key(&mut self, iter_idx: usize) -> Option<String> {
         let iter = self.for_in_iterators.get_mut(iter_idx)?;
         match iter {
-            ForInIterator::Object { obj_idx, len, index } => {
+            ForInIterator::Object {
+                obj_idx,
+                len,
+                index,
+            } => {
                 if *index >= *len {
                     return None;
                 }
@@ -666,7 +750,8 @@ impl Interpreter {
         };
 
         self.call_stack.truncate(handler.frame_depth);
-        self.stack.drop_n(self.stack.len().saturating_sub(handler.stack_depth));
+        self.stack
+            .drop_n(self.stack.len().saturating_sub(handler.stack_depth));
         self.stack.push(exception);
 
         if let Some(frame) = self.call_stack.last_mut() {
@@ -1224,9 +1309,9 @@ impl Interpreter {
 
                         let mut out = String::with_capacity(len_a + len_b + 16);
                         self.append_value_to_string(&mut out, a, bytecode);
-                        self.append_value_to_string(&mut out, b, bytecode);
+                        self.bump_runtime_string_concat();
+                        let result = self.create_runtime_string_raw(out);
 
-                        let result = self.create_runtime_string(out);
                         self.stack.push(result);
                     } else {
                         match self.try_op(self.op_add(a, b))? {
@@ -1304,9 +1389,44 @@ impl Interpreter {
                             .to_string();
                         self.stack.push(Value::bool(sa < sb));
                     } else {
-                        match self.try_op(self.op_lt(a, b))? {
-                            Some(result) => self.stack.push(result),
+                        let result = match self.try_op(self.op_lt(a, b))? {
+                            Some(result) => result,
                             None => continue,
+                        };
+
+                        let branch = {
+                            let frame = self.call_stack.last_mut().unwrap();
+                            let bytecode = unsafe { &*frame.bytecode };
+                            let bc = &bytecode.bytecode;
+                            if frame.pc < bc.len() {
+                                let next = bc[frame.pc];
+                                if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
+                                    && frame.pc + 4 < bc.len()
+                                {
+                                    let offset = i32::from_le_bytes([
+                                        bc[frame.pc + 1],
+                                        bc[frame.pc + 2],
+                                        bc[frame.pc + 3],
+                                        bc[frame.pc + 4],
+                                    ]);
+                                    frame.pc += 5;
+                                    Some((next == OpCode::IfTrue as u8, offset))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some((branch_on_true, offset)) = branch {
+                            let is_truthy = Self::value_to_bool(result);
+                            if is_truthy == branch_on_true {
+                                let frame = self.call_stack.last_mut().unwrap();
+                                frame.pc = (frame.pc as i32 + offset) as usize;
+                            }
+                        } else {
+                            self.stack.push(result);
                         }
                     }
                 }
@@ -1328,9 +1448,44 @@ impl Interpreter {
                             .to_string();
                         self.stack.push(Value::bool(sa <= sb));
                     } else {
-                        match self.try_op(self.op_lte(a, b))? {
-                            Some(result) => self.stack.push(result),
+                        let result = match self.try_op(self.op_lte(a, b))? {
+                            Some(result) => result,
                             None => continue,
+                        };
+
+                        let branch = {
+                            let frame = self.call_stack.last_mut().unwrap();
+                            let bytecode = unsafe { &*frame.bytecode };
+                            let bc = &bytecode.bytecode;
+                            if frame.pc < bc.len() {
+                                let next = bc[frame.pc];
+                                if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
+                                    && frame.pc + 4 < bc.len()
+                                {
+                                    let offset = i32::from_le_bytes([
+                                        bc[frame.pc + 1],
+                                        bc[frame.pc + 2],
+                                        bc[frame.pc + 3],
+                                        bc[frame.pc + 4],
+                                    ]);
+                                    frame.pc += 5;
+                                    Some((next == OpCode::IfTrue as u8, offset))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some((branch_on_true, offset)) = branch {
+                            let is_truthy = Self::value_to_bool(result);
+                            if is_truthy == branch_on_true {
+                                let frame = self.call_stack.last_mut().unwrap();
+                                frame.pc = (frame.pc as i32 + offset) as usize;
+                            }
+                        } else {
+                            self.stack.push(result);
                         }
                     }
                 }
@@ -1383,7 +1538,7 @@ impl Interpreter {
                     }
                 }
 
-                // Comparison: Equal (==) — abstract equality with type coercion
+                // Comparison: Equal (==) 鈥?abstract equality with type coercion
                 op if op == OpCode::Eq as u8 => {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (b, a) = unsafe { self.stack.pop2_unchecked() };
@@ -1402,7 +1557,7 @@ impl Interpreter {
                     }
                 }
 
-                // Comparison: Not equal (!=) — abstract inequality
+                // Comparison: Not equal (!=) 鈥?abstract inequality
                 op if op == OpCode::Neq as u8 => {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (b, a) = unsafe { self.stack.pop2_unchecked() };
@@ -1430,7 +1585,8 @@ impl Interpreter {
                         self.stack.push(Value::bool(ia == ib));
                     } else if let (Some(ba), Some(bb)) = (a.to_bool(), b.to_bool()) {
                         self.stack.push(Value::bool(ba == bb));
-                    } else if (a.is_null() && b.is_undefined()) || (a.is_undefined() && b.is_null()) {
+                    } else if (a.is_null() && b.is_undefined()) || (a.is_undefined() && b.is_null())
+                    {
                         self.stack.push(Value::bool(false));
                     // String === String: compare content
                     } else if a.is_string() && b.is_string() {
@@ -1455,7 +1611,8 @@ impl Interpreter {
                         self.stack.push(Value::bool(ia != ib));
                     } else if let (Some(ba), Some(bb)) = (a.to_bool(), b.to_bool()) {
                         self.stack.push(Value::bool(ba != bb));
-                    } else if (a.is_null() && b.is_undefined()) || (a.is_undefined() && b.is_null()) {
+                    } else if (a.is_null() && b.is_undefined()) || (a.is_undefined() && b.is_null())
+                    {
                         self.stack.push(Value::bool(true));
                     } else if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
@@ -1726,7 +1883,7 @@ impl Interpreter {
                                 .as_ref()
                                 .and_then(|lc| lc.get(capture.outer_index).copied().flatten());
                             if let Some(idx) = existing_cell {
-                                // Reuse existing cell — but first sync the cell with the
+                                // Reuse existing cell 鈥?but first sync the cell with the
                                 // current local value (the local may have been updated since
                                 // the cell was created)
                                 let current_val = self
@@ -1755,7 +1912,7 @@ impl Interpreter {
                                 idx
                             }
                         } else {
-                            // Capture from outer's captures — reuse the same cell index
+                            // Capture from outer's captures 鈥?reuse the same cell index
                             if let Some(closure_idx) = closure_idx_current {
                                 self.get_closure(closure_idx as u32)
                                     .and_then(|c| c.get_cell_index(capture.outer_index))
@@ -2245,16 +2402,44 @@ impl Interpreter {
 
                     // Check if this is a native function call
                     if let Some(native_idx) = method_val.to_native_func_idx() {
+                        if Some(native_idx) == self.native_array_push_idx {
+                            if let Some(arr_idx) = this_val.to_array_idx() {
+                                if argc == 1 {
+                                    let arg =
+                                        self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                    let array = unsafe { self.get_array_mut_unchecked(arr_idx) };
+                                    array.push(arg);
+                                } else {
+                                    let stack_len = self.stack.len();
+                                    for i in 0..argc {
+                                        let arg = self.stack.get_raw(stack_len - argc + i);
+                                        // SAFETY: arr_idx is valid if this_val came from a live array value
+                                        let array =
+                                            unsafe { self.get_array_mut_unchecked(arr_idx) };
+                                        array.push(arg);
+                                    }
+                                    self.stack.drop_n(argc);
+                                }
+                                let new_len =
+                                    unsafe { self.get_array_unchecked(arr_idx) }.len() as i32;
+                                self.stack.push(Value::int(new_len));
+                                continue;
+                            }
+                        }
+
                         let result = match argc {
                             0 => self.call_native_func(native_idx, this_val, &[]),
                             1 => {
-                                let a0 = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                                 let args = [a0];
                                 self.call_native_func(native_idx, this_val, &args)
                             }
                             2 => {
-                                let a1 = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                                let a0 = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a1 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                                 let args = [a0, a1];
                                 self.call_native_func(native_idx, this_val, &args)
                             }
@@ -2262,7 +2447,7 @@ impl Interpreter {
                                 let mut args = Vec::with_capacity(argc);
                                 for _ in 0..argc {
                                     args.push(
-                                        self.stack.pop().ok_or(InterpreterError::StackUnderflow)?
+                                        self.stack.pop().ok_or(InterpreterError::StackUnderflow)?,
                                     );
                                 }
                                 args.reverse();
@@ -2609,6 +2794,31 @@ impl Interpreter {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (idx, arr) = unsafe { self.stack.pop2_unchecked() };
 
+                    let branch = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let bc = &bytecode.bytecode;
+                        if frame.pc < bc.len() {
+                            let next = bc[frame.pc];
+                            if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
+                                && frame.pc + 4 < bc.len()
+                            {
+                                let offset = i32::from_le_bytes([
+                                    bc[frame.pc + 1],
+                                    bc[frame.pc + 2],
+                                    bc[frame.pc + 3],
+                                    bc[frame.pc + 4],
+                                ]);
+                                frame.pc += 5;
+                                Some((next == OpCode::IfTrue as u8, offset))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
                     // Fast path: regular array with integer index
                     if arr.is_array() && idx.is_int() {
                         let arr_idx = unsafe { arr.to_array_idx_unchecked() };
@@ -2623,7 +2833,15 @@ impl Interpreter {
                             } else {
                                 Value::undefined()
                             };
-                            self.stack.push(val);
+                            if let Some((branch_on_true, offset)) = branch {
+                                let is_truthy = Self::value_to_bool(val);
+                                if is_truthy == branch_on_true {
+                                    let frame = self.call_stack.last_mut().unwrap();
+                                    frame.pc = (frame.pc as i32 + offset) as usize;
+                                }
+                            } else {
+                                self.stack.push(val);
+                            }
                             continue;
                         }
                     }
@@ -2641,7 +2859,15 @@ impl Interpreter {
                             .get(typed_idx as usize)
                             .and_then(|ta| ta.get(index))
                             .unwrap_or_default();
-                        self.stack.push(val);
+                        if let Some((branch_on_true, offset)) = branch {
+                            let is_truthy = Self::value_to_bool(val);
+                            if is_truthy == branch_on_true {
+                                let frame = self.call_stack.last_mut().unwrap();
+                                frame.pc = (frame.pc as i32 + offset) as usize;
+                            }
+                        } else {
+                            self.stack.push(val);
+                        }
                         continue;
                     }
 
@@ -2659,7 +2885,15 @@ impl Interpreter {
                     })? as usize;
 
                     let val = array.get(index).copied().unwrap_or_default();
-                    self.stack.push(val);
+                    if let Some((branch_on_true, offset)) = branch {
+                        let is_truthy = Self::value_to_bool(val);
+                        if is_truthy == branch_on_true {
+                            let frame = self.call_stack.last_mut().unwrap();
+                            frame.pc = (frame.pc as i32 + offset) as usize;
+                        }
+                    } else {
+                        self.stack.push(val);
+                    }
                 }
 
                 // GetArrayEl2 - get array element, keep object: arr idx -> arr val
@@ -3567,3 +3801,6 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+
+

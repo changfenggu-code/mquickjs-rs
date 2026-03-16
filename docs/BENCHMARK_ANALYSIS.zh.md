@@ -93,10 +93,10 @@ CI 结果现在已经足够有用，也方便在 GitHub 上查看；但在需要
 | Benchmark | 当前 Rust-only 基线 |
 |-----------|---------------------|
 | `fib_iter 1k` | `2.056–2.102 ms` |
-| `loop 10k` | `0.512–0.528 ms` |
+| `loop 10k` | `0.484–0.499 ms` |
 | `array push 10k` | `0.672–0.691 ms` |
 | `json parse 1k` | `0.856–0.919 ms` |
-| `sieve 10k` | `2.556–2.687 ms` |
+| `sieve 10k` | `2.014–2.074 ms` |
 | `method_chain 5k` | `0.720–0.763 ms` |
 | `runtime_string_pressure 4k` | `2.893–3.379 ms` |
 | `for_of_array 20k` | `3.471–4.071 ms` |
@@ -120,10 +120,10 @@ CI 结果现在已经足够有用，也方便在 GitHub 上查看；但在需要
 | Benchmark | Rust | C | 比值 | 说明 |
 |-----------|------|---|------|------|
 | `fib` | `183.099 ms` | `118.815 ms` | `1.541x` | C 更快 |
-| `loop` | `94.261 ms` | `62.165 ms` | `1.516x` | C 更快 |
+| `loop` | `127.598 ms` | `86.453 ms` | `1.476x` | C 更快 |
 | `array` | `17.673 ms` | `16.467 ms` | `1.073x` | C 略快 |
 | `json` | `44.048 ms` | `64.280 ms` | `0.685x` | Rust 更快 |
-| `sieve` | `52.476 ms` | `35.676 ms` | `1.471x` | C 更快 |
+| `sieve` | `37.343 ms` | `27.791 ms` | `1.344x` | C 更快 |
 | `method_chain` | `15.795 ms` | `14.109 ms` | `1.119x` | C 略快 |
 | `runtime_string_pressure` | `22.470 ms` | `19.185 ms` | `1.171x` | C 更快 |
 | `for_of_array` | `19.509 ms` | `17.358 ms` | `1.124x` | C 更快 |
@@ -161,8 +161,12 @@ CI 结果现在已经足够有用，也方便在 GitHub 上查看；但在需要
 - `method_chain`
   - 数组高阶方法中去掉每元素回调的临时 `Vec<Value>` 分配
   - 为 `CallMethod` 的 native 小参数调用增加 fast path
+  - 增加 `Array.prototype.push` 原生直通 fast path，并为 `argc == 1` 加专门快捷路径
 - `for_of_array`
   - `ForOfStart` 不再整数组复制
+- `loop` / `sieve`
+  - 为常见语句更新模式增加 `Dup + PutLocX + Drop` peephole fast path
+  - 增加 `Lt/Lte` 与 `IfFalse/IfTrue` 的分支融合
 
 这些变更同步记录在：
 

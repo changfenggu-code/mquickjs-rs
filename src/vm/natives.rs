@@ -3893,7 +3893,8 @@ impl Interpreter {
     /// Register built-in native functions
     pub(crate) fn register_builtins(&mut self) {
         // Array methods
-        self.register_native("Array.prototype.push", native_array_push, 0);
+        self.native_array_push_idx =
+            Some(self.register_native("Array.prototype.push", native_array_push, 0));
         self.register_native("Array.prototype.pop", native_array_pop, 0);
         self.register_native("Array.prototype.length", native_array_length, 0);
         self.register_native("Array.prototype.shift", native_array_shift, 0);

@@ -1,4 +1,4 @@
-# Engine Optimization Task List
+﻿# Engine Optimization Task List
 
 This document is an engine-only optimization backlog for `mquickjs-rs`.
 
@@ -128,7 +128,7 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 
 - 2026-03-16: first round of `method_chain`-related optimization completed in array higher-order methods by removing per-element temporary `Vec<Value>` argument allocation in callback-heavy array builtins.
 - Regression coverage added for chained `map().filter().reduce()` behavior.
-- Benchmark result: `method_chain 5k` improved from roughly `1.88–2.54 ms` to `0.80–0.82 ms` in Criterion.
+- Benchmark result: `method_chain 5k` improved from roughly `1.88鈥?.54 ms` to `0.80鈥?.82 ms` in Criterion.
 
 ### 9.1.3 Native/builtin call marshalling optimization
 
@@ -160,8 +160,11 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 
 - 2026-03-16: added a `CallMethod` native fast path for small argument counts by removing temporary argument `Vec` allocation on the native-method path for `argc <= 2`.
 - Added regression coverage for multi-argument `Array.prototype.push` argument order.
-- Benchmark result: `array push 10k` improved from roughly `0.897–0.911 ms` to `0.672–0.691 ms` in Criterion.
-- Benchmark result: `method_chain 5k` improved further from roughly `0.986–1.182 ms` to `0.720–0.763 ms` in Criterion.
+- Benchmark result: `array push 10k` improved from roughly `0.897鈥?.911 ms` to `0.672鈥?.691 ms` in Criterion.
+- Benchmark result: `method_chain 5k` improved further from roughly `0.986鈥?.182 ms` to `0.720鈥?.763 ms` in Criterion.
+- 2026-03-16: added a direct `Array.prototype.push` native fast path in `CallMethod`, with a dedicated `argc == 1` shortcut that removes generic native-call overhead from the hot array initialization path.
+- Reused existing `Array.prototype.push` regression coverage to validate semantics.
+- Benchmark result: `sieve 10k` improved from roughly `2.038鈥?.078 ms` to `2.014鈥?.074 ms` in Criterion.
 
 ### 9.1.4 Dense array fast paths
 
@@ -194,7 +197,7 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 
 - 2026-03-16: first deep property optimization completed by adding a small-object fast path for regular object property lookup and unifying `GetField` / `GetField2` property dispatch.
 - Regression coverage added for deep property chain access.
-- Benchmark result: `deep_property 200k` improved from roughly `28–29 ms` to `15.7–17.0 ms` in Criterion.
+- Benchmark result: `deep_property 200k` improved from roughly `28鈥?9 ms` to `15.7鈥?7.0 ms` in Criterion.
 
 ### 9.1.5 Opcode dispatch tightening
 
@@ -211,7 +214,7 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 
 **Tasks**
 
-- Identify the top 10–20 hottest opcodes from benchmark-driven profiling.
+- Identify the top 10鈥?0 hottest opcodes from benchmark-driven profiling.
 - Shorten per-iteration work in the dispatch loop.
 - Reduce repeated decode / branch / error-path overhead in hot instructions.
 - Prefer local fast paths for arithmetic, local-variable, jump, and call instructions.
@@ -226,13 +229,24 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - 2026-03-16: added `try_catch` benchmark coverage for repeated throw/catch control flow.
 - 2026-03-16: reduced exception routing overhead by unifying exception dispatch and replacing repeated pop-based unwind loops with `truncate` / `drop_n` based unwinding.
 - Added regression coverage for repeated throw/catch inside a loop.
-- Benchmark result: `try_catch 5k` baseline recorded at `340–349 µs` in Criterion.
+- Benchmark result: `try_catch 5k` baseline recorded at `340鈥?49 碌s` in Criterion.
 - 2026-03-16: added feature-gated runtime opcode counters under the `dump` feature and exposed them through `Context` for profiling work.
 - Added a `dump`-mode regression test to ensure opcode counting records real execution.
 - Runtime hotspot findings:
   - `loop` is dominated by `GetLoc1`, `Goto`, `Add`, `Dup`, `Drop`, `GetLoc0`, `PutLoc0`, `PutLoc1`, `Lt`, `IfFalse`.
   - `sieve` is dominated by `Goto`, `Drop`, `IfFalse`, `GetLoc3`, `Add`, `Dup`, `GetLoc0`, `Lte`, `GetLoc2`, `PutArrayEl`, `PutLoc3`, `GetArrayEl`, `CallMethod`.
 - Current interpretation: the next evidence-based optimization target is more likely `Dup/Drop` + local-store usage patterns or branch/control-flow cost, not another ad hoc arithmetic helper tweak.
+- 2026-03-16: completed a `Dup + PutLocX + Drop` peephole fast path for common statement-update patterns such as `i = i + 1;`.
+- Added regression coverage for local assignment statement updates while preserving assignment-expression behavior.
+- Benchmark result: `loop 10k` improved from roughly `0.513鈥?.525 ms` to `0.486鈥?.492 ms` in Criterion.
+- Benchmark result: `sieve 10k` improved from roughly `2.257鈥?.310 ms` to `2.152鈥?.191 ms` in Criterion.
+- 2026-03-16: optimized the hot `Dup` / `Drop` opcode handlers themselves by replacing generic checked helpers with direct fast-path stack operations.
+- Reused the same local-assignment and assignment-expression regression coverage to validate the change.
+- Current baseline after this round is recorded in `docs/BENCHMARK_ANALYSIS.md`.
+- 2026-03-16: added a branch-fusion fast path for `Lt/Lte` immediately followed by `IfFalse` / `IfTrue`, allowing the comparison result to branch directly without materializing a temporary boolean on the stack.
+- Reused existing `while`, `switch`, and `try_catch` control-flow regression coverage to validate semantics.
+- Benchmark result: `loop 10k` improved from roughly `0.502鈥?.514 ms` to `0.484鈥?.499 ms` in Criterion.
+- Benchmark result: `sieve 10k` improved from roughly `2.164鈥?.207 ms` to `2.038鈥?.078 ms` in Criterion.
 
 ### 9.1.6 Arithmetic/comparison micro-optimization pass
 
@@ -261,10 +275,10 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 
 - 2026-03-16: improved string-concatenation hot paths by building the final runtime string in a single output buffer instead of first materializing both operands as temporary owned `String` values.
 - Added regression coverage for mixed string/number chained concatenation shape.
-- Benchmark result: `runtime_string_pressure 4k` improved from roughly `2.89–3.38 ms` to `1.53–1.55 ms` in Criterion.
+- Benchmark result: `runtime_string_pressure 4k` improved from roughly `2.89鈥?.38 ms` to `1.53鈥?.55 ms` in Criterion.
 - 2026-03-16: improved `StrictEq` / `StrictNeq` hot opcode handling by adding direct fast paths for same-value, integer, and boolean comparisons before falling back to slower generic handling.
 - Existing switch semantics regression tests were re-run successfully.
-- Benchmark result: `switch 1k` improved from roughly `145–149 µs` class performance to `132–136 µs` in Criterion.
+- Benchmark result: `switch 1k` improved from roughly `145鈥?49 碌s` class performance to `132鈥?36 碌s` in Criterion.
 
 ## 9.2 Optimize GC Performance
 
@@ -352,6 +366,21 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - Record object/string/closure/typed-array counts for benchmark scripts.
 - Identify the biggest memory categories before redesigning layouts.
 
+**Completed so far**
+
+- 2026-03-16: expanded `MemoryStats` / `InterpreterStats` beyond object counts to include:
+  - `runtime_string_bytes`
+  - `array_elements`
+  - `object_properties`
+  - `typed_array_bytes`
+  - `array_buffers`
+  - `array_buffer_bytes`
+- Updated CLI dump output to display the new memory breakdown.
+- Added regression coverage for:
+  - array/object shape metrics
+  - runtime string byte accounting
+- Status: this measurement foundation is now sufficient to start evidence-based 9.3 work.
+
 ### 9.3.2 Reduce temporary allocations in hot execution paths
 
 **Priority**: P0
@@ -384,6 +413,17 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - Measure growth of `runtime_strings` in benchmark workloads.
 - Check whether string promotion is over-eager in hot paths.
 - Look for duplicate string creation opportunities.
+
+**Completed so far**
+
+- 2026-03-16: added dump-only runtime string source counters to distinguish at least:
+  - total runtime string creation requests
+  - concat-driven creation
+  - for-in key creation
+  - other creation paths
+- Exposed the counters through `Context` under the `dump` feature.
+- Added dump-mode regression coverage to ensure runtime string source statistics are recorded.
+- Status: 9.3.3 now has a safe measurement/profiling foundation; optimization policy for reuse/dedup is still intentionally undecided.
 
 ### 9.3.4 Review object and array layout overhead
 
@@ -506,10 +546,10 @@ Deferred:
 - Verified benchmark build with `cargo bench --no-run`.
 - 2026-03-16: completed the first `for_of_array` optimization pass by removing full array cloning from `ForOfStart` and iterating arrays by index instead.
 - Added regression coverage confirming `for-of` over arrays observes element updates during iteration.
-- Benchmark result: `for_of_array 20k` improved from roughly `4.22–4.47 ms` to `2.36–2.42 ms` in Criterion.
+- Benchmark result: `for_of_array 20k` improved from roughly `4.22鈥?.47 ms` to `2.36鈥?.42 ms` in Criterion.
 - 2026-03-16: added `for_in_object` benchmark coverage and completed the first iterator setup optimization pass by replacing eager full-key cloning with index-based lazy key generation over object/array snapshots.
 - Added regression coverage confirming `for-in` over objects still observes updated values through static property reads during iteration.
-- Benchmark baseline recorded: `for_in_object 20x2000` at `3.74–3.80 ms` in Criterion.
+- Benchmark baseline recorded: `for_in_object 20x2000` at `3.74鈥?.80 ms` in Criterion.
 
 ## Recommended Execution Order
 
@@ -532,3 +572,5 @@ This optimization task list is considered substantially complete when:
 - GC no longer relies on conservative `mark_all`
 - memory reduction work is based on measured dominant categories, not guesswork
 - documentation reflects valid benchmark conclusions only
+
+
