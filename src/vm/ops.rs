@@ -71,9 +71,14 @@ impl Interpreter {
     #[inline]
     pub(crate) fn op_neg(&self, val: Value) -> InterpreterResult<Value> {
         if let Some(n) = val.to_i32() {
-            match n.checked_neg() {
-                Some(r) => Ok(Value::int(r)),
-                None => Ok(Value::float(-(n as Float))),
+            if n == 0 {
+                // -0 must produce -0.0 (JS spec)
+                Ok(Value::float(-0.0))
+            } else {
+                match n.checked_neg() {
+                    Some(r) => Ok(Value::int(r)),
+                    None => Ok(Value::float(-(n as Float))),
+                }
             }
         } else if let Some(f) = to_numeric(self, val) {
             Ok(float_to_value(-f))
@@ -139,7 +144,7 @@ impl Interpreter {
             if fb == 0.0 {
                 if fa == 0.0 || fa.is_nan() {
                     Ok(Value::nan())
-                } else if fa > 0.0 {
+                } else if fa.is_sign_positive() != fb.is_sign_negative() {
                     Ok(Value::infinity())
                 } else {
                     Ok(Value::neg_infinity())
@@ -173,7 +178,8 @@ impl Interpreter {
             } else if let Some(result) = va.checked_rem(vb) {
                 return Ok(Value::int(result));
             } else {
-                return Ok(Value::int(0));
+                // i32::MIN % -1 overflows → result is -0.0 per JS spec
+                return Ok(Value::float(-0.0));
             }
         }
         if let Some((fa, fb)) = to_numeric_pair(self, a, b) {
@@ -367,7 +373,12 @@ impl Interpreter {
             (Some(va), Some(vb)) => {
                 let shift = (vb & 0x1f) as u32;
                 let result = (va as u32) >> shift;
-                Ok(Value::int(result as i32))
+                // >>> produces unsigned result; values > i32::MAX must be float
+                if result <= i32::MAX as u32 {
+                    Ok(Value::int(result as i32))
+                } else {
+                    Ok(Value::float(result as Float))
+                }
             }
             _ => Err(InterpreterError::TypeError(
                 "cannot apply logical right shift to non-numbers".to_string(),

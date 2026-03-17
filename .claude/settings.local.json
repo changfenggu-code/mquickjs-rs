@@ -18,7 +18,27 @@
       "Bash(git push:*)",
       "Bash(xargs grep:*)",
       "Bash(ls examples/common/*.rs)",
-      "Bash(rustup target:*)"
+      "Bash(rustup target:*)",
+      "Bash(/tmp/overlap_check.sh:*)",
+      "Bash(chmod +x /tmp/overlap_check.sh)",
+      "Bash(/tmp/overlap_check.sh)",
+      "Bash(/tmp/test_overflow.js:*)",
+      "Bash(/tmp/test_float_overflow.js:*)",
+      "Bash(node /tmp/test_float_overflow.js)",
+      "Bash(/tmp/int_range_check.sh:*)",
+      "Bash(chmod +x /tmp/int_range_check.sh)",
+      "Bash(/tmp/int_range_check.sh)",
+      "Bash(/tmp/test_string_eq.js:*)",
+      "Bash(/tmp/test_empty_string.js:*)",
+      "Bash(/tmp/test_string_type.js:*)",
+      "Bash(/tmp/test_eq_types.js:*)",
+      "Bash(/tmp/test_modulo_edge.js:*)",
+      "Bash(/tmp/test_bitwise_string.js:*)",
+      "Bash(/tmp/test_empty_creation.js:*)",
+      "Bash(/tmp/test_empty_simple.js:*)",
+      "Bash(/tmp/test_string_compare.js:*)",
+      "Bash(/tmp/test_strict_eq.js:*)",
+      "Bash(/tmp/test_string_arithmetic.js:*)"
     ]
   }
 }

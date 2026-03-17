@@ -20,11 +20,13 @@ Benchmark 分析使用三个互补的来源。
 
 主要用途：
 
-- 精确的纯 Rust 计时分析
+- 精确的纯 Rust 执行期计时分析
 - 优化前后的验证
 - 热点确认
 
 判断引擎优化是否真的有效时，这是首选来源。
+
+自 2026 年 3 月 17 日起，Criterion harness 会先编译一次 benchmark 脚本，再在新建 context 上重复测执行阶段，从而尽量减少 parser/compiler 噪声对运行时优化判断的污染。
 
 ### 2. 本地 Rust vs C 对比（`benches/compare.sh` 或等价的本地对比）
 
@@ -78,22 +80,39 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 
 ## 当前基线（本地 Criterion，纯 Rust）
 
-以下数据是第一波 benchmark 扩展和初始优化轮次之后的当前本地 Criterion 基线。
+2026 年 3 月 17 日的当前状态需要特别说明：
 
-| Benchmark | 当前纯 Rust 基线 |
+- Criterion harness 已改为“编译一次、重复测执行”
+- 我们已经在当前工作树上对主 benchmark 集合重新跑了一整轮本地 Criterion
+- 2026 年 3 月 16 日记录的多项数值已经不能代表当前 head
+- 旧的 2026 年 3 月 16 日 Criterion 数值因此不能直接与当前口径对比
+- 因此 benchmark 基线清理应重新视为进行中工作，而不是已关闭工作
+
+### 当前工作树的重验证快照（2026-03-17）
+
+下表来自当前工作树上的重新测量，使用的是更新后的“编译一次、重复测执行”Criterion 口径，应视为主 benchmark 集合的当前可信快照。
+
+| Benchmark | 当前本地快照 |
+|-----------|--------------|
+| `fib_iter 1k` | `2.330–2.379 ms` |
+| `loop 10k` | `0.472–0.485 ms` |
+| `array push 10k` | `0.614–0.633 ms` |
+| `json parse 1k` | `0.736–0.754 ms` |
+| `sieve 10k` | `2.069–2.103 ms` |
+| `method_chain 5k` | `0.699–0.707 ms` |
+| `runtime_string_pressure 4k` | `1.237–1.269 ms` |
+| `for_of_array 20k` | `1.796–1.959 ms` |
+| `deep_property 200k` | `14.925–15.235 ms` |
+
+### 次级跟踪 benchmark（2026-03-17 尚未重跑，沿用上次记录）
+
+这些数值仍然有参考意义，但截至 2026 年 3 月 17 日，它们还没有在新的“编译一次、重复测执行”Criterion 口径下重新验证。
+
+| Benchmark | 上次记录的快照 |
 |-----------|----------------|
-| `fib_iter 1k` | `2.056-2.102 ms` |
-| `loop 10k` | `0.484-0.499 ms` |
-| `array push 10k` | `0.672-0.691 ms` |
-| `json parse 1k` | `0.856-0.919 ms` |
-| `sieve 10k` | `2.014-2.074 ms` |
-| `method_chain 5k` | `0.720-0.763 ms` |
-| `runtime_string_pressure 4k` | `2.893-3.379 ms` |
-| `for_of_array 20k` | `3.471-3.071 ms` |
-| `deep_property 200k` | `19.510-22.446 ms` |
-| `switch 1k` | `0.132-0.136 ms` |
-| `try_catch 5k` | `0.341-0.349 ms` |
-| `for_in_object 20x2000` | `3.743-3.804 ms` |
+| `switch 1k` | `0.132–0.136 ms` |
+| `try_catch 5k` | `0.341–0.349 ms` |
+| `for_in_object 20x2000` | `3.743–3.804 ms` |
 
 ## 当前基线（本地 Rust vs C，含进程启动）
 
@@ -127,10 +146,11 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 ### 当前最强信号
 
 - `json` 仍然是 Rust 引擎的相对优势项。
-- `fib` 和 `loop` 仍然指向调用路径和 dispatch 开销。
-- `array` 和 `sieve` 仍然指向 dense array 读写开销。
-- `runtime_string_pressure` 仍然是有意义的内存/字符串创建路径。
-- `for_of_array` 和 `deep_property` 现已成为规范基线的一部分，应作为一级优化目标。
+- 更新后的执行期口径重跑说明，`fib` 和 `loop` 仍然是调用路径与 dispatch 的有效观察窗。
+- `array` 和 `sieve` 仍然是 dense array 与 builtin 调用成本的重要观察窗。
+- 在 parser/compiler 噪声被削弱之后，`runtime_string_pressure` 和 `method_chain` 在最新完整重跑里又有一轮明显改善，但它们依然是高价值的运行时目标，因为它们直接暴露字符串创建压力和回调密集型数组 builtin 成本。
+- `for_of_array` 在 `ForOfNext` 分支融合之后又有一轮明显改善，现在健康得多，但仍然是有价值的迭代器/控制流观察窗。
+- `deep_property` 仍然是高价值的对象属性访问 benchmark，而且当前看起来比迭代器/字符串压力这组路径更健康。
 - `switch_case` 现已作为次要控制流 benchmark 被跟踪，最新的 `StrictEq` 热路径优化已显示出可测量的改善。
 - `try_catch` 现已作为次要异常控制 benchmark 被跟踪，已记录清理后的基线。
 - `for_in_object` 现已作为次要迭代器/控制流 benchmark 被跟踪，迭代器初始化清理后记录了第一个基线。
@@ -141,9 +161,9 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 - 短运行脚本对比对启动开销更敏感。
 - 在验证 Rust 引擎内部的优化时，优先使用 Criterion。
 
-## 已完成的优化工作（已反映在本基线中）
+## 代码中已经实现的优化工作
 
-当前基线已包含以下完成的第一轮优化：
+当前代码中仍然保留着以下第一轮优化实现：
 
 - `deep_property`
   - 小对象属性查找快速路径
@@ -152,8 +172,11 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
   - 去除数组高阶 builtin 中每个元素的临时 `Vec<Value>` 分配
   - 为 `CallMethod` native 添加小参数快速路径
   - 为 `Array.prototype.push` native 添加 `argc == 1` 专用快捷方式
+  - 将数组 `.push` 的属性读取改成直接走缓存的 native 索引
+  - 将高阶数组 builtin 从整数组 clone 改成“长度快照 + 实时元素读取”
 - `for_of_array`
   - 从 `ForOfStart` 中去除完整数组克隆
+  - 为 `ForOfNext` 常见 `IfTrue` 退出形状增加分支融合
 - `loop` / `sieve`
   - 为常见语句更新模式添加 `Dup + PutLocX + Drop` peephole 快速路径
   - 添加 `Lt/Lte` + `IfFalse/IfTrue` 分支融合
@@ -162,6 +185,12 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 
 - `docs/ENGINE_OPTIMIZATION_TASKLIST.md`
 - `docs/ENGINE_OPTIMIZATION_TASKLIST.zh.md`
+
+当前需要特别强调的是：
+
+- 这些实现本身是真实存在的，代码里也还保留着
+- 2026 年 3 月 17 日不仅有数值变化，Criterion 的测量口径本身也发生了变化
+- 因此旧的 Criterion 数字应视为历史代际数据，而上面的表格应视为当前可信的执行期快照
 
 ## 「9.1.1 Benchmark 基线清理」的含义
 
@@ -175,7 +204,7 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 - 当前基线表已记录在一处
 - 后续优化轮次可以将本文档用作基线参考
 
-本文档即为当前基线参考。
+到了 2026 年 3 月 17 日，这个任务必须重新视为打开状态，因为不仅记录基线和当前工作树出现了漂移，Criterion 的测量口径本身也做了调整。本文档现在既是当前基线参考，也是这次方法变化被明确记录下来的地方。
 
 ## 运行时字符串来源分析
 
@@ -187,4 +216,12 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 - `json_parse` 目前大多落入通用的 other 类别。
 
 嵌入式说明：
+
 - 运行时字符串预算限制有意推迟到后续设备集成工作中，不在此阶段硬编码到引擎中。
+
+更新后的 9.3.3 结论：
+
+- `runtime_string_pressure` 仍然完全由 concat 驱动。
+- `for_in_object` 在当前“无复用”路径下仍会耗尽 runtime string 表，但现在会以可控引擎错误失败，而不是 panic。
+- object_keys 已经确认是一个独立的 runtime string 来源桶。
+- json_parse 目前仍然落在通用 other 桶里，如果继续推进这条主线，下一步应继续把它拆细。

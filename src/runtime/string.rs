@@ -357,7 +357,11 @@ mod tests {
 
     #[test]
     fn test_jsstring_max_len() {
+        fn max_len() -> usize {
+            JSString::MAX_LEN
+        }
+
         // Just verify the constant is reasonable
-        assert!(JSString::MAX_LEN > 1_000_000);
+        assert!(max_len() > 1_000_000);
     }
 }

@@ -385,7 +385,13 @@ impl<'a> Lexer<'a> {
             b':' => Token::Colon,
             b';' => Token::Semicolon,
             b',' => Token::Comma,
-            b'.' => Token::Dot,
+            b'.' => {
+                // Leading decimal: .5 → 0.5
+                if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    return self.read_leading_decimal();
+                }
+                Token::Dot
+            }
             b'(' => Token::LParen,
             b')' => Token::RParen,
             b'[' => Token::LBracket,
@@ -450,11 +456,78 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Read a number literal
+    /// Read a number literal (decimal, hex 0x, octal 0o, binary 0b)
     fn read_number(&mut self) -> Token {
         let start = self.pos;
 
-        // Integer part
+        // Check for 0x, 0o, 0b prefixes
+        if self.peek() == Some(b'0') {
+            self.advance();
+            match self.peek() {
+                Some(b'x' | b'X') => {
+                    self.advance();
+                    if !matches!(self.peek(), Some(c) if c.is_ascii_hexdigit()) {
+                        return Token::Error("Invalid hex literal".to_string());
+                    }
+                    while let Some(c) = self.peek() {
+                        if c.is_ascii_hexdigit() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    let hex_str =
+                        core::str::from_utf8(&self.source[start + 2..self.pos]).unwrap_or("0");
+                    return match i64::from_str_radix(hex_str, 16) {
+                        Ok(n) => Token::Number(n as f64),
+                        Err(_) => Token::Error(format!("Invalid hex literal: 0x{}", hex_str)),
+                    };
+                }
+                Some(b'o' | b'O') => {
+                    self.advance();
+                    if !matches!(self.peek(), Some(b'0'..=b'7')) {
+                        return Token::Error("Invalid octal literal".to_string());
+                    }
+                    while let Some(c) = self.peek() {
+                        if matches!(c, b'0'..=b'7') {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    let oct_str =
+                        core::str::from_utf8(&self.source[start + 2..self.pos]).unwrap_or("0");
+                    return match i64::from_str_radix(oct_str, 8) {
+                        Ok(n) => Token::Number(n as f64),
+                        Err(_) => Token::Error(format!("Invalid octal literal: 0o{}", oct_str)),
+                    };
+                }
+                Some(b'b' | b'B') => {
+                    self.advance();
+                    if !matches!(self.peek(), Some(b'0' | b'1')) {
+                        return Token::Error("Invalid binary literal".to_string());
+                    }
+                    while let Some(c) = self.peek() {
+                        if matches!(c, b'0' | b'1') {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    let bin_str =
+                        core::str::from_utf8(&self.source[start + 2..self.pos]).unwrap_or("0");
+                    return match i64::from_str_radix(bin_str, 2) {
+                        Ok(n) => Token::Number(n as f64),
+                        Err(_) => Token::Error(format!("Invalid binary literal: 0b{}", bin_str)),
+                    };
+                }
+                _ => {
+                    // Plain 0 or 0.xxx — continue to decimal parsing below
+                }
+            }
+        }
+
+        // Integer part (for non-prefix numbers, or the leading 0 already consumed)
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 self.advance();
@@ -497,6 +570,37 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Read a number with leading decimal point (e.g., .5 → 0.5)
+    fn read_leading_decimal(&mut self) -> Token {
+        let start = self.pos - 1; // include the '.' already consumed
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        // Exponent part
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.advance();
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.advance();
+            }
+            while let Some(c) = self.peek() {
+                if c.is_ascii_digit() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        let num_str = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
+        match num_str.parse::<f64>() {
+            Ok(n) => Token::Number(n),
+            Err(_) => Token::Error(format!("Invalid number: {}", num_str)),
+        }
+    }
+
     /// Read a string literal
     fn read_string(&mut self) -> Token {
         let quote = self.advance().unwrap();
@@ -515,9 +619,54 @@ impl<'a> Lexer<'a> {
                         Some(b'n') => s.push('\n'),
                         Some(b'r') => s.push('\r'),
                         Some(b't') => s.push('\t'),
+                        Some(b'v') => s.push('\x0B'),
+                        Some(b'b') => s.push('\x08'),
+                        Some(b'f') => s.push('\x0C'),
+                        Some(b'0') => s.push('\0'),
                         Some(b'\\') => s.push('\\'),
                         Some(b'\'') => s.push('\''),
                         Some(b'"') => s.push('"'),
+                        Some(b'x') => {
+                            // \xHH hex escape
+                            let mut hex = [0u8; 2];
+                            for h in &mut hex {
+                                match self.advance() {
+                                    Some(c) if c.is_ascii_hexdigit() => *h = c,
+                                    _ => {
+                                        return Token::Error(
+                                            "Invalid hex escape sequence".to_string(),
+                                        )
+                                    }
+                                }
+                            }
+                            if let Ok(val) =
+                                u8::from_str_radix(core::str::from_utf8(&hex).unwrap_or("00"), 16)
+                            {
+                                s.push(val as char);
+                            }
+                        }
+                        Some(b'u') => {
+                            // \uHHHH unicode escape
+                            let mut hex = [0u8; 4];
+                            for h in &mut hex {
+                                match self.advance() {
+                                    Some(c) if c.is_ascii_hexdigit() => *h = c,
+                                    _ => {
+                                        return Token::Error(
+                                            "Invalid unicode escape sequence".to_string(),
+                                        )
+                                    }
+                                }
+                            }
+                            if let Ok(val) = u32::from_str_radix(
+                                core::str::from_utf8(&hex).unwrap_or("0000"),
+                                16,
+                            ) {
+                                if let Some(ch) = char::from_u32(val) {
+                                    s.push(ch);
+                                }
+                            }
+                        }
                         Some(c) => s.push(c as char),
                         None => return Token::Error("Unterminated string".to_string()),
                     }
@@ -540,9 +689,10 @@ mod tests {
     #[test]
     fn test_numbers() {
         let mut lexer = Lexer::new("42 3.14 1e10");
+        let expected = 314.0_f64 / 100.0;
 
         assert!(matches!(lexer.next_token(), Token::Number(n) if n == 42.0));
-        assert!(matches!(lexer.next_token(), Token::Number(n) if (n - 3.14).abs() < 0.001));
+        assert!(matches!(lexer.next_token(), Token::Number(n) if (n - expected).abs() < 0.001));
         assert!(matches!(lexer.next_token(), Token::Number(n) if n == 1e10));
     }
 

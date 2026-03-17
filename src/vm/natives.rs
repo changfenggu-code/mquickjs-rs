@@ -3,7 +3,6 @@
 //! All functions follow the signature: fn(interp, this, args) -> Result<Value, String>
 
 use super::interpreter::*;
-use crate::runtime::FunctionBytecode;
 use crate::value::{float_to_value, format_float, Float, Value};
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 
@@ -168,41 +167,33 @@ pub(crate) fn native_array_join(
         .to_array_idx()
         .ok_or_else(|| "join called on non-array".to_string())?;
 
-    // Get separator (default is ",")
+    // JS uses "," when separator is omitted or explicitly undefined.
     let separator = if let Some(sep_val) = args.first() {
-        if let Some(str_idx) = sep_val.to_string_idx() {
-            // We'd need access to string table here, for now use ","
-            let _ = str_idx;
-            ","
+        if sep_val.is_undefined() {
+            ",".to_string()
+        } else if let Some(str_idx) = sep_val.to_string_idx() {
+            interp.get_string_by_idx(str_idx).unwrap_or(",").to_string()
         } else {
-            ","
+            format_value(interp, *sep_val)
         }
     } else {
-        ","
+        ",".to_string()
     };
 
     if let Some(arr) = interp.arrays.get(arr_idx as usize) {
         let parts: Vec<String> = arr
             .iter()
             .map(|v| {
-                if let Some(n) = v.to_i32() {
-                    n.to_string()
-                } else if v.is_undefined() || v.is_null() {
+                if v.is_undefined() || v.is_null() {
                     String::new()
-                } else if let Some(b) = v.to_bool() {
-                    b.to_string()
                 } else {
-                    String::new()
+                    format_value(interp, *v)
                 }
             })
             .collect();
 
-        let result = parts.join(separator);
-
-        // Store result string and return string value
-        let str_idx = interp.runtime_strings.len() as u16;
-        interp.runtime_strings.push(result);
-        Ok(Value::string(str_idx))
+        let result = parts.join(&separator);
+        Ok(interp.create_runtime_string(result))
     } else {
         Err("invalid array".to_string())
     }
@@ -288,17 +279,21 @@ pub(crate) fn native_array_map(
         return Err("map callback must be a function".to_string());
     }
 
-    // Clone the array to avoid borrow issues
-    let arr_clone = interp
+    let len = interp
         .arrays
         .get(arr_idx as usize)
         .ok_or_else(|| "invalid array".to_string())?
-        .clone();
+        .len();
 
-    let mut result = Vec::with_capacity(arr_clone.len());
+    let mut result = Vec::with_capacity(len);
 
-    for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = [*element, Value::int(i as i32), this];
+    for i in 0..len {
+        let element = interp
+            .arrays
+            .get(arr_idx as usize)
+            .and_then(|arr| arr.get(i).copied())
+            .unwrap_or_default();
+        let call_args = [element, Value::int(i as i32), this];
         let mapped = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -329,24 +324,28 @@ pub(crate) fn native_array_filter(
         return Err("filter callback must be a function".to_string());
     }
 
-    // Clone the array to avoid borrow issues
-    let arr_clone = interp
+    let len = interp
         .arrays
         .get(arr_idx as usize)
         .ok_or_else(|| "invalid array".to_string())?
-        .clone();
+        .len();
 
     let mut result = Vec::new();
 
-    for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = [*element, Value::int(i as i32), this];
+    for i in 0..len {
+        let element = interp
+            .arrays
+            .get(arr_idx as usize)
+            .and_then(|arr| arr.get(i).copied())
+            .unwrap_or_default();
+        let call_args = [element, Value::int(i as i32), this];
         let keep = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
 
         // Convert to boolean
         if Interpreter::value_to_bool(keep) {
-            result.push(*element);
+            result.push(element);
         }
     }
 
@@ -374,15 +373,19 @@ pub(crate) fn native_array_foreach(
         return Err("forEach callback must be a function".to_string());
     }
 
-    // Clone the array to avoid borrow issues
-    let arr_clone = interp
+    let len = interp
         .arrays
         .get(arr_idx as usize)
         .ok_or_else(|| "invalid array".to_string())?
-        .clone();
+        .len();
 
-    for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = [*element, Value::int(i as i32), this];
+    for i in 0..len {
+        let element = interp
+            .arrays
+            .get(arr_idx as usize)
+            .and_then(|arr| arr.get(i).copied())
+            .unwrap_or_default();
+        let call_args = [element, Value::int(i as i32), this];
         interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -410,14 +413,13 @@ pub(crate) fn native_array_reduce(
         return Err("reduce callback must be a function".to_string());
     }
 
-    // Clone the array to avoid borrow issues
-    let arr_clone = interp
+    let len = interp
         .arrays
         .get(arr_idx as usize)
         .ok_or_else(|| "invalid array".to_string())?
-        .clone();
+        .len();
 
-    if arr_clone.is_empty() && args.len() < 2 {
+    if len == 0 && args.len() < 2 {
         return Err("reduce of empty array with no initial value".to_string());
     }
 
@@ -425,11 +427,23 @@ pub(crate) fn native_array_reduce(
     let (mut accumulator, start_idx) = if args.len() >= 2 {
         (args[1], 0)
     } else {
-        (arr_clone[0], 1)
+        (
+            interp
+                .arrays
+                .get(arr_idx as usize)
+                .and_then(|arr| arr.first().copied())
+                .unwrap_or_default(),
+            1,
+        )
     };
 
-    for (i, element) in arr_clone.iter().enumerate().skip(start_idx) {
-        let call_args = [accumulator, *element, Value::int(i as i32), this];
+    for i in start_idx..len {
+        let element = interp
+            .arrays
+            .get(arr_idx as usize)
+            .and_then(|arr| arr.get(i).copied())
+            .unwrap_or_default();
+        let call_args = [accumulator, element, Value::int(i as i32), this];
         accumulator = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -457,21 +471,25 @@ pub(crate) fn native_array_find(
         return Err("find callback must be a function".to_string());
     }
 
-    // Clone the array to avoid borrow issues
-    let arr_clone = interp
+    let len = interp
         .arrays
         .get(arr_idx as usize)
         .ok_or_else(|| "invalid array".to_string())?
-        .clone();
+        .len();
 
-    for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = [*element, Value::int(i as i32), this];
+    for i in 0..len {
+        let element = interp
+            .arrays
+            .get(arr_idx as usize)
+            .and_then(|arr| arr.get(i).copied())
+            .unwrap_or_default();
+        let call_args = [element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
 
         if Interpreter::value_to_bool(result) {
-            return Ok(*element);
+            return Ok(element);
         }
     }
 
@@ -497,15 +515,19 @@ pub(crate) fn native_array_find_index(
         return Err("findIndex callback must be a function".to_string());
     }
 
-    // Clone the array to avoid borrow issues
-    let arr_clone = interp
+    let len = interp
         .arrays
         .get(arr_idx as usize)
         .ok_or_else(|| "invalid array".to_string())?
-        .clone();
+        .len();
 
-    for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = [*element, Value::int(i as i32), this];
+    for i in 0..len {
+        let element = interp
+            .arrays
+            .get(arr_idx as usize)
+            .and_then(|arr| arr.get(i).copied())
+            .unwrap_or_default();
+        let call_args = [element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -537,15 +559,19 @@ pub(crate) fn native_array_some(
         return Err("some callback must be a function".to_string());
     }
 
-    // Clone the array to avoid borrow issues
-    let arr_clone = interp
+    let len = interp
         .arrays
         .get(arr_idx as usize)
         .ok_or_else(|| "invalid array".to_string())?
-        .clone();
+        .len();
 
-    for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = [*element, Value::int(i as i32), this];
+    for i in 0..len {
+        let element = interp
+            .arrays
+            .get(arr_idx as usize)
+            .and_then(|arr| arr.get(i).copied())
+            .unwrap_or_default();
+        let call_args = [element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -577,15 +603,19 @@ pub(crate) fn native_array_every(
         return Err("every callback must be a function".to_string());
     }
 
-    // Clone the array to avoid borrow issues
-    let arr_clone = interp
+    let len = interp
         .arrays
         .get(arr_idx as usize)
         .ok_or_else(|| "invalid array".to_string())?
-        .clone();
+        .len();
 
-    for (i, element) in arr_clone.iter().enumerate() {
-        let call_args = [*element, Value::int(i as i32), this];
+    for i in 0..len {
+        let element = interp
+            .arrays
+            .get(arr_idx as usize)
+            .and_then(|arr| arr.get(i).copied())
+            .unwrap_or_default();
+        let call_args = [element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
             .map_err(|e| e.to_string())?;
@@ -717,7 +747,35 @@ pub(crate) fn native_array_sort(
             a_str.cmp(b_str)
         });
     } else {
-        return Err("sort only supports arrays of all numbers or all strings".to_string());
+        // Default JS sort: convert all values to strings, compare lexicographically
+        // Collect string representations first to avoid borrow issues
+        let str_reprs: Vec<String> = sorted
+            .iter()
+            .map(|v| {
+                if let Some(n) = v.to_i32() {
+                    alloc::format!("{}", n)
+                } else if let Some(f) = v.to_f32() {
+                    crate::value::format_float(f)
+                } else if let Some(idx) = v.to_string_idx() {
+                    interp.get_string_by_idx(idx).unwrap_or("").to_string()
+                } else if let Some(b) = v.to_bool() {
+                    if b { "true" } else { "false" }.to_string()
+                } else if v.is_null() {
+                    "null".to_string()
+                } else if v.is_undefined() {
+                    "undefined".to_string()
+                } else {
+                    "[object]".to_string()
+                }
+            })
+            .collect();
+        // Build index-sorted array
+        let mut indices: Vec<usize> = (0..sorted.len()).collect();
+        indices.sort_by(|&a, &b| str_reprs[a].cmp(&str_reprs[b]));
+        let orig = sorted.clone();
+        for (dst, &src) in indices.iter().enumerate() {
+            sorted[dst] = orig[src];
+        }
     }
 
     if let Some(slot) = interp.arrays.get_mut(arr_idx as usize) {
@@ -1154,7 +1212,9 @@ pub(crate) fn native_math_round(
     if let Some(n) = val.to_i32() {
         Ok(Value::int(n))
     } else if let Some(f) = val.to_f32() {
-        Ok(float_to_value(libm::roundf(f)))
+        // JS uses "round half toward positive infinity": Math.round(-0.5) === 0, not -1.
+        // libm::roundf uses C semantics (half away from zero), so we use floor(x + 0.5).
+        Ok(float_to_value(libm::floorf(f + 0.5)))
     } else {
         Ok(Value::nan())
     }
@@ -1487,8 +1547,7 @@ pub(crate) fn native_string_char_code_at(
     if let Some(ch) = s.chars().nth(index) {
         Ok(Value::int(ch as i32))
     } else {
-        // Return NaN for out of bounds - using 0 for now since we don't have proper NaN
-        Ok(Value::int(0))
+        Ok(Value::nan())
     }
 }
 
@@ -1794,7 +1853,12 @@ pub(crate) fn native_string_split(
     };
 
     // Split and create array of strings
-    let string_parts: Vec<String> = s.split(&separator).map(|p| p.to_string()).collect();
+    // Special case: empty separator splits into individual characters
+    let string_parts: Vec<String> = if separator.is_empty() {
+        s.chars().map(|c| c.to_string()).collect()
+    } else {
+        s.split(&separator).map(|p| p.to_string()).collect()
+    };
     let mut parts: Vec<Value> = Vec::with_capacity(string_parts.len());
     for part in string_parts {
         let new_str_idx = interp.runtime_strings.len() as u16 + Interpreter::RUNTIME_STRING_OFFSET;
@@ -2521,8 +2585,14 @@ pub(crate) fn format_console_args(interp: &Interpreter, args: &[Value]) -> Strin
         .join(" ")
 }
 
-/// Format a single value for output
+/// Format a single value for output (with depth limit to prevent circular reference crashes)
 pub(crate) fn format_value(interp: &Interpreter, val: Value) -> String {
+    format_value_depth(interp, val, 0)
+}
+
+const FORMAT_MAX_DEPTH: usize = 10;
+
+fn format_value_depth(interp: &Interpreter, val: Value, depth: usize) -> String {
     if let Some(n) = val.to_i32() {
         n.to_string()
     } else if let Some(f) = val.to_f32() {
@@ -2537,13 +2607,18 @@ pub(crate) fn format_value(interp: &Interpreter, val: Value) -> String {
         if let Some(s) = interp.get_string_by_idx(str_idx) {
             s.to_string()
         } else {
-            // Compile-time string - can't look up without bytecode
             "<string>".to_string()
         }
     } else if val.is_array() {
+        if depth >= FORMAT_MAX_DEPTH {
+            return "[Array]".to_string();
+        }
         if let Some(arr_idx) = val.to_array_idx() {
             if let Some(arr) = interp.arrays.get(arr_idx as usize) {
-                let items: Vec<String> = arr.iter().map(|v| format_value(interp, *v)).collect();
+                let items: Vec<String> = arr
+                    .iter()
+                    .map(|v| format_value_depth(interp, *v, depth + 1))
+                    .collect();
                 format!("[{}]", items.join(", "))
             } else {
                 "[Array]".to_string()
@@ -2588,12 +2663,14 @@ pub(crate) fn native_json_stringify(
         return Ok(Value::undefined());
     }
     let val = args[0];
-    let json_str = json_stringify_value(interp, val);
-    Ok(interp.create_runtime_string(json_str))
+    let mut visited = Vec::new();
+    let json_str = json_stringify_value(interp, val, &mut visited);
+    Ok(interp.create_runtime_string_json(json_str))
 }
 
-/// Helper function to stringify a value to JSON format
-fn json_stringify_value(interp: &Interpreter, val: Value) -> String {
+/// Helper function to stringify a value to JSON format.
+/// `visited` tracks object/array indices to detect circular references.
+fn json_stringify_value(interp: &Interpreter, val: Value, visited: &mut Vec<u64>) -> String {
     if let Some(n) = val.to_i32() {
         n.to_string()
     } else if let Some(f) = val.to_f32() {
@@ -2619,11 +2696,17 @@ fn json_stringify_value(interp: &Interpreter, val: Value) -> String {
         }
     } else if val.is_array() {
         if let Some(arr_idx) = val.to_array_idx() {
+            let key = val.raw().0;
+            if visited.contains(&key) {
+                // Circular reference — throw would be ideal, but return null for safety
+                return "null".to_string();
+            }
             if let Some(arr) = interp.arrays.get(arr_idx as usize) {
+                visited.push(key);
                 let items: Vec<String> = arr
                     .iter()
                     .map(|v| {
-                        let s = json_stringify_value(interp, *v);
+                        let s = json_stringify_value(interp, *v, visited);
                         // Replace undefined with null in arrays
                         if s == "undefined" {
                             "null".to_string()
@@ -2632,6 +2715,7 @@ fn json_stringify_value(interp: &Interpreter, val: Value) -> String {
                         }
                     })
                     .collect();
+                visited.pop();
                 format!("[{}]", items.join(","))
             } else {
                 "[]".to_string()
@@ -2641,12 +2725,18 @@ fn json_stringify_value(interp: &Interpreter, val: Value) -> String {
         }
     } else if val.is_object() {
         if let Some(obj_idx) = val.to_object_idx() {
+            let key = val.raw().0;
+            if visited.contains(&key) {
+                // Circular reference — throw would be ideal, but return null for safety
+                return "null".to_string();
+            }
             if let Some(obj) = interp.objects.get(obj_idx as usize) {
+                visited.push(key);
                 let items: Vec<String> = obj
                     .properties
                     .iter()
                     .filter_map(|(k, v)| {
-                        let val_str = json_stringify_value(interp, *v);
+                        let val_str = json_stringify_value(interp, *v, visited);
                         // Skip undefined values in objects
                         if val_str == "undefined" {
                             None
@@ -2655,6 +2745,7 @@ fn json_stringify_value(interp: &Interpreter, val: Value) -> String {
                         }
                     })
                     .collect();
+                visited.pop();
                 format!("{{{}}}", items.join(","))
             } else {
                 "{}".to_string()
@@ -2964,7 +3055,25 @@ impl<'a> JsonParser<'a> {
                         match escaped {
                             '"' => key.push('"'),
                             '\\' => key.push('\\'),
+                            '/' => key.push('/'),
                             'n' => key.push('\n'),
+                            'r' => key.push('\r'),
+                            't' => key.push('\t'),
+                            'b' => key.push('\x08'),
+                            'f' => key.push('\x0C'),
+                            'u' => {
+                                let mut hex = String::with_capacity(4);
+                                for _ in 0..4 {
+                                    if self.pos < self.input.len() {
+                                        hex.push(self.next_char());
+                                    }
+                                }
+                                if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                                    if let Some(ch) = char::from_u32(cp) {
+                                        key.push(ch);
+                                    }
+                                }
+                            }
                             _ => key.push(escaped),
                         }
                     }
@@ -3189,7 +3298,7 @@ pub(crate) fn native_object_keys(
         // Now create string values
         let keys: Vec<Value> = key_strings
             .into_iter()
-            .map(|k| interp.create_runtime_string(k))
+            .map(|k| interp.create_runtime_string_object_key(k))
             .collect();
 
         let arr_idx = interp.arrays.len() as u32;
@@ -3276,7 +3385,7 @@ pub(crate) fn native_object_entries(
         let mut entries: Vec<Value> = Vec::new();
 
         for (k, v) in props {
-            let key_val = interp.create_runtime_string(k);
+            let key_val = interp.create_runtime_string_object_entry_key(k);
             // Create inner array [key, value]
             let pair_idx = interp.arrays.len() as u32;
             interp.arrays.push(vec![key_val, v]);
@@ -3574,11 +3683,11 @@ pub(crate) fn native_error_to_string(
             } else {
                 format!("{}: {}", err.name, err.message)
             };
-            return Ok(interp.create_runtime_string(result));
+            return Ok(interp.create_runtime_string_error(result));
         }
     }
     // Fallback
-    Ok(interp.create_runtime_string("Error".to_string()))
+    Ok(interp.create_runtime_string_error("Error".to_string()))
 }
 
 /// Function.prototype.toString - returns function source representation
@@ -3602,7 +3711,7 @@ pub(crate) fn native_array_to_string(
         if let Some(arr) = interp.arrays.get(arr_idx as usize).cloned() {
             let parts: Vec<String> = arr.iter().map(|v| format_value(interp, *v)).collect();
             let result = parts.join(",");
-            return Ok(interp.create_runtime_string(result));
+            return Ok(interp.create_runtime_string_error(result));
         }
     }
     Ok(interp.create_runtime_string(String::new()))
@@ -3688,7 +3797,7 @@ pub(crate) fn native_object_to_string(
         "[object Object]"
     };
 
-    Ok(interp.create_runtime_string(type_str.to_string()))
+    Ok(interp.create_runtime_string_type(type_str.to_string()))
 }
 
 /// gc() - trigger garbage collection (placeholder)
@@ -3729,7 +3838,9 @@ pub(crate) fn native_load(
         .map_err(|e| format!("compile error in '{}': {}", filename, e))?;
 
     // Convert to FunctionBytecode
-    fn to_bytecode(compiled: crate::parser::compiler::CompiledFunction) -> FunctionBytecode {
+    fn to_bytecode(
+        compiled: crate::parser::compiler::CompiledFunction,
+    ) -> crate::runtime::FunctionBytecode {
         let inner_functions = compiled.functions.into_iter().map(to_bytecode).collect();
 
         let captures = compiled
@@ -3741,7 +3852,7 @@ pub(crate) fn native_load(
             })
             .collect();
 
-        FunctionBytecode {
+        crate::runtime::FunctionBytecode {
             name: None,
             arg_count: compiled.arg_count as u16,
             local_count: compiled.local_count as u16,

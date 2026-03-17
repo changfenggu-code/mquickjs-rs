@@ -82,7 +82,7 @@ pub struct MemoryStats {
     ///
     /// Note: This represents the allocation boundary position, not the actual
     /// object memory usage. For accurate object memory tracking, a full GC
-    /// implementation would be needed. This is the "inconsistent鍙ｅ緞" issue
+    /// implementation would be needed. This is the "inconsistent measurement" issue
     /// documented in PRODUCT_ROADMAP.md.
     pub used: usize,
     /// Estimated object memory usage in bytes
@@ -362,8 +362,13 @@ impl Context {
         self.interpreter.arrays.clear();
         self.interpreter.objects.clear();
         self.interpreter.runtime_strings.clear();
-        self.interpreter.for_in_key_cache.clear();
         self.interpreter.error_objects.clear();
+        self.interpreter.regex_objects.clear();
+        self.interpreter.typed_arrays.clear();
+        self.interpreter.array_buffers.clear();
+        self.interpreter.for_in_iterators.clear();
+        self.interpreter.for_of_iterators.clear();
+        self.interpreter.var_cells.clear();
         self.interpreter.timers.clear();
         self.interpreter.stack.clear();
         self.interpreter.call_stack.clear();

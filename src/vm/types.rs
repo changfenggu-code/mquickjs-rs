@@ -1,4 +1,4 @@
-﻿//! Data types used by the interpreter.
+//! Data types used by the interpreter.
 //
 //! Constants, structs, and enums for objects, closures, call frames,
 //! error objects, regex, typed arrays, and interpreter statistics.
@@ -400,8 +400,6 @@ pub struct Interpreter {
     /// Indices start from 0x8000 to distinguish from compile-time strings
     pub(crate) runtime_strings: Vec<String>,
     /// Closures created during execution
-    /// Small cache for repeated for-in key runtime strings.
-    pub(crate) for_in_key_cache: Vec<(String, u16)>,
     /// Values on the stack can reference closures by index
     pub(crate) closures: Vec<ClosureData>,
     /// Shared mutable variable cells for closure captures.
@@ -456,7 +454,6 @@ pub struct Interpreter {
     pub(crate) opcode_counts: [u64; 256],
 }
 
-/// Error object storage
 /// Error object storage
 #[derive(Debug, Clone)]
 pub struct ErrorObject {
@@ -592,7 +589,12 @@ impl TypedArrayObject {
                     self.data[byte_offset + 2],
                     self.data[byte_offset + 3],
                 ];
-                Value::int(u32::from_le_bytes(bytes) as i32)
+                let value = u32::from_le_bytes(bytes);
+                if value <= i32::MAX as u32 {
+                    Value::int(value as i32)
+                } else {
+                    float_to_value(value as crate::value::Float)
+                }
             }
             TypedArrayKind::Float32 => {
                 let bytes = [
@@ -614,7 +616,7 @@ impl TypedArrayObject {
                     self.data[byte_offset + 6],
                     self.data[byte_offset + 7],
                 ];
-                float_to_value(f64::from_le_bytes(bytes) as f32)
+                Self::float64_to_value(f64::from_le_bytes(bytes))
             }
         })
     }
@@ -653,7 +655,25 @@ impl TypedArrayObject {
                 self.data[byte_offset..byte_offset + 4].copy_from_slice(&bytes);
             }
             TypedArrayKind::Uint32 => {
-                let bytes = (int_val as u32).to_le_bytes();
+                let mut uint_val = if let Some(int_val) = value.to_i32() {
+                    int_val as u32
+                } else {
+                    0
+                };
+                if value.to_i32().is_none() {
+                    if let Some(float_val) = value.to_f32() {
+                        if float_val.is_finite() {
+                            let truncated = libm::truncf(float_val);
+                            let modulus = 4_294_967_296.0_f32;
+                            let mut wrapped = truncated % modulus;
+                            if wrapped < 0.0 {
+                                wrapped += modulus;
+                            }
+                            uint_val = wrapped as u32;
+                        }
+                    }
+                }
+                let bytes = uint_val.to_le_bytes();
                 self.data[byte_offset..byte_offset + 4].copy_from_slice(&bytes);
             }
             TypedArrayKind::Float32 => {
@@ -661,11 +681,30 @@ impl TypedArrayObject {
                 self.data[byte_offset..byte_offset + 4].copy_from_slice(&bytes);
             }
             TypedArrayKind::Float64 => {
-                let bytes = (float_val as f64).to_le_bytes();
+                let float64_val = if let Some(int_val) = value.to_i32() {
+                    int_val as f64
+                } else {
+                    value.to_f32().map(f64::from).unwrap_or(0.0)
+                };
+                let bytes = float64_val.to_le_bytes();
                 self.data[byte_offset..byte_offset + 8].copy_from_slice(&bytes);
             }
         }
         true
+    }
+
+    #[inline]
+    fn float64_to_value(value: f64) -> Value {
+        if value.is_finite()
+            && (value - libm::trunc(value)) == 0.0
+            && value >= i32::MIN as f64
+            && value <= i32::MAX as f64
+            && !(value == 0.0 && value.is_sign_negative())
+        {
+            Value::int(value as i32)
+        } else {
+            float_to_value(value as f32)
+        }
     }
 
     /// Create a subarray view into this typed array
@@ -761,7 +800,6 @@ pub struct InterpreterStats {
     pub array_buffers: usize,
     /// Total bytes held by array buffers
     pub array_buffer_bytes: usize,
-
 }
 
 /// Runtime string creation counters for profiling (`dump` feature only)
@@ -771,5 +809,10 @@ pub struct RuntimeStringSourceStats {
     pub total: u64,
     pub concat: u64,
     pub for_in_key: u64,
+    pub json: u64,
+    pub object_keys: u64,
+    pub object_entries: u64,
+    pub error_string: u64,
+    pub type_string: u64,
     pub other: u64,
 }

@@ -1,4 +1,4 @@
-# Benchmark Analysis
+﻿# Benchmark Analysis
 
 Chinese version: `docs/BENCHMARK_ANALYSIS.zh.md`
 
@@ -21,11 +21,15 @@ Benchmark analysis uses three complementary sources.
 
 Primary use:
 
-- precise Rust-only timing analysis
+- precise Rust-only execution-phase timing analysis
 - before/after optimization validation
 - hotspot confirmation
 
 This is the preferred source when deciding whether an engine optimization actually helped.
+
+As of March 17, 2026, the Criterion harness compiles each benchmark script once and then
+measures execution on fresh contexts. This intentionally reduces parser/compiler noise in
+runtime optimization work.
 
 ### 2. Local Rust-vs-C comparison (`benches/compare.sh` or equivalent local comparison)
 
@@ -89,20 +93,39 @@ Currently tracked secondary benchmarks:
 
 ## Current Baseline (Local Criterion, Rust-only)
 
-The following values are the current local Criterion baseline after the first benchmark
-expansion pass and initial optimization rounds.
+Important current status on March 17, 2026:
 
-| Benchmark | Current Rust-only baseline |
-|-----------|----------------------------|
-| `fib_iter 1k` | `2.056–2.102 ms` |
-| `loop 10k` | `0.484–0.499 ms` |
-| `array push 10k` | `0.672–0.691 ms` |
-| `json parse 1k` | `0.856–0.919 ms` |
-| `sieve 10k` | `2.014–2.074 ms` |
-| `method_chain 5k` | `0.720–0.763 ms` |
-| `runtime_string_pressure 4k` | `2.893–3.379 ms` |
-| `for_of_array 20k` | `3.471–4.071 ms` |
-| `deep_property 200k` | `19.510–22.446 ms` |
+- the Criterion harness was updated to compile once and benchmark execution on fresh contexts
+- a full local Criterion revalidation was run for the primary benchmark set on the current worktree
+- several values previously recorded on March 16, 2026 no longer match the current head
+- older March 16 Criterion numbers are therefore not directly comparable to the current harness
+- benchmark baseline cleanup should therefore be treated as active work again, not as closed work
+
+### Revalidated Current-Worktree Snapshot (2026-03-17)
+
+These values come from a fresh local rerun on the current worktree using the updated
+compile-once execution-focused Criterion harness and should be treated as the current trusted
+snapshot for the primary benchmark set.
+
+| Benchmark | Current local snapshot |
+|-----------|------------------------|
+| `fib_iter 1k` | `2.330–2.379 ms` |
+| `loop 10k` | `0.472–0.485 ms` |
+| `array push 10k` | `0.614–0.633 ms` |
+| `json parse 1k` | `0.736–0.754 ms` |
+| `sieve 10k` | `2.069–2.103 ms` |
+| `method_chain 5k` | `0.699–0.707 ms` |
+| `runtime_string_pressure 4k` | `1.237–1.269 ms` |
+| `for_of_array 20k` | `1.796–1.959 ms` |
+| `deep_property 200k` | `14.925–15.235 ms` |
+
+### Secondary Tracked Benchmarks (last recorded snapshot, not rerun on 2026-03-17)
+
+These values are still useful for context, but they have not yet been revalidated against the
+current worktree under the updated compile-once Criterion harness on March 17, 2026.
+
+| Benchmark | Last recorded snapshot |
+|-----------|------------------------|
 | `switch 1k` | `0.132–0.136 ms` |
 | `try_catch 5k` | `0.341–0.349 ms` |
 | `for_in_object 20x2000` | `3.743–3.804 ms` |
@@ -140,11 +163,11 @@ cross-implementation comparison. They include process startup cost.
 ### Strongest current signals
 
 - `json` remains a relative strength for the Rust engine.
-- `fib` and `loop` still point to call-path and dispatch cost.
-- `array` and `sieve` still point to dense array access/write cost.
-- `runtime_string_pressure` remains a meaningful memory/string creation path.
-- `for_of_array` and `deep_property` are now part of the canonical baseline and should be
-  treated as first-class optimization targets.
+- the updated execution-focused rerun still shows `fib` and `loop` as useful call-path and dispatch signals.
+- `array` and `sieve` remain meaningful dense-array and builtin-call signals.
+- `runtime_string_pressure` and `method_chain` both improved again in the latest full rerun, but they still remain useful runtime-focused targets because they exercise string creation pressure and callback-heavy array builtins directly.
+- `for_of_array` improved materially again after a `ForOfNext` branch-fusion pass and now looks much healthier, though it remains a useful iterator/control-flow target.
+- `deep_property` remains a strong object-property benchmark and currently looks healthier than the iterator/string-pressure group.
 - `switch_case` is now tracked as a secondary control-flow benchmark and already shows measurable improvement from the latest `StrictEq` hot-path tuning.
 - `try_catch` is now tracked as a secondary exception-control benchmark and has a recorded post-cleanup baseline.
 - `for_in_object` is now tracked as a secondary iterator/control-flow benchmark with a first recorded baseline after iterator setup cleanup.
@@ -155,9 +178,9 @@ cross-implementation comparison. They include process startup cost.
 - Short-running script comparisons can be more sensitive to startup overhead.
 - Use Criterion first when validating an optimization inside the Rust engine.
 
-## Already Completed Optimization Work Reflected In This Baseline
+## Already Completed Optimization Work Reflected In The Codebase
 
-The current baseline already includes the first completed optimization rounds for:
+The current codebase still contains the first completed optimization rounds for:
 
 - `deep_property`
   - small-object property lookup fast path
@@ -166,8 +189,11 @@ The current baseline already includes the first completed optimization rounds fo
   - removed per-element temporary `Vec<Value>` allocation in array higher-order builtins
   - added `CallMethod` native small-argument fast path
   - added direct `Array.prototype.push` native fast path with an `argc == 1` shortcut
+  - changed array `.push` property lookup to use the cached native index directly
+  - replaced full-array cloning in higher-order array builtins with length-snapshot iteration plus live element reads
 - `for_of_array`
   - removed full array cloning from `ForOfStart`
+  - added `ForOfNext` branch fusion for the common `IfTrue` loop-exit shape
 - `loop` / `sieve`
   - added a `Dup + PutLocX + Drop` peephole fast path for common statement-update patterns
   - added `Lt/Lte` + `IfFalse/IfTrue` branch fusion
@@ -177,7 +203,13 @@ These changes are tracked in:
 - `docs/ENGINE_OPTIMIZATION_TASKLIST.md`
 - `docs/ENGINE_OPTIMIZATION_TASKLIST.zh.md`
 
-## What “9.1.1 Benchmark Baseline Cleanup” Means Now
+Important current interpretation:
+
+- these implementation changes are real and still present in the code
+- the benchmark harness itself changed on March 17, 2026, so older Criterion numbers and current Criterion numbers must be treated as different measurement generations
+- treat the table above as the current trusted execution-focused snapshot
+
+## What "9.1.1 Benchmark Baseline Cleanup" Means Now
 
 This baseline cleanup task is considered complete when:
 
@@ -189,4 +221,26 @@ This baseline cleanup task is considered complete when:
 - the current baseline tables are recorded in one place
 - future optimization rounds can use this document as the baseline reference
 
-This document is the current baseline reference.
+On March 17, 2026, this task had to be treated as reopened because both the recorded baseline
+and the benchmark method itself changed. This document is therefore both the current baseline
+reference and the place where that methodology change is now recorded explicitly.
+
+## Runtime String Source Findings
+
+Current dump-mode probing shows:
+
+- `runtime_string_pressure` is almost entirely concat-driven.
+- `for_in_object` is dominated by repeated `for-in` key creation requests.
+- deep_property produces essentially no runtime strings.
+- json_parse currently lands mostly in the generic other bucket.
+
+
+Embedded note:
+- Runtime string budget limits are intentionally deferred to later device integration work instead of being hard-coded into the engine at this stage.
+
+
+Updated 9.3.3 findings:
+- `runtime_string_pressure` is still entirely concat-driven.
+- `for_in_object` still exhausts the runtime string table on the current no-reuse path, but now fails as a controlled engine error instead of panicking.
+- object_keys is now confirmed as a distinct runtime string source bucket.
+- json_parse still lands in the generic other bucket and should be split further if we continue this line.

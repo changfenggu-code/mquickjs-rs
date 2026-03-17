@@ -1,4 +1,4 @@
-# AGENTS.md
+﻿# AGENTS.md
 
 This repository is a split workspace with two distinct layers:
 
@@ -121,6 +121,11 @@ Do not treat a benchmark change as complete unless the benchmark method and resu
 
 ## 5. Documentation Rules
 
+- Keep English/Chinese document pairs synchronized when one side is updated.
+- When changing an English documentation file, update the corresponding Chinese documentation file in the same turn unless the user explicitly says not to.
+- Keep the meaning aligned across both versions; do not let one side drift or become stale.
+
+
 - Engine documentation belongs in root `docs/`.
 - Product/runtime documentation belongs in `led-runtime/docs/`.
 - If a change affects benchmark interpretation, update `docs/BENCHMARK_ANALYSIS.md`.
@@ -131,7 +136,12 @@ Do not treat a benchmark change as complete unless the benchmark method and resu
   - `led-runtime/docs/EFFECT_ENGINE_API.md`
   - and related product docs as needed.
 
-## 6. Benchmark Priorities
+
+## 5.1 Encoding Rule
+
+- All Chinese documentation files must be saved as UTF-8.
+- When updating paired English/Chinese docs, keep both versions synchronized and ensure the Chinese version remains valid UTF-8 without mojibake.
+`r`n## 6. Benchmark Priorities
 
 The current engine optimization focus is:
 
@@ -175,3 +185,5 @@ If a requested change could belong to either layer, prefer this decision order:
 1. Is it effect/LED/product-specific? -> `led-runtime`
 2. Is it general JS engine/runtime behavior? -> root crate
 3. Is it benchmark/optimization work for the engine? -> root crate
+
+

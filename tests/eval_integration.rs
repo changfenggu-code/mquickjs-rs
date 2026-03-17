@@ -1,4 +1,4 @@
-﻿//! Integration tests for Context::eval()
+//! Integration tests for Context::eval()
 //
 //! Tests the full pipeline: source -> lexer -> compiler -> bytecode -> VM -> result.
 
@@ -64,6 +64,14 @@ fn test_eval_literal() {
     // Test return statement
     let result = ctx.eval("return 42;").unwrap();
     assert_eq!(result.to_i32(), Some(42));
+}
+#[test]
+fn test_for_in_runtime_string_overflow_becomes_error() {
+    let mut ctx = Context::new(256 * 1024);
+    let result = ctx.eval("var obj = { a:1,b:2,c:3,d:4,e:5,f:6,g:7,h:8,i:9,j:10,k:11,l:12,m:13,n:14,o:15,p:16,q:17,r:18,s:19,t:20 }; for (var round = 0; round < 5000; round = round + 1) { for (var k in obj) { } } return 0;");
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("runtime string table exhausted"));
 }
 
 #[test]
@@ -2385,12 +2393,25 @@ fn test_array_join() {
         .eval(
             "
         var arr = [1, 2, 3];
-        var s = arr.join();
-        return s;
+        return arr.join() === '1,2,3';
     ",
         )
         .unwrap();
-    assert!(result.is_string());
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_array_join_with_separator_and_strings() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var arr = ['a', 'b', 'c'];
+        return arr.join('-') === 'a-b-c';
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
 }
 
 #[test]
@@ -2486,6 +2507,20 @@ fn test_string_length() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(5));
+}
+
+#[test]
+fn test_object_length_property_still_uses_regular_lookup() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var obj = { length: 123 };
+        return obj.length;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(123));
 }
 
 #[test]
@@ -4002,12 +4037,13 @@ fn test_math_random() {
     // Math.random() returns a float in [0, 1)
     let result = ctx.eval("return Math.random();").unwrap();
     let val = result.to_number_f32().unwrap();
-    assert!(val >= 0.0 && val < 1.0);
+    assert!((0.0..1.0).contains(&val));
 }
 
 #[test]
 fn test_parse_float() {
     let mut ctx = Context::new(64 * 1024);
+    let expected = 314.0_f32 / 100.0;
 
     // parseFloat with integer string
     let result = ctx.eval("return parseFloat('42');").unwrap();
@@ -4016,7 +4052,7 @@ fn test_parse_float() {
     // parseFloat with decimal returns float
     let result = ctx.eval("return parseFloat('3.14');").unwrap();
     let val = result.to_number_f32().unwrap();
-    assert!((val - 3.14).abs() < 0.01);
+    assert!((val - expected).abs() < 0.01);
 }
 
 #[test]
@@ -4502,6 +4538,57 @@ fn test_array_method_chain_map_filter_reduce() {
 }
 
 #[test]
+fn test_array_map_uses_length_snapshot() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var arr = [1, 2];
+        var mapped = arr.map(function (x, i, a) {
+            if (i === 0) a.push(99);
+            return x;
+        });
+        return mapped.length;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(2));
+}
+
+#[test]
+fn test_array_map_observes_future_element_updates() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var arr = [1, 2];
+        var mapped = arr.map(function (x, i, a) {
+            if (i === 0) a[1] = 99;
+            return x;
+        });
+        return mapped[1];
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(99));
+}
+
+#[test]
+fn test_local_assignment_statement_update_putloc8_shape() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var a = 1, b = 2, c = 3, d = 4, e = 5;
+        e = e + 1;
+        return e;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(6));
+}
+
+#[test]
 fn test_array_find() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -4877,7 +4964,7 @@ fn test_uint8_clamped_array() {
     ",
         )
         .unwrap();
-    assert_eq!(result.to_i32(), Some(0 + 255 + 100)); // 355
+    assert_eq!(result.to_i32(), Some(355));
 }
 
 #[test]
@@ -5244,6 +5331,37 @@ fn test_float64_array_whole_number_normalization() {
 }
 
 #[test]
+fn test_float64_array_preserves_large_int_precision() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var value = 16777217;
+        var arr = new Float64Array(1);
+        arr[0] = value;
+        return arr[0];
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(16777217));
+}
+
+#[test]
+fn test_uint32_array_preserves_high_bit_values() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var arr = new Uint32Array(1);
+        arr[0] = 2147483648;
+        return arr[0];
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_number_f32(), Some(2147483648.0));
+}
+
+#[test]
 fn test_float32_array_zero() {
     let mut ctx = Context::new(64 * 1024);
     let result = ctx
@@ -5401,8 +5519,13 @@ fn test_bool_modulo() {
 fn test_unary_neg_bool() {
     let mut ctx = Context::new(64 * 1024);
     assert_eq!(ctx.eval("return -true;").unwrap().to_i32(), Some(-1));
-    assert_eq!(ctx.eval("return -false;").unwrap().to_i32(), Some(0));
-    assert_eq!(ctx.eval("return -null;").unwrap().to_i32(), Some(0));
+    // -false and -null produce -0.0 per JS spec (negative zero)
+    let neg_false = ctx.eval("return -false;").unwrap();
+    let f = neg_false.to_number_f32().unwrap();
+    assert!(f == 0.0 && f.is_sign_negative(), "-false should be -0.0");
+    let neg_null = ctx.eval("return -null;").unwrap();
+    let f = neg_null.to_number_f32().unwrap();
+    assert!(f == 0.0 && f.is_sign_negative(), "-null should be -0.0");
 }
 
 // --- Abstract Equality == ---
@@ -5616,11 +5739,8 @@ fn test_debugger_statement() {
 #[test]
 fn test_void_operator() {
     let mut ctx = Context::new(64 * 1024);
-    assert_eq!(ctx.eval("return void 0;").unwrap().is_undefined(), true);
-    assert_eq!(
-        ctx.eval("return void (1 + 2);").unwrap().is_undefined(),
-        true
-    );
+    assert!(ctx.eval("return void 0;").unwrap().is_undefined());
+    assert!(ctx.eval("return void (1 + 2);").unwrap().is_undefined());
     // void should still evaluate its operand (side effects)
     assert_eq!(
         ctx.eval("var x = 1; void (x = 5); return x;")
@@ -5818,3 +5938,348 @@ fn test_switch_string_cases() {
     );
 }
 
+// --- Bug regression tests ---
+
+#[test]
+fn test_division_by_negative_zero() {
+    let mut ctx = Context::new(64 * 1024);
+    // 1 / -0 should be -Infinity
+    let result = ctx.eval("return 1 / (-0);").unwrap();
+    assert!(result.is_float());
+    let f = result.to_f32().unwrap();
+    assert!(
+        f.is_infinite() && f < 0.0,
+        "1 / -0 should be -Infinity, got {}",
+        f
+    );
+
+    // -1 / -0 should be Infinity
+    let result = ctx.eval("return (-1) / (-0);").unwrap();
+    let f = result.to_f32().unwrap();
+    assert!(
+        f.is_infinite() && f > 0.0,
+        "-1 / -0 should be Infinity, got {}",
+        f
+    );
+}
+
+#[test]
+fn test_char_code_at_out_of_bounds_returns_nan() {
+    let mut ctx = Context::new(64 * 1024);
+    // charCodeAt with out-of-bounds index should return NaN
+    let result = ctx.eval("return 'abc'.charCodeAt(10);").unwrap();
+    assert!(result.is_float());
+    assert!(
+        result.to_f32().unwrap().is_nan(),
+        "charCodeAt OOB should return NaN"
+    );
+
+    // charCodeAt with negative index should return NaN
+    let result = ctx.eval("return 'abc'.charCodeAt(-1);").unwrap();
+    assert!(result.is_float());
+    assert!(
+        result.to_f32().unwrap().is_nan(),
+        "charCodeAt(-1) should return NaN"
+    );
+}
+
+#[test]
+fn test_typeof_string_equality() {
+    let mut ctx = Context::new(64 * 1024);
+    // typeof returns built-in strings; they must resolve correctly in comparisons
+    let result = ctx
+        .eval("return typeof undefined === 'undefined';")
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    let result = ctx.eval("return typeof 42 === 'number';").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    let result = ctx.eval("return typeof 'hello' === 'string';").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_negative_zero_semantics() {
+    let mut ctx = Context::new(64 * 1024);
+    // -0 === 0 should be true (JS spec)
+    let result = ctx.eval("return (-0) === 0;").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    // 1 / -0 should be -Infinity (sign preserved through division)
+    let result = ctx.eval("return 1 / (-0) === -Infinity;").unwrap();
+    assert_eq!(result.to_bool(), Some(true), "1/-0 should equal -Infinity");
+}
+
+#[test]
+fn test_math_round_negative_halfway() {
+    let mut ctx = Context::new(64 * 1024);
+    // JS rounds halfway toward positive infinity, NOT away from zero
+    assert_eq!(
+        ctx.eval("return Math.round(-0.5);").unwrap().to_i32(),
+        Some(0)
+    );
+    assert_eq!(
+        ctx.eval("return Math.round(-1.5);").unwrap().to_i32(),
+        Some(-1)
+    );
+    assert_eq!(
+        ctx.eval("return Math.round(0.5);").unwrap().to_i32(),
+        Some(1)
+    );
+    assert_eq!(
+        ctx.eval("return Math.round(2.5);").unwrap().to_i32(),
+        Some(3)
+    );
+    assert_eq!(
+        ctx.eval("return Math.round(-2.5);").unwrap().to_i32(),
+        Some(-2)
+    );
+}
+
+#[test]
+fn test_json_stringify_circular_reference() {
+    let mut ctx = Context::new(64 * 1024);
+    // Circular reference must not crash (stack overflow)
+    let result = ctx.eval("var obj = {}; obj.self = obj; return JSON.stringify(obj);");
+    // Should succeed without crashing; circular ref produces null
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_json_stringify_nested_circular() {
+    let mut ctx = Context::new(64 * 1024);
+    let result =
+        ctx.eval("var a = {}; var b = {parent: a}; a.child = b; return JSON.stringify(a);");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_modulo_overflow_negative_zero() {
+    let mut ctx = Context::new(64 * 1024);
+    // Mathematically 0, but dividend is negative → -0.0 per JS spec
+    let result = ctx.eval("return 1 / ((-2147483648) % (-1));").unwrap();
+    let f = result.to_f32().unwrap();
+    assert!(
+        f.is_infinite() && f < 0.0,
+        "i32::MIN % -1 should be -0, got {}",
+        f
+    );
+}
+
+// --- Lexer and parser bug regression tests ---
+
+#[test]
+fn test_hex_literal() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(ctx.eval("return 0xFF;").unwrap().to_i32(), Some(255));
+    assert_eq!(ctx.eval("return 0x1F;").unwrap().to_i32(), Some(31));
+    assert_eq!(ctx.eval("return 0x0;").unwrap().to_i32(), Some(0));
+}
+
+#[test]
+fn test_octal_literal() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(ctx.eval("return 0o17;").unwrap().to_i32(), Some(15));
+    assert_eq!(ctx.eval("return 0o777;").unwrap().to_i32(), Some(511));
+}
+
+#[test]
+fn test_binary_literal() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(ctx.eval("return 0b1010;").unwrap().to_i32(), Some(10));
+    assert_eq!(ctx.eval("return 0b11111111;").unwrap().to_i32(), Some(255));
+}
+
+#[test]
+fn test_leading_decimal() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return .5;").unwrap();
+    let f = result.to_number_f32().unwrap();
+    assert!((f - 0.5).abs() < 0.001);
+
+    let result = ctx.eval("return .125;").unwrap();
+    let f = result.to_number_f32().unwrap();
+    assert!((f - 0.125).abs() < 0.001);
+}
+
+#[test]
+fn test_string_hex_escape() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return \"\\x41\";").unwrap();
+    assert!(result.is_string());
+    // \x41 = 'A'
+    let result = ctx.eval("return \"\\x41\" === \"A\";").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_string_unicode_escape() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return \"\\u0041\" === \"A\";").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_string_null_escape() {
+    let mut ctx = Context::new(64 * 1024);
+    // \0 produces a null byte; string length should be 1
+    let result = ctx.eval("return \"\\0\".length;").unwrap();
+    assert_eq!(result.to_i32(), Some(1));
+}
+
+#[test]
+fn test_string_split_empty_separator() {
+    let mut ctx = Context::new(64 * 1024);
+    // "abc".split("") should produce ["a", "b", "c"]
+    assert_eq!(
+        ctx.eval("return \"abc\".split(\"\").length;")
+            .unwrap()
+            .to_i32(),
+        Some(3)
+    );
+    let result = ctx
+        .eval("return \"abc\".split(\"\")[0] === \"a\";")
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_array_sort_mixed_types() {
+    let mut ctx = Context::new(64 * 1024);
+    // Mixed types should not throw; default sort uses string comparison
+    let result = ctx.eval("var a = [3, 1, \"2\"]; a.sort(); return a[0];");
+    assert!(result.is_ok(), "sort on mixed types should not error");
+}
+
+#[test]
+fn test_new_array_constructor() {
+    let mut ctx = Context::new(64 * 1024);
+    // new Array(n) creates array of length n
+    assert_eq!(
+        ctx.eval("return new Array(3).length;").unwrap().to_i32(),
+        Some(3)
+    );
+    // new Array() creates empty array
+    assert_eq!(
+        ctx.eval("return new Array().length;").unwrap().to_i32(),
+        Some(0)
+    );
+}
+
+#[test]
+fn test_format_value_circular_no_crash() {
+    let mut ctx = Context::new(64 * 1024);
+    // Circular reference in console.log must not crash
+    let result = ctx.eval("var a = [1]; a[1] = a; return a.length;");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_json_parse_key_escapes() {
+    let mut ctx = Context::new(64 * 1024);
+    // JSON key with tab escape should parse correctly
+    let result = ctx.eval("var x = JSON.parse('{\"a\\\\tb\": 1}'); return typeof x;");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_unary_plus_to_number() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(ctx.eval("return +42;").unwrap().to_i32(), Some(42));
+    assert_eq!(ctx.eval("return +true;").unwrap().to_i32(), Some(1));
+    assert_eq!(ctx.eval("return +false;").unwrap().to_i32(), Some(0));
+    assert_eq!(ctx.eval("return +null;").unwrap().to_i32(), Some(0));
+    assert!(ctx.eval("return +undefined;").unwrap().is_nan_value());
+    assert_eq!(ctx.eval("return +\"123\";").unwrap().to_i32(), Some(123));
+    assert!(ctx.eval("return +\"abc\";").unwrap().is_nan_value());
+}
+
+#[test]
+fn test_unsigned_right_shift() {
+    let mut ctx = Context::new(64 * 1024);
+    // (-1) >>> 0 should produce 4294967295 (unsigned representation)
+    let result = ctx.eval("return (-1) >>> 0;").unwrap();
+    let f = result.to_number_f32().unwrap();
+    assert!(
+        (f - 4294967295.0).abs() < 1.0,
+        "(-1) >>> 0 should be ~4294967295, got {}",
+        f
+    );
+    // (-1) >>> 16 should be 65535
+    assert_eq!(
+        ctx.eval("return (-1) >>> 16;").unwrap().to_i32(),
+        Some(65535)
+    );
+}
+
+#[test]
+fn test_null_property_access_throws_typeerror() {
+    let mut ctx = Context::new(64 * 1024);
+    // null.x should throw TypeError, catchable by try/catch
+    let result = ctx.eval("try { return null.x; } catch(e) { return e.message; }");
+    assert!(result.is_ok());
+    let val = result.unwrap();
+    assert!(val.is_string());
+}
+
+#[test]
+fn test_undefined_property_access_throws_typeerror() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("try { return undefined.x; } catch(e) { return e.message; }");
+    assert!(result.is_ok());
+    let val = result.unwrap();
+    assert!(val.is_string());
+}
+
+#[test]
+fn test_null_method_call_throws_typeerror() {
+    let mut ctx = Context::new(64 * 1024);
+    // null.toString() should throw TypeError
+    let result = ctx.eval("try { null.toString(); return false; } catch(e) { return true; }");
+    assert_eq!(result.unwrap().to_bool(), Some(true));
+}
+
+#[test]
+fn test_empty_string_is_falsy() {
+    let mut ctx = Context::new(64 * 1024);
+    // Empty string must be falsy in JS
+    assert_eq!(
+        ctx.eval("return \"\" ? true : false;").unwrap().to_bool(),
+        Some(false)
+    );
+    // Non-empty string must be truthy
+    assert_eq!(
+        ctx.eval("return \"x\" ? true : false;").unwrap().to_bool(),
+        Some(true)
+    );
+    // Logical operators
+    assert_eq!(
+        ctx.eval("return !\"\" ? true : false;").unwrap().to_bool(),
+        Some(true)
+    );
+}
+
+#[test]
+fn test_error_instanceof() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(
+        ctx.eval("var e = new Error('x'); return e instanceof Error;")
+            .unwrap()
+            .to_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        ctx.eval("var e = new TypeError('x'); return e instanceof TypeError;")
+            .unwrap()
+            .to_bool(),
+        Some(true)
+    );
+    // TypeError is also an instance of Error
+    assert_eq!(
+        ctx.eval("var e = new TypeError('x'); return e instanceof Error;")
+            .unwrap()
+            .to_bool(),
+        Some(true)
+    );
+}

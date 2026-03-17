@@ -231,6 +231,8 @@ impl<'a> Compiler<'a> {
         }
         self.panic_mode = true;
         self.had_error = true;
+        #[cfg(not(feature = "std"))]
+        let _ = message;
         #[cfg(feature = "std")]
         eprintln!("[line {}] Error: {}", self.current_pos.line, message);
     }
@@ -2123,6 +2125,7 @@ impl<'a> Compiler<'a> {
                     self.advance();
                     if let Token::Ident(name) = &self.current_token {
                         let name = name.clone();
+                        let is_length = bytecode_length_property_name(&name);
                         self.advance();
 
                         // Store property name as string constant
@@ -2145,6 +2148,8 @@ impl<'a> Compiler<'a> {
                             let arg_count = self.argument_list()?;
                             self.emit_op(OpCode::CallMethod);
                             self.emit_u16(arg_count);
+                        } else if is_length {
+                            self.emit_op(OpCode::GetLength);
                         } else {
                             // obj.prop
                             self.emit_op(OpCode::GetField);
@@ -2526,6 +2531,11 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
+}
+
+#[inline]
+fn bytecode_length_property_name(name: &str) -> bool {
+    name == "length"
 }
 
 /// Operator precedence levels (lowest to highest)

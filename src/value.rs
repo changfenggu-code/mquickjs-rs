@@ -465,7 +465,7 @@ impl Value {
     }
 
     /// Check if this is a closure
-    /// Closures use CatchOffset tag without array or object marker bits set
+    /// Closures use CatchOffset tag without any type marker bits set
     #[inline]
     pub const fn is_closure(self) -> bool {
         self.0.get_special_tag() == SpecialTag::CatchOffset as u8
@@ -476,7 +476,10 @@ impl Value {
                     | FOR_OF_ITERATOR_INDEX_MARKER
                     | NATIVE_FUNC_MARKER
                     | BUILTIN_OBJECT_MARKER
-                    | ERROR_OBJECT_MARKER))
+                    | ERROR_OBJECT_MARKER
+                    | REGEXP_OBJECT_MARKER
+                    | TYPED_ARRAY_MARKER
+                    | ARRAY_BUFFER_MARKER))
                 == 0
     }
 
@@ -880,6 +883,7 @@ impl Eq for Value {}
 
 /// Format a float for JavaScript output.
 /// Integers print without decimal (3.0 → "3"), NaN/Infinity handled.
+/// Preserves -0.0 sign per JS spec.
 pub fn format_float(val: Float) -> String {
     if val.is_nan() {
         return "NaN".to_string();
@@ -887,7 +891,10 @@ pub fn format_float(val: Float) -> String {
     if val.is_infinite() {
         return if val > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
     }
-    if (val - libm::truncf(val)) == 0.0 && libm::fabsf(val) < (i32::MAX as Float) {
+    if (val - libm::truncf(val)) == 0.0
+        && libm::fabsf(val) < (i32::MAX as Float)
+        && !val.is_sign_negative()
+    {
         format!("{}", val as i32)
     } else {
         format!("{}", val)
@@ -895,10 +902,15 @@ pub fn format_float(val: Float) -> String {
 }
 
 /// Convert a float result to Value, normalizing whole-number floats to int.
+/// Preserves -0.0 as float to maintain correct sign semantics (1/-0 === -Infinity).
 pub fn float_to_value(f: Float) -> Value {
     if f.is_nan() || f.is_infinite() {
         Value::float(f)
-    } else if (f - libm::truncf(f)) == 0.0 && f >= (i32::MIN as Float) && f <= (i32::MAX as Float) {
+    } else if (f - libm::truncf(f)) == 0.0
+        && f >= (i32::MIN as Float)
+        && f <= (i32::MAX as Float)
+        && !(f == 0.0 && f.is_sign_negative())
+    {
         Value::int(f as i32)
     } else {
         Value::float(f)
@@ -956,6 +968,10 @@ pub const fn is_builtin_string(idx: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_float() -> Float {
+        314.0_f32 / 100.0
+    }
 
     #[test]
     fn test_null() {
@@ -1020,12 +1036,12 @@ mod tests {
 
     #[test]
     fn test_float_basic() {
-        let v = Value::float(3.14);
+        let v = Value::float(sample_float());
         assert!(v.is_float());
         assert!(!v.is_int());
         assert!(v.is_number());
         let f = v.to_f32().unwrap();
-        assert!((f - 3.14).abs() < 0.001);
+        assert!((f - sample_float()).abs() < 0.001);
     }
 
     #[test]
@@ -1065,7 +1081,7 @@ mod tests {
     #[test]
     fn test_is_number() {
         assert!(Value::int(42).is_number());
-        assert!(Value::float(3.14).is_number());
+        assert!(Value::float(sample_float()).is_number());
         assert!(!Value::null().is_number());
         assert!(!Value::bool(true).is_number());
     }
@@ -1073,8 +1089,8 @@ mod tests {
     #[test]
     fn test_to_number_f32() {
         assert_eq!(Value::int(42).to_number_f32(), Some(42.0));
-        let f = Value::float(3.14).to_number_f32().unwrap();
-        assert!((f - 3.14).abs() < 0.001);
+        let f = Value::float(sample_float()).to_number_f32().unwrap();
+        assert!((f - sample_float()).abs() < 0.001);
         assert_eq!(Value::null().to_number_f32(), None);
     }
 
@@ -1086,7 +1102,7 @@ mod tests {
         assert_eq!(v.to_i32(), Some(3));
 
         // Non-whole float stays as float
-        let v = float_to_value(3.14);
+        let v = float_to_value(sample_float());
         assert!(v.is_float());
 
         // NaN stays as float
@@ -1102,11 +1118,58 @@ mod tests {
 
     #[test]
     fn test_format_float() {
-        assert_eq!(format_float(3.14), "3.14");
+        assert_eq!(format_float(sample_float()), "3.14");
         assert_eq!(format_float(3.0), "3");
         assert_eq!(format_float(-0.5), "-0.5");
         assert_eq!(format_float(Float::NAN), "NaN");
         assert_eq!(format_float(Float::INFINITY), "Infinity");
         assert_eq!(format_float(Float::NEG_INFINITY), "-Infinity");
+    }
+
+    #[test]
+    fn test_negative_zero_preserved_in_float_to_value() {
+        // -0.0 must stay as float, not collapse to int(0)
+        let v = float_to_value(-0.0);
+        assert!(v.is_float(), "-0.0 should remain a float");
+        let f = v.to_f32().unwrap();
+        assert!(f.is_sign_negative(), "-0.0 should preserve negative sign");
+    }
+
+    #[test]
+    fn test_negative_zero_format() {
+        // format_float(-0.0) should NOT print "0"
+        let s = format_float(-0.0);
+        assert!(
+            s.starts_with('-'),
+            "format_float(-0.0) = {:?}, should be negative",
+            s
+        );
+    }
+
+    #[test]
+    fn test_is_closure_no_false_positive_for_regexp() {
+        let v = Value::regexp_object(0);
+        assert!(v.is_regexp_object());
+        assert!(!v.is_closure(), "regexp must not be identified as closure");
+    }
+
+    #[test]
+    fn test_is_closure_no_false_positive_for_typed_array() {
+        let v = Value::typed_array_object(0);
+        assert!(v.is_typed_array());
+        assert!(
+            !v.is_closure(),
+            "typed array must not be identified as closure"
+        );
+    }
+
+    #[test]
+    fn test_is_closure_no_false_positive_for_array_buffer() {
+        let v = Value::array_buffer_object(0);
+        assert!(v.is_array_buffer());
+        assert!(
+            !v.is_closure(),
+            "array buffer must not be identified as closure"
+        );
     }
 }

@@ -1,13 +1,13 @@
-﻿//! Bytecode interpreter
+//! Bytecode interpreter
 //!
 //! Executes JavaScript bytecode using a stack-based virtual machine.
 
 use crate::runtime::FunctionBytecode;
-use crate::value::Value;
+use crate::util::dtoa::i32_to_str;
+use crate::value::{float_to_value, Float, Value};
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::Stack;
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
-use core::fmt::Write;
 
 // Native function implementations and format helpers (defined in natives.rs)
 use super::natives::*;
@@ -29,7 +29,6 @@ impl Interpreter {
             call_stack: Vec::with_capacity(64),
             max_recursion: Self::DEFAULT_MAX_RECURSION,
             runtime_strings: Vec::new(),
-            for_in_key_cache: Vec::new(),
             closures: Vec::new(),
             var_cells: Vec::new(),
             exception_handlers: Vec::new(),
@@ -66,7 +65,6 @@ impl Interpreter {
             call_stack: Vec::with_capacity(64),
             max_recursion,
             runtime_strings: Vec::new(),
-            for_in_key_cache: Vec::new(),
             closures: Vec::new(),
             var_cells: Vec::new(),
             exception_handlers: Vec::new(),
@@ -120,7 +118,6 @@ impl Interpreter {
 
     /// Runtime string index offset (indices >= this are runtime strings)
     pub(crate) const RUNTIME_STRING_OFFSET: u16 = 0x8000;
-
 
     /// Get string content from a string value
     fn get_string_content<'a>(
@@ -186,6 +183,41 @@ impl Interpreter {
         self.runtime_string_source_stats.for_in_key += 1;
     }
 
+    #[cfg(feature = "dump")]
+    #[inline]
+    fn bump_runtime_string_json(&mut self) {
+        self.runtime_string_source_stats.total += 1;
+        self.runtime_string_source_stats.json += 1;
+    }
+
+    #[cfg(feature = "dump")]
+    #[inline]
+    fn bump_runtime_string_object_keys(&mut self) {
+        self.runtime_string_source_stats.total += 1;
+        self.runtime_string_source_stats.object_keys += 1;
+    }
+
+    #[cfg(feature = "dump")]
+    #[inline]
+    fn bump_runtime_string_object_entries(&mut self) {
+        self.runtime_string_source_stats.total += 1;
+        self.runtime_string_source_stats.object_entries += 1;
+    }
+
+    #[cfg(feature = "dump")]
+    #[inline]
+    fn bump_runtime_string_error(&mut self) {
+        self.runtime_string_source_stats.total += 1;
+        self.runtime_string_source_stats.error_string += 1;
+    }
+
+    #[cfg(feature = "dump")]
+    #[inline]
+    fn bump_runtime_string_type(&mut self) {
+        self.runtime_string_source_stats.total += 1;
+        self.runtime_string_source_stats.type_string += 1;
+    }
+
     #[cfg(not(feature = "dump"))]
     #[inline]
     fn bump_runtime_string_other(&mut self) {}
@@ -198,29 +230,93 @@ impl Interpreter {
     #[inline]
     fn bump_runtime_string_for_in_key(&mut self) {}
 
-    /// Create or reuse a recently-created runtime string.
-    ///
-    /// This is intended for highly repetitive key-generation paths such as
-    /// `for-in`, where the same small key set can otherwise create unbounded
-    /// duplicate runtime strings.
+    #[cfg(not(feature = "dump"))]
     #[inline]
+    fn bump_runtime_string_json(&mut self) {}
+
+    #[cfg(not(feature = "dump"))]
     #[inline]
-    fn create_runtime_string_reuse_recent(&mut self, s: &str) -> Value {
+    fn bump_runtime_string_object_keys(&mut self) {}
+
+    #[cfg(not(feature = "dump"))]
+    #[inline]
+    fn bump_runtime_string_object_entries(&mut self) {}
+
+    #[cfg(not(feature = "dump"))]
+    #[inline]
+    fn bump_runtime_string_error(&mut self) {}
+
+    #[cfg(not(feature = "dump"))]
+    #[inline]
+    fn bump_runtime_string_type(&mut self) {}
+
+    /// Create a runtime string on the `for-in` key path while recording source stats.
+    #[inline]
+    fn create_runtime_string_for_in_key(&mut self, s: &str) -> InterpreterResult<Value> {
         self.bump_runtime_string_for_in_key();
-        for (cached, idx) in self.for_in_key_cache.iter().rev() {
-            if cached == s {
-                return Value::string(Self::RUNTIME_STRING_OFFSET + *idx);
-            }
+        let idx = self.runtime_strings.len();
+        let max_runtime_strings = u16::MAX as usize - Self::RUNTIME_STRING_OFFSET as usize;
+        if idx > max_runtime_strings {
+            return Err(InterpreterError::InternalError(
+                "runtime string table exhausted".to_string(),
+            ));
         }
-        let value = self.create_runtime_string_raw(s.to_string());
-        if let Some(idx) = value.to_string_idx() {
-            let runtime_idx = idx - Self::RUNTIME_STRING_OFFSET;
-            self.for_in_key_cache.push((s.to_string(), runtime_idx));
-            if self.for_in_key_cache.len() > 32 {
-                self.for_in_key_cache.remove(0);
+        Ok(self.create_runtime_string_raw(s.to_string()))
+    }
+
+    #[inline]
+    pub(crate) fn create_runtime_string_json(&mut self, s: String) -> Value {
+        self.bump_runtime_string_json();
+        self.create_runtime_string_raw(s)
+    }
+
+    #[inline]
+    pub(crate) fn create_runtime_string_object_key(&mut self, s: String) -> Value {
+        self.bump_runtime_string_object_keys();
+        self.create_runtime_string_raw(s)
+    }
+
+    #[inline]
+    pub(crate) fn create_runtime_string_object_entry_key(&mut self, s: String) -> Value {
+        self.bump_runtime_string_object_entries();
+        self.create_runtime_string_raw(s)
+    }
+
+    #[inline]
+    pub(crate) fn create_runtime_string_error(&mut self, s: String) -> Value {
+        self.bump_runtime_string_error();
+        self.create_runtime_string_raw(s)
+    }
+
+    #[inline]
+    pub(crate) fn create_runtime_string_type(&mut self, s: String) -> Value {
+        self.bump_runtime_string_type();
+        self.create_runtime_string_raw(s)
+    }
+    #[inline]
+    fn value_to_string_len_hint(&self, val: Value, bytecode: &FunctionBytecode) -> usize {
+        if val.is_string() {
+            self.get_string_content(val, bytecode)
+                .unwrap_or_default()
+                .len()
+        } else if let Some(n) = val.to_i32() {
+            let mut buf = [0u8; 16];
+            i32_to_str(&mut buf, n)
+        } else if let Some(f) = val.to_f32() {
+            crate::value::format_float(f).len()
+        } else if let Some(b) = val.to_bool() {
+            if b {
+                4
+            } else {
+                5
             }
+        } else if val.is_null() {
+            4
+        } else if val.is_undefined() {
+            9
+        } else {
+            8
         }
-        value
     }
 
     #[inline]
@@ -228,7 +324,11 @@ impl Interpreter {
         if val.is_string() {
             out.push_str(self.get_string_content(val, bytecode).unwrap_or_default());
         } else if let Some(n) = val.to_i32() {
-            let _ = write!(out, "{}", n);
+            let mut buf = [0u8; 16];
+            let len = i32_to_str(&mut buf, n);
+            // SAFETY: i32_to_str only writes ASCII decimal digits and optional '-'.
+            let s = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
+            out.push_str(s);
         } else if let Some(f) = val.to_f32() {
             out.push_str(&crate::value::format_float(f));
         } else if let Some(b) = val.to_bool() {
@@ -263,9 +363,13 @@ impl Interpreter {
         val
     }
 
-    /// Get a string by its index (works for both compile-time and runtime strings)
+    /// Get a string by its index (works for built-in, compile-time, and runtime strings)
     /// For compile-time strings, uses current_string_constants if set.
     pub fn get_string_by_idx(&self, str_idx: u16) -> Option<&str> {
+        // Check built-in strings first (STR_EMPTY, STR_UNDEFINED, etc.)
+        if let Some(s) = crate::value::get_builtin_string(str_idx) {
+            return Some(s);
+        }
         if str_idx >= Self::RUNTIME_STRING_OFFSET {
             let runtime_idx = (str_idx - Self::RUNTIME_STRING_OFFSET) as usize;
             self.runtime_strings.get(runtime_idx).map(|s| s.as_str())
@@ -544,6 +648,81 @@ impl Interpreter {
             self.get_function_property(prop_name)
         } else {
             Value::undefined()
+        }
+    }
+
+    #[inline]
+    fn get_length_value(&mut self, obj: Value) -> Value {
+        if let Some(arr_idx) = obj.to_array_idx() {
+            self.get_array(arr_idx)
+                .map(|arr| Value::int(arr.len() as i32))
+                .unwrap_or_default()
+        } else if let Some(typed_idx) = obj.to_typed_array_idx() {
+            self.typed_arrays
+                .get(typed_idx as usize)
+                .map(|ta| Value::int(ta.length as i32))
+                .unwrap_or_default()
+        } else if obj.is_string() {
+            obj.to_string_idx()
+                .and_then(|idx| self.get_string_by_idx(idx))
+                .map(|s| Value::int(s.len() as i32))
+                .unwrap_or(Value::int(0))
+        } else {
+            self.get_field_value(obj, "length")
+        }
+    }
+
+    #[inline]
+    fn store_local_slot(&mut self, idx: usize, val: Value) {
+        let Some(frame) = self.call_stack.last() else {
+            return;
+        };
+        let cell = frame
+            .local_cells
+            .as_ref()
+            .and_then(|lc| lc.get(idx).copied().flatten());
+        let frame_ptr = frame.frame_ptr;
+        if let Some(cell_idx) = cell {
+            self.var_cells[cell_idx as usize] = val;
+        } else {
+            self.stack.set_local_at(frame_ptr, idx, val);
+        }
+    }
+
+    #[inline]
+    fn try_consume_sieve_style_local_update(&mut self, val: Value) -> bool {
+        let Some(frame) = self.call_stack.last_mut() else {
+            return false;
+        };
+        let bytecode = unsafe { &*frame.bytecode };
+        let bc = &bytecode.bytecode;
+        let pc = frame.pc;
+
+        // Hot sieve/local-update shapes:
+        //   Add; Dup; PutLoc3; Drop
+        //   Add; Dup; PutLoc8 4; Drop
+        let matched = if bc.get(pc).copied() == Some(OpCode::Dup as u8)
+            && bc.get(pc + 1).copied() == Some(OpCode::PutLoc3 as u8)
+            && bc.get(pc + 2).copied() == Some(OpCode::Drop as u8)
+        {
+            frame.pc += 3;
+            Some(3usize)
+        } else if bc.get(pc).copied() == Some(OpCode::Dup as u8)
+            && bc.get(pc + 1).copied() == Some(OpCode::PutLoc8 as u8)
+            && bc.get(pc + 2).copied() == Some(4)
+            && bc.get(pc + 3).copied() == Some(OpCode::Drop as u8)
+        {
+            frame.pc += 4;
+            Some(4usize)
+        } else {
+            None
+        };
+
+        if let Some(idx) = matched {
+            self.store_local_slot(idx, val);
+            true
+        } else {
+            false
         }
     }
 
@@ -1282,6 +1461,38 @@ impl Interpreter {
                     }
                 }
 
+                // Unary plus (ToNumber)
+                op if op == OpCode::Plus as u8 => {
+                    let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let result = if val.is_int() || val.is_float() {
+                        val
+                    } else if let Some(b) = val.to_bool() {
+                        Value::int(if b { 1 } else { 0 })
+                    } else if val.is_null() {
+                        Value::int(0)
+                    } else if val.is_undefined() {
+                        Value::nan()
+                    } else if let Some(str_idx) = val.to_string_idx() {
+                        if let Some(s) = self.get_string_by_idx(str_idx) {
+                            let s = s.trim();
+                            if s.is_empty() {
+                                Value::int(0)
+                            } else if let Ok(i) = s.parse::<i32>() {
+                                Value::int(i)
+                            } else if let Ok(f) = s.parse::<Float>() {
+                                float_to_value(f)
+                            } else {
+                                Value::nan()
+                            }
+                        } else {
+                            Value::nan()
+                        }
+                    } else {
+                        Value::nan()
+                    };
+                    self.stack.push(result);
+                }
+
                 // Arithmetic: Add (also handles string concatenation)
                 op if op == OpCode::Add as u8 => {
                     // SAFETY: Stack operations are valid for well-formed bytecode
@@ -1292,30 +1503,45 @@ impl Interpreter {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
 
-                        let len_a = if a.is_string() {
-                            self.get_string_content(a, bytecode)
-                                .unwrap_or_default()
-                                .len()
+                        let out = if let (Some(sa), Some(sb)) = (
+                            self.get_string_content(a, bytecode),
+                            self.get_string_content(b, bytecode),
+                        ) {
+                            let mut out = String::with_capacity(sa.len() + sb.len());
+                            out.push_str(sa);
+                            out.push_str(sb);
+                            out
+                        } else if let Some(sa) = self.get_string_content(a, bytecode) {
+                            let len_b = self.value_to_string_len_hint(b, bytecode);
+                            let mut out = String::with_capacity(sa.len() + len_b);
+                            out.push_str(sa);
+                            self.append_value_to_string(&mut out, b, bytecode);
+                            out
+                        } else if let Some(sb) = self.get_string_content(b, bytecode) {
+                            let len_a = self.value_to_string_len_hint(a, bytecode);
+                            let mut out = String::with_capacity(len_a + sb.len());
+                            self.append_value_to_string(&mut out, a, bytecode);
+                            out.push_str(sb);
+                            out
                         } else {
-                            0
+                            let len_a = self.value_to_string_len_hint(a, bytecode);
+                            let len_b = self.value_to_string_len_hint(b, bytecode);
+                            let mut out = String::with_capacity(len_a + len_b);
+                            self.append_value_to_string(&mut out, a, bytecode);
+                            self.append_value_to_string(&mut out, b, bytecode);
+                            out
                         };
-                        let len_b = if b.is_string() {
-                            self.get_string_content(b, bytecode)
-                                .unwrap_or_default()
-                                .len()
-                        } else {
-                            0
-                        };
-
-                        let mut out = String::with_capacity(len_a + len_b + 16);
-                        self.append_value_to_string(&mut out, a, bytecode);
                         self.bump_runtime_string_concat();
                         let result = self.create_runtime_string_raw(out);
 
                         self.stack.push(result);
                     } else {
                         match self.try_op(self.op_add(a, b))? {
-                            Some(result) => self.stack.push(result),
+                            Some(result) => {
+                                if !self.try_consume_sieve_style_local_update(result) {
+                                    self.stack.push(result);
+                                }
+                            }
                             None => continue,
                         }
                     }
@@ -1725,12 +1951,14 @@ impl Interpreter {
                     let frame = self.call_stack.last_mut().unwrap();
                     let bytecode = unsafe { &*frame.bytecode };
                     let bc = &bytecode.bytecode;
-                    let offset = i32::from_le_bytes([
-                        bc[frame.pc],
-                        bc[frame.pc + 1],
-                        bc[frame.pc + 2],
-                        bc[frame.pc + 3],
-                    ]);
+                    let offset = unsafe {
+                        i32::from_le_bytes([
+                            *bc.get_unchecked(frame.pc),
+                            *bc.get_unchecked(frame.pc + 1),
+                            *bc.get_unchecked(frame.pc + 2),
+                            *bc.get_unchecked(frame.pc + 3),
+                        ])
+                    };
                     frame.pc += 4;
                     // offset is relative to the end of this instruction (after the 4-byte offset)
                     frame.pc = (frame.pc as i32 + offset) as usize;
@@ -1738,17 +1966,19 @@ impl Interpreter {
 
                 // Control flow: If false
                 op if op == OpCode::IfFalse as u8 => {
-                    let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let val = unsafe { self.stack.pop_unchecked() };
                     let is_truthy = Self::value_to_bool(val);
                     let frame = self.call_stack.last_mut().unwrap();
                     let bytecode = unsafe { &*frame.bytecode };
                     let bc = &bytecode.bytecode;
-                    let offset = i32::from_le_bytes([
-                        bc[frame.pc],
-                        bc[frame.pc + 1],
-                        bc[frame.pc + 2],
-                        bc[frame.pc + 3],
-                    ]);
+                    let offset = unsafe {
+                        i32::from_le_bytes([
+                            *bc.get_unchecked(frame.pc),
+                            *bc.get_unchecked(frame.pc + 1),
+                            *bc.get_unchecked(frame.pc + 2),
+                            *bc.get_unchecked(frame.pc + 3),
+                        ])
+                    };
                     frame.pc += 4;
                     if !is_truthy {
                         // offset is relative to the end of this instruction (after the 4-byte offset)
@@ -1758,17 +1988,19 @@ impl Interpreter {
 
                 // Control flow: If true
                 op if op == OpCode::IfTrue as u8 => {
-                    let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let val = unsafe { self.stack.pop_unchecked() };
                     let is_truthy = Self::value_to_bool(val);
                     let frame = self.call_stack.last_mut().unwrap();
                     let bytecode = unsafe { &*frame.bytecode };
                     let bc = &bytecode.bytecode;
-                    let offset = i32::from_le_bytes([
-                        bc[frame.pc],
-                        bc[frame.pc + 1],
-                        bc[frame.pc + 2],
-                        bc[frame.pc + 3],
-                    ]);
+                    let offset = unsafe {
+                        i32::from_le_bytes([
+                            *bc.get_unchecked(frame.pc),
+                            *bc.get_unchecked(frame.pc + 1),
+                            *bc.get_unchecked(frame.pc + 2),
+                            *bc.get_unchecked(frame.pc + 3),
+                        ])
+                    };
                     frame.pc += 4;
                     if is_truthy {
                         // offset is relative to the end of this instruction (after the 4-byte offset)
@@ -1950,31 +2182,69 @@ impl Interpreter {
                     // Remove func_val from below the args (offset = argc from top)
                     let func_val = self
                         .stack
-                        .remove_at_offset(argc)
+                        .compact_call_args(argc)
                         .ok_or(InterpreterError::StackUnderflow)?;
 
                     // Check if this is a native function call
                     if let Some(native_idx) = func_val.to_native_func_idx() {
-                        // Collect args for native call (needed as slice)
-                        let mut args: Vec<Value> = Vec::with_capacity(argc);
-                        for _ in 0..argc {
-                            args.push(self.stack.pop().ok_or(InterpreterError::StackUnderflow)?);
-                        }
-                        args.reverse();
-                        let result =
-                            self.call_native_func(native_idx, Value::undefined(), &args)?;
+                        let result = match argc {
+                            0 => self.call_native_func(native_idx, Value::undefined(), &[]),
+                            1 => {
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0];
+                                self.call_native_func(native_idx, Value::undefined(), &args)
+                            }
+                            2 => {
+                                let a1 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0, a1];
+                                self.call_native_func(native_idx, Value::undefined(), &args)
+                            }
+                            _ => {
+                                let stack_len = self.stack.len();
+                                let mut args = Vec::with_capacity(argc);
+                                for i in 0..argc {
+                                    args.push(self.stack.get_raw(stack_len - argc + i));
+                                }
+                                self.stack.drop_n(argc);
+                                self.call_native_func(native_idx, Value::undefined(), &args)
+                            }
+                        }?;
                         self.stack.push(result);
                         continue;
                     }
 
                     // Check if this is a builtin object called as a function
                     if let Some(builtin_idx) = func_val.to_builtin_object_idx() {
-                        let mut args: Vec<Value> = Vec::with_capacity(argc);
-                        for _ in 0..argc {
-                            args.push(self.stack.pop().ok_or(InterpreterError::StackUnderflow)?);
-                        }
-                        args.reverse();
-                        let result = self.call_builtin_as_function(builtin_idx, &args)?;
+                        let result = match argc {
+                            0 => self.call_builtin_as_function(builtin_idx, &[]),
+                            1 => {
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0];
+                                self.call_builtin_as_function(builtin_idx, &args)
+                            }
+                            2 => {
+                                let a1 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0, a1];
+                                self.call_builtin_as_function(builtin_idx, &args)
+                            }
+                            _ => {
+                                let stack_len = self.stack.len();
+                                let mut args = Vec::with_capacity(argc);
+                                for i in 0..argc {
+                                    args.push(self.stack.get_raw(stack_len - argc + i));
+                                }
+                                self.stack.drop_n(argc);
+                                self.call_builtin_as_function(builtin_idx, &args)
+                            }
+                        }?;
                         self.stack.push(result);
                         continue;
                     }
@@ -2085,18 +2355,22 @@ impl Interpreter {
                     let argc = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]) as usize;
                     frame.pc += 2;
 
-                    // Collect arguments (they were pushed in order)
-                    let mut args = Vec::with_capacity(argc);
-                    for _ in 0..argc {
-                        args.push(self.stack.pop().ok_or(InterpreterError::StackUnderflow)?);
-                    }
-                    args.reverse(); // Arguments were pushed left-to-right
-
-                    // Pop the constructor function value
-                    let func_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    // Remove the constructor from below the arguments without
+                    // repeatedly shifting stack elements.
+                    let func_val = self
+                        .stack
+                        .compact_call_args(argc)
+                        .ok_or(InterpreterError::StackUnderflow)?;
 
                     // Check if this is a builtin Error constructor
                     if let Some(builtin_idx) = func_val.to_builtin_object_idx() {
+                        let stack_len = self.stack.len();
+                        let mut args = Vec::with_capacity(argc);
+                        for i in 0..argc {
+                            args.push(self.stack.get_raw(stack_len - argc + i));
+                        }
+                        self.stack.drop_n(argc);
+
                         let error_name = match builtin_idx {
                             BUILTIN_ERROR => Some("Error"),
                             BUILTIN_TYPE_ERROR => Some("TypeError"),
@@ -2271,6 +2545,22 @@ impl Interpreter {
                             continue;
                         }
 
+                        // Check if this is an Array constructor: new Array(n)
+                        if builtin_idx == BUILTIN_ARRAY {
+                            let arr = if let Some(len) = args.first().and_then(|v| v.to_i32()) {
+                                vec![Value::undefined(); len.max(0) as usize]
+                            } else if !args.is_empty() {
+                                // new Array(a, b, c) → [a, b, c]
+                                args.to_vec()
+                            } else {
+                                Vec::new()
+                            };
+                            let arr_idx = self.arrays.len() as u32;
+                            self.arrays.push(arr);
+                            self.stack.push(Value::array_idx(arr_idx));
+                            continue;
+                        }
+
                         // Check if this is an ArrayBuffer constructor
                         if builtin_idx == BUILTIN_ARRAY_BUFFER {
                             let byte_length = args
@@ -2324,12 +2614,16 @@ impl Interpreter {
                         ));
                     }
 
-                    let callee_frame_ptr = self.stack.len();
+                    let callee_frame_ptr = self.stack.len() - argc;
 
-                    // Push arguments (pad with undefined if needed)
-                    for i in 0..callee_bytecode.arg_count as usize {
-                        let arg = args.get(i).copied().unwrap_or_default();
-                        self.stack.push(arg);
+                    // Pad or truncate arguments in place on stack.
+                    let expected = callee_bytecode.arg_count as usize;
+                    if argc < expected {
+                        for _ in 0..(expected - argc) {
+                            self.stack.push(Value::undefined());
+                        }
+                    } else if argc > expected {
+                        self.stack.drop_n(argc - expected);
                     }
 
                     // Allocate space for locals (beyond arguments)
@@ -2345,7 +2639,7 @@ impl Interpreter {
                         CallFrame::new_closure_constructor(
                             callee_bytecode as *const _,
                             callee_frame_ptr,
-                            args.len().min(u16::MAX as usize) as u16,
+                            argc.min(u16::MAX as usize) as u16,
                             new_obj, // 'this' is the new object
                             func_val,
                             closure_idx,
@@ -2354,7 +2648,7 @@ impl Interpreter {
                         CallFrame::new_constructor(
                             callee_bytecode as *const _,
                             callee_frame_ptr,
-                            args.len().min(u16::MAX as usize) as u16,
+                            argc.min(u16::MAX as usize) as u16,
                             new_obj, // 'this' is the new object
                             func_val,
                         )
@@ -2377,42 +2671,41 @@ impl Interpreter {
 
                     // Remove method and object from below the arguments so that
                     // native fast paths can consume arguments directly from the stack.
-                    let method_val = self
+                    let (this_val, method_val) = self
                         .stack
-                        .remove_at_offset(argc)
+                        .compact_method_call_args(argc)
                         .ok_or(InterpreterError::StackUnderflow)?;
-
-                    let this_val = self
-                        .stack
-                        .remove_at_offset(argc)
-                        .ok_or(InterpreterError::StackUnderflow)?;
-
-                    // Promote compile-time string arguments in-place on stack.
-                    {
-                        let stack_len = self.stack.len();
-                        for i in 0..argc {
-                            let slot = stack_len - argc + i;
-                            let val = self.stack.get_raw(slot);
-                            if val.is_string() {
-                                let promoted = self.promote_string(val, bytecode);
-                                self.stack.set_raw(slot, promoted);
-                            }
-                        }
-                    }
 
                     // Check if this is a native function call
                     if let Some(native_idx) = method_val.to_native_func_idx() {
                         if Some(native_idx) == self.native_array_push_idx {
                             if let Some(arr_idx) = this_val.to_array_idx() {
+                                let discard_result = {
+                                    let frame = self.call_stack.last_mut().unwrap();
+                                    let bytecode = unsafe { &*frame.bytecode };
+                                    let bc = &bytecode.bytecode;
+                                    if frame.pc < bc.len() && bc[frame.pc] == OpCode::Drop as u8 {
+                                        frame.pc += 1;
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                };
                                 if argc == 1 {
-                                    let arg =
+                                    let mut arg =
                                         self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                    if arg.is_string() {
+                                        arg = self.promote_string(arg, bytecode);
+                                    }
                                     let array = unsafe { self.get_array_mut_unchecked(arr_idx) };
                                     array.push(arg);
                                 } else {
                                     let stack_len = self.stack.len();
                                     for i in 0..argc {
-                                        let arg = self.stack.get_raw(stack_len - argc + i);
+                                        let mut arg = self.stack.get_raw(stack_len - argc + i);
+                                        if arg.is_string() {
+                                            arg = self.promote_string(arg, bytecode);
+                                        }
                                         // SAFETY: arr_idx is valid if this_val came from a live array value
                                         let array =
                                             unsafe { self.get_array_mut_unchecked(arr_idx) };
@@ -2420,10 +2713,25 @@ impl Interpreter {
                                     }
                                     self.stack.drop_n(argc);
                                 }
-                                let new_len =
-                                    unsafe { self.get_array_unchecked(arr_idx) }.len() as i32;
-                                self.stack.push(Value::int(new_len));
+                                if !discard_result {
+                                    let new_len =
+                                        unsafe { self.get_array_unchecked(arr_idx) }.len() as i32;
+                                    self.stack.push(Value::int(new_len));
+                                }
                                 continue;
+                            }
+                        }
+
+                        // Promote compile-time string arguments in-place on stack.
+                        {
+                            let stack_len = self.stack.len();
+                            for i in 0..argc {
+                                let slot = stack_len - argc + i;
+                                let val = self.stack.get_raw(slot);
+                                if val.is_string() {
+                                    let promoted = self.promote_string(val, bytecode);
+                                    self.stack.set_raw(slot, promoted);
+                                }
                             }
                         }
 
@@ -2444,26 +2752,18 @@ impl Interpreter {
                                 self.call_native_func(native_idx, this_val, &args)
                             }
                             _ => {
+                                let stack_len = self.stack.len();
                                 let mut args = Vec::with_capacity(argc);
-                                for _ in 0..argc {
-                                    args.push(
-                                        self.stack.pop().ok_or(InterpreterError::StackUnderflow)?,
-                                    );
+                                for i in 0..argc {
+                                    args.push(self.stack.get_raw(stack_len - argc + i));
                                 }
-                                args.reverse();
+                                self.stack.drop_n(argc);
                                 self.call_native_func(native_idx, this_val, &args)
                             }
                         }?;
                         self.stack.push(result);
                         continue;
                     }
-
-                    // Collect arguments for non-native method calls (they were pushed in order)
-                    let mut args = Vec::with_capacity(argc);
-                    for _ in 0..argc {
-                        args.push(self.stack.pop().ok_or(InterpreterError::StackUnderflow)?);
-                    }
-                    args.reverse();
 
                     // Determine if this is a closure or a regular function
                     let (callee_bytecode, callee_closure_idx): (&FunctionBytecode, Option<usize>) =
@@ -2501,12 +2801,16 @@ impl Interpreter {
                         continue;
                     }
 
-                    let callee_frame_ptr = self.stack.len();
+                    let callee_frame_ptr = self.stack.len() - argc;
 
-                    // Push arguments (pad with undefined if needed)
-                    for i in 0..callee_bytecode.arg_count as usize {
-                        let arg = args.get(i).copied().unwrap_or_default();
-                        self.stack.push(arg);
+                    // Pad or truncate: add undefined for missing args
+                    let expected = callee_bytecode.arg_count as usize;
+                    if argc < expected {
+                        for _ in 0..(expected - argc) {
+                            self.stack.push(Value::undefined());
+                        }
+                    } else if argc > expected {
+                        self.stack.drop_n(argc - expected);
                     }
 
                     // Allocate space for locals (beyond arguments)
@@ -2522,7 +2826,7 @@ impl Interpreter {
                         CallFrame::new_closure(
                             callee_bytecode as *const _,
                             callee_frame_ptr,
-                            args.len().min(u16::MAX as usize) as u16,
+                            argc.min(u16::MAX as usize) as u16,
                             this_val, // Pass the object as 'this'
                             method_val,
                             closure_idx,
@@ -2531,7 +2835,7 @@ impl Interpreter {
                         CallFrame::new(
                             callee_bytecode as *const _,
                             callee_frame_ptr,
-                            args.len().min(u16::MAX as usize) as u16,
+                            argc.min(u16::MAX as usize) as u16,
                             this_val, // Pass the object as 'this'
                             method_val,
                         )
@@ -2582,7 +2886,7 @@ impl Interpreter {
                     let bytecode = unsafe { &*frame.bytecode };
 
                     // Convert value to string representation
-                    let output = if val.is_string() {
+                    let _output = if val.is_string() {
                         self.get_string_content(val, bytecode)
                             .unwrap_or_default()
                             .to_string()
@@ -2608,7 +2912,7 @@ impl Interpreter {
                     };
 
                     #[cfg(feature = "std")]
-                    println!("{}", output);
+                    println!("{}", _output);
                 }
 
                 // GetGlobal - look up global variable by name
@@ -2834,8 +3138,7 @@ impl Interpreter {
                                 Value::undefined()
                             };
                             if let Some((branch_on_true, offset)) = branch {
-                                let is_truthy = Self::value_to_bool(val);
-                                if is_truthy == branch_on_true {
+                                if Self::branch_matches_value(val, branch_on_true) {
                                     let frame = self.call_stack.last_mut().unwrap();
                                     frame.pc = (frame.pc as i32 + offset) as usize;
                                 }
@@ -2860,8 +3163,7 @@ impl Interpreter {
                             .and_then(|ta| ta.get(index))
                             .unwrap_or_default();
                         if let Some((branch_on_true, offset)) = branch {
-                            let is_truthy = Self::value_to_bool(val);
-                            if is_truthy == branch_on_true {
+                            if Self::branch_matches_value(val, branch_on_true) {
                                 let frame = self.call_stack.last_mut().unwrap();
                                 frame.pc = (frame.pc as i32 + offset) as usize;
                             }
@@ -2886,8 +3188,7 @@ impl Interpreter {
 
                     let val = array.get(index).copied().unwrap_or_default();
                     if let Some((branch_on_true, offset)) = branch {
-                        let is_truthy = Self::value_to_bool(val);
-                        if is_truthy == branch_on_true {
+                        if Self::branch_matches_value(val, branch_on_true) {
                             let frame = self.call_stack.last_mut().unwrap();
                             frame.pc = (frame.pc as i32 + offset) as usize;
                         }
@@ -2938,6 +3239,18 @@ impl Interpreter {
 
                 // PutArrayEl - set array element: arr idx val -> val
                 op if op == OpCode::PutArrayEl as u8 => {
+                    let discard_result = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let bc = &bytecode.bytecode;
+                        if frame.pc < bc.len() && bc[frame.pc] == OpCode::Drop as u8 {
+                            frame.pc += 1;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (val, idx, arr) = unsafe { self.stack.pop3_unchecked() };
 
@@ -2957,7 +3270,9 @@ impl Interpreter {
                                 array.resize(index + 1, Value::undefined());
                                 array[index] = val;
                             }
-                            self.stack.push(val);
+                            if !discard_result {
+                                self.stack.push(val);
+                            }
                             continue;
                         }
                     }
@@ -2973,7 +3288,9 @@ impl Interpreter {
                         if let Some(ta) = self.typed_arrays.get_mut(typed_idx as usize) {
                             ta.set(index, val);
                         }
-                        self.stack.push(val);
+                        if !discard_result {
+                            self.stack.push(val);
+                        }
                         continue;
                     }
 
@@ -2997,6 +3314,22 @@ impl Interpreter {
                     array[index] = val;
 
                     // Push the assigned value back (assignment is an expression)
+                    if !discard_result {
+                        self.stack.push(val);
+                    }
+                }
+
+                // GetLength - get `.length` property through a dedicated fast path.
+                op if op == OpCode::GetLength as u8 => {
+                    let obj = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let val = self.get_length_value(obj);
+                    self.stack.push(val);
+                }
+
+                // GetLength2 - get `.length` but keep the base object on stack.
+                op if op == OpCode::GetLength2 as u8 => {
+                    let obj = self.stack.peek().ok_or(InterpreterError::StackUnderflow)?;
+                    let val = self.get_length_value(obj);
                     self.stack.push(val);
                 }
 
@@ -3009,6 +3342,21 @@ impl Interpreter {
                     frame.pc += 2;
 
                     let obj = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+
+                    // TypeError: Cannot read properties of null/undefined
+                    if obj.is_null() || obj.is_undefined() {
+                        let prop_name = bytecode
+                            .string_constants
+                            .get(str_idx)
+                            .map(|s| s.as_str())
+                            .unwrap_or("?");
+                        let type_name = if obj.is_null() { "null" } else { "undefined" };
+                        self.try_handle_runtime_error(InterpreterError::TypeError(format!(
+                            "Cannot read properties of {} (reading '{}')",
+                            type_name, prop_name
+                        )))?;
+                        continue;
+                    }
 
                     // Get property name from string constants
                     let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
@@ -3033,6 +3381,21 @@ impl Interpreter {
 
                     // Peek at the object (don't pop - we need to keep it for 'this')
                     let obj = self.stack.peek().ok_or(InterpreterError::StackUnderflow)?;
+
+                    // TypeError: Cannot read properties of null/undefined
+                    if obj.is_null() || obj.is_undefined() {
+                        let prop_name = bytecode
+                            .string_constants
+                            .get(str_idx)
+                            .map(|s| s.as_str())
+                            .unwrap_or("?");
+                        let type_name = if obj.is_null() { "null" } else { "undefined" };
+                        self.try_handle_runtime_error(InterpreterError::TypeError(format!(
+                            "Cannot read properties of {} (reading '{}')",
+                            type_name, prop_name
+                        )))?;
+                        continue;
+                    }
 
                     // Get property name from string constants
                     let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
@@ -3110,9 +3473,12 @@ impl Interpreter {
                                     STR_STRING => Some("string".to_string()),
                                     STR_EMPTY => Some(String::new()),
                                     _ => {
-                                        if str_idx >= 0x8000 {
+                                        if str_idx >= Self::RUNTIME_STRING_OFFSET {
                                             self.runtime_strings
-                                                .get((str_idx - 0x8000) as usize)
+                                                .get(
+                                                    (str_idx - Self::RUNTIME_STRING_OFFSET)
+                                                        as usize,
+                                                )
                                                 .cloned()
                                         } else {
                                             // Compile-time string constant
@@ -3178,9 +3544,12 @@ impl Interpreter {
                                     STR_STRING => Some("string".to_string()),
                                     STR_EMPTY => Some(String::new()),
                                     _ => {
-                                        if str_idx >= 0x8000 {
+                                        if str_idx >= Self::RUNTIME_STRING_OFFSET {
                                             self.runtime_strings
-                                                .get((str_idx - 0x8000) as usize)
+                                                .get(
+                                                    (str_idx - Self::RUNTIME_STRING_OFFSET)
+                                                        as usize,
+                                                )
                                                 .cloned()
                                         } else {
                                             bytecode.string_constants.get(str_idx as usize).cloned()
@@ -3255,6 +3624,35 @@ impl Interpreter {
                         } else {
                             Value::bool(false)
                         }
+                    } else if obj.is_error_object() {
+                        // Error instanceof: match by error type name
+                        if let Some(err_idx) = obj.to_error_object_idx() {
+                            let err_name = self
+                                .error_objects
+                                .get(err_idx as usize)
+                                .map(|e| e.name.as_str())
+                                .unwrap_or("");
+                            let ctor_name =
+                                ctor.to_builtin_object_idx().and_then(|bidx| match bidx {
+                                    crate::vm::types::BUILTIN_ERROR => Some("Error"),
+                                    crate::vm::types::BUILTIN_TYPE_ERROR => Some("TypeError"),
+                                    crate::vm::types::BUILTIN_REFERENCE_ERROR => {
+                                        Some("ReferenceError")
+                                    }
+                                    crate::vm::types::BUILTIN_RANGE_ERROR => Some("RangeError"),
+                                    crate::vm::types::BUILTIN_SYNTAX_ERROR => Some("SyntaxError"),
+                                    crate::vm::types::BUILTIN_URI_ERROR => Some("URIError"),
+                                    _ => None,
+                                });
+                            if let Some(name) = ctor_name {
+                                // "Error" matches all errors; specific types match exactly
+                                Value::bool(name == "Error" || err_name == name)
+                            } else {
+                                Value::bool(false)
+                            }
+                        } else {
+                            Value::bool(false)
+                        }
                     } else {
                         // Left operand is not an object
                         Value::bool(false)
@@ -3298,7 +3696,7 @@ impl Interpreter {
                         if self.for_in_iterators.get(iter_idx as usize).is_some() {
                             if let Some(key) = self.for_in_next_key(iter_idx as usize) {
                                 // Push key and false (not done)
-                                let key_val = self.create_runtime_string(key);
+                                let key_val = self.create_runtime_string_for_in_key(&key)?;
                                 self.stack.push(key_val);
                                 self.stack.push(Value::bool(false)); // not done
                             } else {
@@ -3350,24 +3748,54 @@ impl Interpreter {
                 op if op == OpCode::ForOfNext as u8 => {
                     let iter_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
 
-                    if let Some(iter_idx) = iter_val.to_for_of_iterator_idx() {
-                        if self.for_of_iterators.get(iter_idx as usize).is_some() {
-                            if let Some(val) = self.for_of_next_value(iter_idx as usize) {
-                                // Push value and false (not done)
-                                self.stack.push(val);
-                                self.stack.push(Value::bool(false)); // not done
+                    let branch = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let bc = &bytecode.bytecode;
+                        if frame.pc < bc.len() {
+                            let next = bc[frame.pc];
+                            if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
+                                && frame.pc + 4 < bc.len()
+                            {
+                                let offset = i32::from_le_bytes([
+                                    bc[frame.pc + 1],
+                                    bc[frame.pc + 2],
+                                    bc[frame.pc + 3],
+                                    bc[frame.pc + 4],
+                                ]);
+                                frame.pc += 5;
+                                Some((next == OpCode::IfTrue as u8, offset))
                             } else {
-                                // Push undefined and true (done)
-                                self.stack.push(Value::undefined());
-                                self.stack.push(Value::bool(true)); // done
+                                None
                             }
                         } else {
-                            // Invalid iterator, push done
-                            self.stack.push(Value::undefined());
-                            self.stack.push(Value::bool(true));
+                            None
+                        }
+                    };
+
+                    let next_value = if let Some(iter_idx) = iter_val.to_for_of_iterator_idx() {
+                        if self.for_of_iterators.get(iter_idx as usize).is_some() {
+                            self.for_of_next_value(iter_idx as usize)
+                        } else {
+                            None
                         }
                     } else {
-                        // Not an iterator, push done
+                        None
+                    };
+
+                    if let Some((branch_on_true, offset)) = branch {
+                        let done = next_value.is_none();
+                        self.stack.push(next_value.unwrap_or(Value::undefined()));
+                        if done == branch_on_true {
+                            let frame = self.call_stack.last_mut().unwrap();
+                            frame.pc = (frame.pc as i32 + offset) as usize;
+                        }
+                    } else if let Some(val) = next_value {
+                        // Push value and false (not done)
+                        self.stack.push(val);
+                        self.stack.push(Value::bool(false));
+                    } else {
+                        // Push undefined and true (done)
                         self.stack.push(Value::undefined());
                         self.stack.push(Value::bool(true));
                     }
@@ -3391,10 +3819,35 @@ impl Interpreter {
             f != 0.0 && !f.is_nan()
         } else if val.is_null() || val.is_undefined() {
             false
+        } else if val.is_string() {
+            // Empty string is falsy, non-empty string is truthy
+            val.to_string_idx()
+                .map(|idx| idx != crate::value::STR_EMPTY)
+                .unwrap_or(false)
         } else {
-            // Objects are truthy
+            // Objects, arrays, closures, etc. are truthy
             true
         }
+    }
+
+    #[inline]
+    fn branch_matches_value(val: Value, branch_on_true: bool) -> bool {
+        let truthy = if val.is_bool() {
+            val.to_bool().unwrap_or(false)
+        } else if val.is_null() || val.is_undefined() {
+            false
+        } else if val.is_int() {
+            val.to_i32().map(|n| n != 0).unwrap_or(false)
+        } else if let Some(f) = val.to_f32() {
+            f != 0.0 && !f.is_nan()
+        } else if val.is_string() {
+            val.to_string_idx()
+                .map(|idx| idx != crate::value::STR_EMPTY)
+                .unwrap_or(false)
+        } else {
+            true
+        };
+        truthy == branch_on_true
     }
 
     /// Convert a value to a string for property access
@@ -3417,9 +3870,9 @@ impl Interpreter {
                 STR_EMPTY => Some(String::new()),
                 _ => {
                     // Check runtime strings first (high indices)
-                    if str_idx >= 0x8000 {
+                    if str_idx >= Self::RUNTIME_STRING_OFFSET {
                         self.runtime_strings
-                            .get((str_idx - 0x8000) as usize)
+                            .get((str_idx - Self::RUNTIME_STRING_OFFSET) as usize)
                             .cloned()
                     } else {
                         // It's a compile-time string - we need bytecode access
@@ -3801,6 +4254,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-
-
-

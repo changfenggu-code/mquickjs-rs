@@ -133,6 +133,40 @@ impl Stack {
         Some(self.values.remove(idx))
     }
 
+    /// Remove the function value immediately below the top `argc` arguments and
+    /// compact the argument tail down by one slot.
+    #[inline]
+    pub fn compact_call_args(&mut self, argc: usize) -> Option<Value> {
+        let len = self.values.len();
+        if argc + 1 > len {
+            return None;
+        }
+
+        let func_idx = len - argc - 1;
+        let func = self.values[func_idx];
+        self.values.copy_within(func_idx + 1..len, func_idx);
+        self.values.truncate(len - 1);
+        Some(func)
+    }
+
+    /// Remove the `[this, method]` pair immediately below the top `argc`
+    /// arguments and compact the argument tail down by two slots.
+    #[inline]
+    pub fn compact_method_call_args(&mut self, argc: usize) -> Option<(Value, Value)> {
+        let len = self.values.len();
+        if argc + 2 > len {
+            return None;
+        }
+
+        let this_idx = len - argc - 2;
+        let method_idx = this_idx + 1;
+        let this_val = self.values[this_idx];
+        let method_val = self.values[method_idx];
+        self.values.copy_within(method_idx + 1..len, this_idx);
+        self.values.truncate(len - 2);
+        Some((this_val, method_val))
+    }
+
     /// Get raw value at absolute stack index
     #[inline]
     pub fn get_raw(&self, idx: usize) -> Value {
@@ -310,5 +344,35 @@ mod tests {
         assert_eq!(stack.get_local(0).unwrap().to_i32(), Some(10));
         assert_eq!(stack.get_local(1).unwrap().to_i32(), Some(20));
         assert_eq!(stack.get_local(2).unwrap().to_i32(), Some(30));
+    }
+
+    #[test]
+    fn test_compact_call_args() {
+        let mut stack = Stack::new(16);
+        stack.push(Value::int(99));
+        stack.push(Value::int(1));
+        stack.push(Value::int(2));
+
+        let func = stack.compact_call_args(2).unwrap();
+        assert_eq!(func.to_i32(), Some(99));
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.get_raw(0).to_i32(), Some(1));
+        assert_eq!(stack.get_raw(1).to_i32(), Some(2));
+    }
+
+    #[test]
+    fn test_compact_method_call_args() {
+        let mut stack = Stack::new(16);
+        stack.push(Value::int(7));
+        stack.push(Value::int(8));
+        stack.push(Value::int(1));
+        stack.push(Value::int(2));
+
+        let (this_val, method_val) = stack.compact_method_call_args(2).unwrap();
+        assert_eq!(this_val.to_i32(), Some(7));
+        assert_eq!(method_val.to_i32(), Some(8));
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.get_raw(0).to_i32(), Some(1));
+        assert_eq!(stack.get_raw(1).to_i32(), Some(2));
     }
 }

@@ -1,2 +1,4 @@
 /target
 Cargo.lock
+_tmp_*.pdb
+_tmp_*.txt

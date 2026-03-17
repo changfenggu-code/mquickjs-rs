@@ -24,7 +24,8 @@ impl Interpreter {
                 Value::undefined()
             }
             "push" => self
-                .get_native_func("Array.prototype.push")
+                .native_array_push_idx
+                .map(Value::native_func)
                 .unwrap_or_default(),
             "pop" => self
                 .get_native_func("Array.prototype.pop")

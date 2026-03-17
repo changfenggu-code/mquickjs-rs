@@ -1,6 +1,18 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use mquickjs::Context;
 
+fn bench_compiled(c: &mut Criterion, name: &str, mem_size: usize, code: &str) {
+    let compiler_ctx = Context::new(mem_size);
+    let bytecode = compiler_ctx.compile(code).unwrap();
+
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let mut ctx = Context::new(mem_size);
+            black_box(ctx.execute(&bytecode).unwrap())
+        })
+    });
+}
+
 fn bench_fib(c: &mut Criterion) {
     // Use iterative fibonacci to avoid stack overflow
     let code = r#"
@@ -22,12 +34,7 @@ fn bench_fib(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("fib_iter 1k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(64 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "fib_iter 1k", 64 * 1024, code);
 }
 
 fn bench_loop(c: &mut Criterion) {
@@ -39,12 +46,7 @@ fn bench_loop(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("loop 10k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(64 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "loop 10k", 64 * 1024, code);
 }
 
 fn bench_array_push(c: &mut Criterion) {
@@ -56,12 +58,7 @@ fn bench_array_push(c: &mut Criterion) {
         return arr.length;
     "#;
 
-    c.bench_function("array push 10k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "array push 10k", 256 * 1024, code);
 }
 
 fn bench_object_create(c: &mut Criterion) {
@@ -77,12 +74,7 @@ fn bench_object_create(c: &mut Criterion) {
         return points.length;
     "#;
 
-    c.bench_function("object create 1k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "object create 1k", 256 * 1024, code);
 }
 
 fn bench_closure(c: &mut Criterion) {
@@ -101,12 +93,7 @@ fn bench_closure(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("closure 1k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "closure 1k", 256 * 1024, code);
 }
 
 fn bench_string_concat(c: &mut Criterion) {
@@ -118,12 +105,7 @@ fn bench_string_concat(c: &mut Criterion) {
         return s.length;
     "#;
 
-    c.bench_function("string concat 1k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(64 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "string concat 1k", 64 * 1024, code);
 }
 
 fn bench_json_parse(c: &mut Criterion) {
@@ -137,12 +119,7 @@ fn bench_json_parse(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("json parse 1k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "json parse 1k", 256 * 1024, code);
 }
 
 fn bench_sieve(c: &mut Criterion) {
@@ -170,12 +147,7 @@ fn bench_sieve(c: &mut Criterion) {
         return sieve(10000);
     "#;
 
-    c.bench_function("sieve 10k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "sieve 10k", 256 * 1024, code);
 }
 
 fn bench_recursion(c: &mut Criterion) {
@@ -192,12 +164,7 @@ fn bench_recursion(c: &mut Criterion) {
         return total;
     "#;
 
-    c.bench_function("recursion 100x100", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(128 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "recursion 100x100", 128 * 1024, code);
 }
 
 fn bench_switch(c: &mut Criterion) {
@@ -220,12 +187,7 @@ fn bench_switch(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("switch 1k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(64 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "switch 1k", 64 * 1024, code);
 }
 
 fn bench_do_while(c: &mut Criterion) {
@@ -237,12 +199,7 @@ fn bench_do_while(c: &mut Criterion) {
         return i;
     "#;
 
-    c.bench_function("do...while 10k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(64 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "do...while 10k", 64 * 1024, code);
 }
 
 fn bench_method_chain(c: &mut Criterion) {
@@ -257,12 +214,7 @@ fn bench_method_chain(c: &mut Criterion) {
         return arr.map(double).filter(divByThree).reduce(add, 0);
     "#;
 
-    c.bench_function("method_chain 5k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "method_chain 5k", 256 * 1024, code);
 }
 
 fn bench_runtime_string_pressure(c: &mut Criterion) {
@@ -278,12 +230,7 @@ fn bench_runtime_string_pressure(c: &mut Criterion) {
         return total;
     "#;
 
-    c.bench_function("runtime_string_pressure 4k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "runtime_string_pressure 4k", 256 * 1024, code);
 }
 
 fn bench_for_of_array(c: &mut Criterion) {
@@ -299,12 +246,7 @@ fn bench_for_of_array(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("for_of_array 20k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "for_of_array 20k", 256 * 1024, code);
 }
 
 fn bench_deep_property(c: &mut Criterion) {
@@ -317,12 +259,7 @@ fn bench_deep_property(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("deep_property 200k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(128 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "deep_property 200k", 128 * 1024, code);
 }
 
 fn bench_try_catch(c: &mut Criterion) {
@@ -338,12 +275,7 @@ fn bench_try_catch(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("try_catch 5k", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "try_catch 5k", 256 * 1024, code);
 }
 
 fn bench_for_in_object(c: &mut Criterion) {
@@ -363,12 +295,7 @@ fn bench_for_in_object(c: &mut Criterion) {
         return sum;
     "#;
 
-    c.bench_function("for_in_object 20x2000", |b| {
-        b.iter(|| {
-            let mut ctx = Context::new(256 * 1024);
-            black_box(ctx.eval(code).unwrap())
-        })
-    });
+    bench_compiled(c, "for_in_object 20x2000", 256 * 1024, code);
 }
 
 criterion_group!(
