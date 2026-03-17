@@ -883,7 +883,7 @@ impl Eq for Value {}
 
 /// Format a float for JavaScript output.
 /// Integers print without decimal (3.0 → "3"), NaN/Infinity handled.
-/// Preserves -0.0 sign per JS spec.
+/// JS spec: String(-0) === "0" — sign is dropped in string conversion.
 pub fn format_float(val: Float) -> String {
     if val.is_nan() {
         return "NaN".to_string();
@@ -891,10 +891,11 @@ pub fn format_float(val: Float) -> String {
     if val.is_infinite() {
         return if val > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
     }
-    if (val - libm::truncf(val)) == 0.0
-        && libm::fabsf(val) < (i32::MAX as Float)
-        && !val.is_sign_negative()
-    {
+    // -0.0 == 0.0 under IEEE 754; JS drops the sign in string conversion.
+    if val == 0.0 {
+        return "0".to_string();
+    }
+    if (val - libm::truncf(val)) == 0.0 && libm::fabsf(val) < (i32::MAX as Float) {
         format!("{}", val as i32)
     } else {
         format!("{}", val)
@@ -965,211 +966,4 @@ pub const fn is_builtin_string(idx: u16) -> bool {
     idx >= 0xFFF0
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_float() -> Float {
-        314.0_f32 / 100.0
-    }
-
-    #[test]
-    fn test_null() {
-        let v = Value::null();
-        assert!(v.is_null());
-        assert!(!v.is_undefined());
-        assert!(!v.is_bool());
-        assert!(!v.is_int());
-        assert!(v.is_nullish());
-    }
-
-    #[test]
-    fn test_undefined() {
-        let v = Value::undefined();
-        assert!(!v.is_null());
-        assert!(v.is_undefined());
-        assert!(v.is_nullish());
-    }
-
-    #[test]
-    fn test_bool() {
-        let t = Value::bool(true);
-        let f = Value::bool(false);
-
-        assert!(t.is_bool());
-        assert!(f.is_bool());
-        assert_eq!(t.to_bool(), Some(true));
-        assert_eq!(f.to_bool(), Some(false));
-    }
-
-    #[test]
-    fn test_int() {
-        let zero = Value::int(0);
-        let pos = Value::int(42);
-        let neg = Value::int(-100);
-        let max = Value::int(SHORT_INT_MAX);
-        let min = Value::int(SHORT_INT_MIN);
-
-        assert!(zero.is_int());
-        assert_eq!(zero.to_i32(), Some(0));
-        assert_eq!(pos.to_i32(), Some(42));
-        assert_eq!(neg.to_i32(), Some(-100));
-        assert_eq!(max.to_i32(), Some(SHORT_INT_MAX));
-        assert_eq!(min.to_i32(), Some(SHORT_INT_MIN));
-    }
-
-    #[test]
-    fn test_exception() {
-        let v = Value::exception();
-        assert!(v.is_exception());
-        assert!(!v.is_null());
-        assert!(!v.is_int());
-    }
-
-    #[test]
-    fn test_raw_value_debug() {
-        assert_eq!(format!("{:?}", RawValue::NULL), "Null");
-        assert_eq!(format!("{:?}", RawValue::UNDEFINED), "Undefined");
-        assert_eq!(format!("{:?}", RawValue::TRUE), "Bool(true)");
-        assert_eq!(format!("{:?}", RawValue::from_i32(42)), "Int(42)");
-    }
-
-    #[test]
-    fn test_float_basic() {
-        let v = Value::float(sample_float());
-        assert!(v.is_float());
-        assert!(!v.is_int());
-        assert!(v.is_number());
-        let f = v.to_f32().unwrap();
-        assert!((f - sample_float()).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_float_nan() {
-        let v = Value::nan();
-        assert!(v.is_float());
-        assert!(v.is_nan_value());
-        assert!(!v.is_infinite_value());
-        assert!(v.to_f32().unwrap().is_nan());
-    }
-
-    #[test]
-    fn test_float_infinity() {
-        let v = Value::infinity();
-        assert!(v.is_float());
-        assert!(v.is_infinite_value());
-        assert!(!v.is_nan_value());
-
-        let v2 = Value::neg_infinity();
-        assert!(v2.is_infinite_value());
-        assert!(v2.to_f32().unwrap() < 0.0);
-    }
-
-    #[test]
-    fn test_float_no_collision() {
-        // Float values must not be confused with other types
-        let f = Value::float(42.0);
-        assert!(!f.is_null());
-        assert!(!f.is_undefined());
-        assert!(!f.is_bool());
-        assert!(!f.is_exception());
-        assert!(!f.is_ptr());
-        assert!(!f.is_string());
-        assert!(!f.is_func());
-    }
-
-    #[test]
-    fn test_is_number() {
-        assert!(Value::int(42).is_number());
-        assert!(Value::float(sample_float()).is_number());
-        assert!(!Value::null().is_number());
-        assert!(!Value::bool(true).is_number());
-    }
-
-    #[test]
-    fn test_to_number_f32() {
-        assert_eq!(Value::int(42).to_number_f32(), Some(42.0));
-        let f = Value::float(sample_float()).to_number_f32().unwrap();
-        assert!((f - sample_float()).abs() < 0.001);
-        assert_eq!(Value::null().to_number_f32(), None);
-    }
-
-    #[test]
-    fn test_float_to_value_normalization() {
-        // Whole-number float normalizes to int
-        let v = float_to_value(3.0);
-        assert!(v.is_int());
-        assert_eq!(v.to_i32(), Some(3));
-
-        // Non-whole float stays as float
-        let v = float_to_value(sample_float());
-        assert!(v.is_float());
-
-        // NaN stays as float
-        let v = float_to_value(Float::NAN);
-        assert!(v.is_float());
-        assert!(v.is_nan_value());
-
-        // Infinity stays as float
-        let v = float_to_value(Float::INFINITY);
-        assert!(v.is_float());
-        assert!(v.is_infinite_value());
-    }
-
-    #[test]
-    fn test_format_float() {
-        assert_eq!(format_float(sample_float()), "3.14");
-        assert_eq!(format_float(3.0), "3");
-        assert_eq!(format_float(-0.5), "-0.5");
-        assert_eq!(format_float(Float::NAN), "NaN");
-        assert_eq!(format_float(Float::INFINITY), "Infinity");
-        assert_eq!(format_float(Float::NEG_INFINITY), "-Infinity");
-    }
-
-    #[test]
-    fn test_negative_zero_preserved_in_float_to_value() {
-        // -0.0 must stay as float, not collapse to int(0)
-        let v = float_to_value(-0.0);
-        assert!(v.is_float(), "-0.0 should remain a float");
-        let f = v.to_f32().unwrap();
-        assert!(f.is_sign_negative(), "-0.0 should preserve negative sign");
-    }
-
-    #[test]
-    fn test_negative_zero_format() {
-        // format_float(-0.0) should NOT print "0"
-        let s = format_float(-0.0);
-        assert!(
-            s.starts_with('-'),
-            "format_float(-0.0) = {:?}, should be negative",
-            s
-        );
-    }
-
-    #[test]
-    fn test_is_closure_no_false_positive_for_regexp() {
-        let v = Value::regexp_object(0);
-        assert!(v.is_regexp_object());
-        assert!(!v.is_closure(), "regexp must not be identified as closure");
-    }
-
-    #[test]
-    fn test_is_closure_no_false_positive_for_typed_array() {
-        let v = Value::typed_array_object(0);
-        assert!(v.is_typed_array());
-        assert!(
-            !v.is_closure(),
-            "typed array must not be identified as closure"
-        );
-    }
-
-    #[test]
-    fn test_is_closure_no_false_positive_for_array_buffer() {
-        let v = Value::array_buffer_object(0);
-        assert!(v.is_array_buffer());
-        assert!(
-            !v.is_closure(),
-            "array buffer must not be identified as closure"
-        );
-    }
-}
+// Tests moved to tests/value_tests.rs

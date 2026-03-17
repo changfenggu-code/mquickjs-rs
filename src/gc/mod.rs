@@ -11,7 +11,7 @@
 mod allocator;
 mod collector;
 
-pub use allocator::{Heap, MemoryTag};
+pub use allocator::{BlockHeader, Heap, MemoryTag};
 pub use collector::GcRef;
 
 impl Heap {

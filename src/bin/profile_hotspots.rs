@@ -23,6 +23,9 @@ mod dump_main {
             x if x == OpCode::PushI8 as u8 => "PushI8",
             x if x == OpCode::PushI16 as u8 => "PushI16",
             x if x == OpCode::GetArrayEl as u8 => "GetArrayEl",
+            x if x == OpCode::GetField as u8 => "GetField",
+            x if x == OpCode::GetField2 as u8 => "GetField2",
+            x if x == OpCode::GetLength as u8 => "GetLength",
             x if x == OpCode::PutArrayEl as u8 => "PutArrayEl",
             x if x == OpCode::GetLoc as u8 => "GetLoc",
             x if x == OpCode::GetLoc8 as u8 => "GetLoc8",
@@ -43,6 +46,9 @@ mod dump_main {
             x if x == OpCode::Lte as u8 => "Lte",
             x if x == OpCode::Mul as u8 => "Mul",
             x if x == OpCode::Add as u8 => "Add",
+            x if x == OpCode::AddConstStringLeft as u8 => "AddConstStringLeft",
+            x if x == OpCode::AddConstStringRight as u8 => "AddConstStringRight",
+            x if x == OpCode::AddConstStringSurround as u8 => "AddConstStringSurround",
             x if x == OpCode::Drop as u8 => "Drop",
             x if x == OpCode::Dup as u8 => "Dup",
             x if x == OpCode::CallMethod as u8 => "CallMethod",
@@ -66,48 +72,75 @@ mod dump_main {
         }
     }
 
-    fn dump_bytecode(name: &str, bytecode: &mquickjs::FunctionBytecode) {
-        println!("== bytecode: {} ==", name);
-        for (i, op) in bytecode.bytecode.iter().copied().enumerate() {
-            println!("{:4}: {:<14} 0x{:02x}", i, opcode_name(op), op);
-        }
-        for (idx, inner) in bytecode.inner_functions.iter().enumerate() {
-            dump_bytecode(&format!("{}::inner{}", name, idx), inner);
-        }
+    fn run_case(name: &str, source: &str, _mem_size: usize) {
+        let mut ctx = Context::new(256 * 1024);
+        let bytecode = ctx.compile(source).expect("compile");
+        ctx.reset_opcode_counts();
+        let result = ctx.execute(&bytecode).expect("execute");
+        let strings = ctx.runtime_string_source_stats();
+        println!("== {} ==", name);
+        println!("result: {:?}", result);
+        println!(
+            "runtime strings: total={} concat={} for_in_key={} json={} object_keys={} object_entries={} error={} type={} other={}",
+            strings.total,
+            strings.concat,
+            strings.for_in_key,
+            strings.json,
+            strings.object_keys,
+            strings.object_entries,
+            strings.error_string,
+            strings.type_string,
+            strings.other
+        );
+        print_top(&ctx, 16);
+        println!();
     }
 
     pub fn run() {
-        let sieve = r#"
-            function sieve(n) {
-                var primes = [];
-                for (var i = 0; i <= n; i = i + 1) {
-                    primes.push(true);
-                }
-                primes[0] = false;
-                primes[1] = false;
-                for (var i = 2; i * i <= n; i = i + 1) {
-                    if (primes[i]) {
-                        for (var j = i * i; j <= n; j = j + i) {
-                            primes[j] = false;
-                        }
-                    }
-                }
-                var count = 0;
-                for (var i = 0; i <= n; i = i + 1) {
-                    if (primes[i]) count = count + 1;
-                }
-                return count;
+        let method_chain = include_str!("../../benches/scripts/method_chain.js");
+        let string_concat = r#"
+            var s = "";
+            for (var i = 0; i < 1000; i = i + 1) {
+                s = s + "x";
             }
-            return sieve(10000);
+            return s.length;
         "#;
+        let string_local_update_only = r#"
+            var s = "";
+            for (var i = 0; i < 1000; i = i + 1) {
+                s = "x";
+            }
+            return s.length;
+        "#;
+        let string_concat_ephemeral = r#"
+            var s = "";
+            var total = 0;
+            for (var i = 0; i < 1000; i = i + 1) {
+                var t = s + "x";
+                total = total + t.length;
+            }
+            return total;
+        "#;
+        let runtime_string_pressure =
+            include_str!("../../benches/scripts/runtime_string_pressure.js");
 
-        let mut ctx = Context::new(256 * 1024);
-        let bytecode = ctx.compile(sieve).expect("compile");
-        dump_bytecode("top", &bytecode);
-        ctx.reset_opcode_counts();
-        let result = ctx.execute(&bytecode).expect("execute");
-        println!("result: {:?}", result);
-        print_top(&ctx, 16);
+        run_case("method_chain", method_chain, 256 * 1024);
+        run_case("string_concat", string_concat, 64 * 1024);
+        run_case(
+            "string_local_update_only",
+            string_local_update_only,
+            64 * 1024,
+        );
+        run_case(
+            "string_concat_ephemeral",
+            string_concat_ephemeral,
+            64 * 1024,
+        );
+        run_case(
+            "runtime_string_pressure",
+            runtime_string_pressure,
+            256 * 1024,
+        );
     }
 }
 

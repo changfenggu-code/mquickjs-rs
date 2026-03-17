@@ -120,44 +120,4 @@ pub fn code_unit_at_utf16(s: &str, utf16_index: usize) -> Option<u16> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_utf16_len() {
-        assert_eq!(utf16_len("hello"), 5);
-        assert_eq!(utf16_len("中文"), 2);
-        assert_eq!(utf16_len("😀"), 2); // Emoji is 2 UTF-16 code units
-    }
-
-    #[test]
-    fn test_utf16_index_conversion() {
-        let s = "a中😀b";
-
-        // "a" is at UTF-8 0, UTF-16 0
-        // "中" is at UTF-8 1, UTF-16 1
-        // "😀" is at UTF-8 4, UTF-16 2
-        // "b" is at UTF-8 8, UTF-16 4
-
-        assert_eq!(utf8_to_utf16_index(s, 0), 0);
-        assert_eq!(utf8_to_utf16_index(s, 1), 1);
-        assert_eq!(utf8_to_utf16_index(s, 4), 2);
-        assert_eq!(utf8_to_utf16_index(s, 8), 4);
-
-        assert_eq!(utf16_to_utf8_index(s, 0), 0);
-        assert_eq!(utf16_to_utf8_index(s, 1), 1);
-        assert_eq!(utf16_to_utf8_index(s, 2), 4);
-        assert_eq!(utf16_to_utf8_index(s, 4), 8);
-    }
-
-    #[test]
-    fn test_code_unit_at() {
-        let s = "a😀b";
-
-        assert_eq!(code_unit_at_utf16(s, 0), Some(b'a' as u16));
-        assert_eq!(code_unit_at_utf16(s, 1), Some(0xD83D)); // High surrogate for 😀
-        assert_eq!(code_unit_at_utf16(s, 2), Some(0xDE00)); // Low surrogate for 😀
-        assert_eq!(code_unit_at_utf16(s, 3), Some(b'b' as u16));
-    }
-}
+// Tests moved to tests/util_tests.rs.

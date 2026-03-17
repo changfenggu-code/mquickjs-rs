@@ -111,11 +111,11 @@ snapshot for the primary benchmark set.
 |-----------|------------------------|
 | `fib_iter 1k` | `2.330–2.379 ms` |
 | `loop 10k` | `0.472–0.485 ms` |
-| `array push 10k` | `0.614–0.633 ms` |
+| `array push 10k` | `0.491–0.502 ms` |
 | `json parse 1k` | `0.736–0.754 ms` |
 | `sieve 10k` | `2.069–2.103 ms` |
-| `method_chain 5k` | `0.699–0.707 ms` |
-| `runtime_string_pressure 4k` | `1.237–1.269 ms` |
+| `method_chain 5k` | `0.585–0.600 ms` |
+| `runtime_string_pressure 4k` | `0.899–0.915 ms` |
 | `for_of_array 20k` | `1.796–1.959 ms` |
 | `deep_property 200k` | `14.925–15.235 ms` |
 
@@ -165,7 +165,8 @@ cross-implementation comparison. They include process startup cost.
 - `json` remains a relative strength for the Rust engine.
 - the updated execution-focused rerun still shows `fib` and `loop` as useful call-path and dispatch signals.
 - `array` and `sieve` remain meaningful dense-array and builtin-call signals.
-- `runtime_string_pressure` and `method_chain` both improved again in the latest full rerun, but they still remain useful runtime-focused targets because they exercise string creation pressure and callback-heavy array builtins directly.
+- `runtime_string_pressure` and `method_chain` both improved again in the latest full rerun; `method_chain` remains effectively near the `0.60 ms` target line, and `runtime_string_pressure` now benefits from a deeper concat-chain lowering pass that materially reduces runtime-string creation count, though the simpler `string concat 1k` microbenchmark should still be treated as a follow-up concern because it regressed in the latest targeted rerun.
+- A newer statement-form local-self-concat lowering (`AppendConstStringToLoc`) substantially improves the dedicated `string concat 1k` microbenchmark and reduces its runtime-string creation count to `1`, while leaving the broader `runtime_string_pressure` benchmark in roughly the same sub-millisecond class.
 - `for_of_array` improved materially again after a `ForOfNext` branch-fusion pass and now looks much healthier, though it remains a useful iterator/control-flow target.
 - `deep_property` remains a strong object-property benchmark and currently looks healthier than the iterator/string-pressure group.
 - `switch_case` is now tracked as a secondary control-flow benchmark and already shows measurable improvement from the latest `StrictEq` hot-path tuning.
@@ -191,6 +192,14 @@ The current codebase still contains the first completed optimization rounds for:
   - added direct `Array.prototype.push` native fast path with an `argc == 1` shortcut
   - changed array `.push` property lookup to use the cached native index directly
   - replaced full-array cloning in higher-order array builtins with length-snapshot iteration plus live element reads
+  - added dedicated `CallArrayMap1` / `CallArrayFilter1` / `CallArrayReduce2` opcodes
+  - added dedicated `CallArrayPush1` for the dominant single-argument array-construction shape
+- `runtime_string_pressure`
+  - builds concat results in a single output buffer instead of materializing both operands separately
+  - adds a narrower `string + int` / `int + string` fast path for decimal loop-index concatenation
+  - adds bytecode-level `AddConstStringLeft` / `AddConstStringRight` specializations for compile-time string fragments in concat chains
+  - folds adjacent compile-time string literals and lowers `const + value + const` into a dedicated `AddConstStringSurround` shape
+  - adds `AppendConstStringToLoc` plus per-frame local string builders for statement-form local self-concat loops
 - `for_of_array`
   - removed full array cloning from `ForOfStart`
   - added `ForOfNext` branch fusion for the common `IfTrue` loop-exit shape

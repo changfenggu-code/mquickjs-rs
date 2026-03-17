@@ -287,62 +287,13 @@ impl Default for StringTable {
     }
 }
 
+// Most tests moved to tests/value_tests.rs.
+// test_jsstring_header remains here because it accesses private constants
+// (LEN_SHIFT, ASCII_BIT, UNIQUE_BIT) that are not pub.
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_ascii_string() {
-        assert!(is_ascii_string("hello"));
-        assert!(is_ascii_string(""));
-        assert!(is_ascii_string("123"));
-        assert!(!is_ascii_string("héllo"));
-        assert!(!is_ascii_string("中文"));
-    }
-
-    #[test]
-    fn test_is_array_index() {
-        assert_eq!(is_array_index("0"), Some(0));
-        assert_eq!(is_array_index("1"), Some(1));
-        assert_eq!(is_array_index("42"), Some(42));
-        assert_eq!(is_array_index("12345"), Some(12345));
-        assert_eq!(is_array_index(""), None);
-        assert_eq!(is_array_index("01"), None); // Leading zero
-        assert_eq!(is_array_index("-1"), None); // Negative
-        assert_eq!(is_array_index("abc"), None);
-        assert_eq!(is_array_index("1.5"), None);
-    }
-
-    #[test]
-    fn test_is_ident() {
-        assert!(is_ident_start(b'a'));
-        assert!(is_ident_start(b'Z'));
-        assert!(is_ident_start(b'_'));
-        assert!(is_ident_start(b'$'));
-        assert!(!is_ident_start(b'0'));
-        assert!(!is_ident_start(b'-'));
-
-        assert!(is_ident_continue(b'a'));
-        assert!(is_ident_continue(b'0'));
-        assert!(is_ident_continue(b'_'));
-        assert!(!is_ident_continue(b'-'));
-    }
-
-    #[test]
-    fn test_string_hash() {
-        let h1 = StringTable::hash_string("hello");
-        let h2 = StringTable::hash_string("hello");
-        let h3 = StringTable::hash_string("world");
-
-        assert_eq!(h1, h2);
-        assert_ne!(h1, h3);
-    }
-
-    #[test]
-    fn test_string_table_creation() {
-        let table = StringTable::new();
-        assert_eq!(table.count(), 0);
-    }
 
     #[test]
     fn test_jsstring_header() {

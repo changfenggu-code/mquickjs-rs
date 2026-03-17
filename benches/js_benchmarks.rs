@@ -108,6 +108,32 @@ fn bench_string_concat(c: &mut Criterion) {
     bench_compiled(c, "string concat 1k", 64 * 1024, code);
 }
 
+fn bench_string_concat_local_update_only(c: &mut Criterion) {
+    let code = r#"
+        var s = "";
+        for (var i = 0; i < 1000; i = i + 1) {
+            s = "x";
+        }
+        return s.length;
+    "#;
+
+    bench_compiled(c, "string local update only 1k", 64 * 1024, code);
+}
+
+fn bench_string_concat_ephemeral(c: &mut Criterion) {
+    let code = r#"
+        var s = "";
+        var total = 0;
+        for (var i = 0; i < 1000; i = i + 1) {
+            var t = s + "x";
+            total = total + t.length;
+        }
+        return total;
+    "#;
+
+    bench_compiled(c, "string concat ephemeral 1k", 64 * 1024, code);
+}
+
 fn bench_json_parse(c: &mut Criterion) {
     let code = r#"
         var data = '{"name": "test", "value": 42, "items": [1, 2, 3]}';
@@ -306,6 +332,8 @@ criterion_group!(
     bench_object_create,
     bench_closure,
     bench_string_concat,
+    bench_string_concat_local_update_only,
+    bench_string_concat_ephemeral,
     bench_json_parse,
     bench_sieve,
     bench_recursion,

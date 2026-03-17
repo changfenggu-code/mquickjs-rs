@@ -11,6 +11,18 @@ use crate::value::Value;
 use alloc::format;
 
 impl Interpreter {
+    #[inline]
+    fn cached_array_method(&self, prop_name: &str) -> Option<Value> {
+        let idx = match prop_name {
+            "push" => self.native_array_push_idx,
+            "map" => self.native_array_map_idx,
+            "filter" => self.native_array_filter_idx,
+            "reduce" => self.native_array_reduce_idx,
+            _ => None,
+        }?;
+        Some(Value::native_func(idx))
+    }
+
     /// Get a property from an array (Array.prototype methods or length)
     pub(crate) fn get_array_property(&self, arr: Value, prop_name: &str) -> Value {
         match prop_name {
@@ -23,10 +35,9 @@ impl Interpreter {
                 }
                 Value::undefined()
             }
-            "push" => self
-                .native_array_push_idx
-                .map(Value::native_func)
-                .unwrap_or_default(),
+            "push" | "map" | "filter" | "reduce" => {
+                self.cached_array_method(prop_name).unwrap_or_default()
+            }
             "pop" => self
                 .get_native_func("Array.prototype.pop")
                 .unwrap_or_default(),
@@ -51,17 +62,8 @@ impl Interpreter {
             "slice" => self
                 .get_native_func("Array.prototype.slice")
                 .unwrap_or_default(),
-            "map" => self
-                .get_native_func("Array.prototype.map")
-                .unwrap_or_default(),
-            "filter" => self
-                .get_native_func("Array.prototype.filter")
-                .unwrap_or_default(),
             "forEach" => self
                 .get_native_func("Array.prototype.forEach")
-                .unwrap_or_default(),
-            "reduce" => self
-                .get_native_func("Array.prototype.reduce")
                 .unwrap_or_default(),
             "find" => self
                 .get_native_func("Array.prototype.find")

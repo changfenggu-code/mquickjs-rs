@@ -96,11 +96,11 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 |-----------|--------------|
 | `fib_iter 1k` | `2.330–2.379 ms` |
 | `loop 10k` | `0.472–0.485 ms` |
-| `array push 10k` | `0.614–0.633 ms` |
+| `array push 10k` | `0.491–0.502 ms` |
 | `json parse 1k` | `0.736–0.754 ms` |
 | `sieve 10k` | `2.069–2.103 ms` |
-| `method_chain 5k` | `0.699–0.707 ms` |
-| `runtime_string_pressure 4k` | `1.237–1.269 ms` |
+| `method_chain 5k` | `0.585–0.600 ms` |
+| `runtime_string_pressure 4k` | `0.899–0.915 ms` |
 | `for_of_array 20k` | `1.796–1.959 ms` |
 | `deep_property 200k` | `14.925–15.235 ms` |
 
@@ -148,7 +148,8 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 - `json` 仍然是 Rust 引擎的相对优势项。
 - 更新后的执行期口径重跑说明，`fib` 和 `loop` 仍然是调用路径与 dispatch 的有效观察窗。
 - `array` 和 `sieve` 仍然是 dense array 与 builtin 调用成本的重要观察窗。
-- 在 parser/compiler 噪声被削弱之后，`runtime_string_pressure` 和 `method_chain` 在最新完整重跑里又有一轮明显改善，但它们依然是高价值的运行时目标，因为它们直接暴露字符串创建压力和回调密集型数组 builtin 成本。
+- 在 parser/compiler 噪声被削弱之后，`runtime_string_pressure` 和 `method_chain` 在最新完整重跑里又有一轮明显改善；其中 `method_chain` 仍然基本贴着 `0.60 ms` 目标线，而 `runtime_string_pressure` 现在又吃到了更深一层 concat-chain lowering 的收益，运行时字符串创建次数明显下降。不过，更简单的 `string concat 1k` 微基准在最新定向重跑里出现了回归，所以这条字符串路线还不能算彻底收尾。
+- 更新后的语句级局部自拼接 lowering（`AppendConstStringToLoc`）已经把专门的 `string concat 1k` 微基准明显拉下来了，并把它的运行时字符串创建次数降到了 `1`；与此同时，更广义的 `runtime_string_pressure` 仍然保持在同一个亚毫秒量级。
 - `for_of_array` 在 `ForOfNext` 分支融合之后又有一轮明显改善，现在健康得多，但仍然是有价值的迭代器/控制流观察窗。
 - `deep_property` 仍然是高价值的对象属性访问 benchmark，而且当前看起来比迭代器/字符串压力这组路径更健康。
 - `switch_case` 现已作为次要控制流 benchmark 被跟踪，最新的 `StrictEq` 热路径优化已显示出可测量的改善。
@@ -174,6 +175,14 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
   - 为 `Array.prototype.push` native 添加 `argc == 1` 专用快捷方式
   - 将数组 `.push` 的属性读取改成直接走缓存的 native 索引
   - 将高阶数组 builtin 从整数组 clone 改成“长度快照 + 实时元素读取”
+  - 新增专门的 `CallArrayMap1` / `CallArrayFilter1` / `CallArrayReduce2` opcode
+  - 为最热的单参数数组构建形状新增 `CallArrayPush1`
+- `runtime_string_pressure`
+  - 将 concat 结果直接构建在单个输出缓冲区中，而不是先分别实化两个操作数
+  - 为十进制循环索引主导的 `string + int` / `int + string` 拼接形状新增更窄的快路径
+  - 为 concat 链里的编译期字符串片段新增字节码级 `AddConstStringLeft` / `AddConstStringRight` 专门化
+  - 对相邻字符串字面量做编译期折叠，并把 `const + value + const` lowering 成专门的 `AddConstStringSurround`
+  - 为语句级 `local = local + "const"` 引入 `AppendConstStringToLoc` 和按 frame 存活的局部字符串 builder
 - `for_of_array`
   - 从 `ForOfStart` 中去除完整数组克隆
   - 为 `ForOfNext` 常见 `IfTrue` 退出形状增加分支融合

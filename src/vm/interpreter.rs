@@ -38,6 +38,9 @@ impl Interpreter {
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
             native_array_push_idx: None,
+            native_array_map_idx: None,
+            native_array_filter_idx: None,
+            native_array_reduce_idx: None,
             global_vars: Vec::new(),
             error_objects: Vec::new(),
             regex_objects: Vec::new(),
@@ -74,6 +77,9 @@ impl Interpreter {
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
             native_array_push_idx: None,
+            native_array_map_idx: None,
+            native_array_filter_idx: None,
+            native_array_reduce_idx: None,
             global_vars: Vec::new(),
             error_objects: Vec::new(),
             regex_objects: Vec::new(),
@@ -145,6 +151,21 @@ impl Interpreter {
         bytecode
             .string_constants
             .get(idx as usize)
+            .map(|s| s.as_str())
+    }
+
+    #[inline]
+    fn get_const_string_content<'a>(
+        &'a self,
+        bytecode: &'a FunctionBytecode,
+        str_idx: u16,
+    ) -> Option<&'a str> {
+        if let Some(s) = crate::value::get_builtin_string(str_idx) {
+            return Some(s);
+        }
+        bytecode
+            .string_constants
+            .get(str_idx as usize)
             .map(|s| s.as_str())
     }
 
@@ -489,6 +510,12 @@ impl Interpreter {
         unsafe { self.arrays.get_unchecked(idx as usize) }
     }
 
+    #[inline]
+    pub(crate) fn array_element_or_undefined(&self, idx: u32, element: usize) -> Value {
+        let arr = unsafe { self.get_array_unchecked(idx) };
+        arr.get(element).copied().unwrap_or_default()
+    }
+
     /// Get a mutable array by index
     fn get_array_mut(&mut self, idx: u32) -> Option<&mut Vec<Value>> {
         self.arrays.get_mut(idx as usize)
@@ -626,7 +653,9 @@ impl Interpreter {
 
     #[inline]
     fn get_field_value(&mut self, obj: Value, prop_name: &str) -> Value {
-        if let Some(obj_idx) = obj.to_object_idx() {
+        if obj.is_array() {
+            self.get_array_property(obj, prop_name)
+        } else if let Some(obj_idx) = obj.to_object_idx() {
             self.object_get_property(obj_idx, prop_name)
         } else if let Some(builtin_idx) = obj.to_builtin_object_idx() {
             self.get_builtin_property(builtin_idx, prop_name)
@@ -634,8 +663,6 @@ impl Interpreter {
             self.get_typed_array_property(typed_idx, prop_name)
         } else if let Some(ab_idx) = obj.to_array_buffer_idx() {
             self.get_array_buffer_property(ab_idx, prop_name)
-        } else if obj.is_array() {
-            self.get_array_property(obj, prop_name)
         } else if let Some(err_idx) = obj.to_error_object_idx() {
             self.get_error_property(err_idx, prop_name)
         } else if let Some(regex_idx) = obj.to_regexp_object_idx() {
@@ -1138,21 +1165,15 @@ impl Interpreter {
                 // Set local variable (16-bit index)
                 op if op == OpCode::PutLoc as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let frame = self.call_stack.last_mut().unwrap();
-                    let bytecode = unsafe { &*frame.bytecode };
-                    let bc = &bytecode.bytecode;
-                    let idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]) as usize;
-                    frame.pc += 2;
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.get(idx).copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize] = val;
-                    } else {
-                        self.stack.set_local_at(frame_ptr, idx, val);
-                    }
+                    let idx = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let bc = &bytecode.bytecode;
+                        let idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]) as usize;
+                        frame.pc += 2;
+                        idx
+                    };
+                    self.store_local_slot(idx, val);
                 }
 
                 // Get local 0-3 (optimized)
@@ -1166,7 +1187,6 @@ impl Interpreter {
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
                     } else {
-                        // SAFETY: local slot 0 is valid for well-formed bytecode frames
                         unsafe { self.stack.get_local_at_unchecked(frame_ptr, 0) }
                     };
                     self.stack.push(val);
@@ -1181,7 +1201,6 @@ impl Interpreter {
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
                     } else {
-                        // SAFETY: local slot 1 is valid for well-formed bytecode frames
                         unsafe { self.stack.get_local_at_unchecked(frame_ptr, 1) }
                     };
                     self.stack.push(val);
@@ -1196,7 +1215,6 @@ impl Interpreter {
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
                     } else {
-                        // SAFETY: local slot 2 is valid for well-formed bytecode frames
                         unsafe { self.stack.get_local_at_unchecked(frame_ptr, 2) }
                     };
                     self.stack.push(val);
@@ -1211,7 +1229,6 @@ impl Interpreter {
                     let val = if let Some(cell_idx) = cell {
                         self.var_cells[cell_idx as usize]
                     } else {
-                        // SAFETY: local slot 3 is valid for well-formed bytecode frames
                         unsafe { self.stack.get_local_at_unchecked(frame_ptr, 3) }
                     };
                     self.stack.push(val);
@@ -1220,71 +1237,31 @@ impl Interpreter {
                 // Set local 0-3 (optimized)
                 op if op == OpCode::PutLoc0 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let frame = self.call_stack.last().unwrap();
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.first().copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize] = val;
-                    } else {
-                        // SAFETY: local slot 0 is valid for well-formed bytecode frames
-                        unsafe { self.stack.set_local_at_unchecked(frame_ptr, 0, val) };
-                    }
+                    self.store_local_slot(0, val);
                 }
                 op if op == OpCode::PutLoc1 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let frame = self.call_stack.last().unwrap();
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.get(1).copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize] = val;
-                    } else {
-                        // SAFETY: local slot 1 is valid for well-formed bytecode frames
-                        unsafe { self.stack.set_local_at_unchecked(frame_ptr, 1, val) };
-                    }
+                    self.store_local_slot(1, val);
                 }
                 op if op == OpCode::PutLoc2 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let frame = self.call_stack.last().unwrap();
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.get(2).copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize] = val;
-                    } else {
-                        // SAFETY: local slot 2 is valid for well-formed bytecode frames
-                        unsafe { self.stack.set_local_at_unchecked(frame_ptr, 2, val) };
-                    }
+                    self.store_local_slot(2, val);
                 }
                 op if op == OpCode::PutLoc3 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let frame = self.call_stack.last().unwrap();
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.get(3).copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize] = val;
-                    } else {
-                        // SAFETY: local slot 3 is valid for well-formed bytecode frames
-                        unsafe { self.stack.set_local_at_unchecked(frame_ptr, 3, val) };
-                    }
+                    self.store_local_slot(3, val);
                 }
 
                 // Get local (8-bit index)
                 op if op == OpCode::GetLoc8 as u8 => {
-                    let frame = self.call_stack.last_mut().unwrap();
-                    let bytecode = unsafe { &*frame.bytecode };
-                    let idx = bytecode.bytecode[frame.pc] as usize;
-                    frame.pc += 1;
+                    let idx = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let idx = bytecode.bytecode[frame.pc] as usize;
+                        frame.pc += 1;
+                        idx
+                    };
+                    let frame = self.call_stack.last().unwrap();
                     let cell = frame
                         .local_cells
                         .as_ref()
@@ -1301,20 +1278,14 @@ impl Interpreter {
                 // Set local (8-bit index)
                 op if op == OpCode::PutLoc8 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-                    let frame = self.call_stack.last_mut().unwrap();
-                    let bytecode = unsafe { &*frame.bytecode };
-                    let idx = bytecode.bytecode[frame.pc] as usize;
-                    frame.pc += 1;
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.get(idx).copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize] = val;
-                    } else {
-                        self.stack.set_local_at(frame_ptr, idx, val);
-                    }
+                    let idx = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let idx = bytecode.bytecode[frame.pc] as usize;
+                        frame.pc += 1;
+                        idx
+                    };
+                    self.store_local_slot(idx, val);
                 }
 
                 // Get argument (16-bit index)
@@ -1511,6 +1482,28 @@ impl Interpreter {
                             out.push_str(sa);
                             out.push_str(sb);
                             out
+                        } else if let (Some(sa), Some(n)) =
+                            (self.get_string_content(a, bytecode), b.to_i32())
+                        {
+                            let mut buf = [0u8; 16];
+                            let len = i32_to_str(&mut buf, n);
+                            let mut out = String::with_capacity(sa.len() + len);
+                            out.push_str(sa);
+                            // SAFETY: i32_to_str only writes ASCII decimal digits and optional '-'.
+                            let s = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
+                            out.push_str(s);
+                            out
+                        } else if let (Some(n), Some(sb)) =
+                            (a.to_i32(), self.get_string_content(b, bytecode))
+                        {
+                            let mut buf = [0u8; 16];
+                            let len = i32_to_str(&mut buf, n);
+                            let mut out = String::with_capacity(len + sb.len());
+                            // SAFETY: i32_to_str only writes ASCII decimal digits and optional '-'.
+                            let s = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
+                            out.push_str(s);
+                            out.push_str(sb);
+                            out
                         } else if let Some(sa) = self.get_string_content(a, bytecode) {
                             let len_b = self.value_to_string_len_hint(b, bytecode);
                             let mut out = String::with_capacity(sa.len() + len_b);
@@ -1533,7 +1526,6 @@ impl Interpreter {
                         };
                         self.bump_runtime_string_concat();
                         let result = self.create_runtime_string_raw(out);
-
                         self.stack.push(result);
                     } else {
                         match self.try_op(self.op_add(a, b))? {
@@ -1545,6 +1537,114 @@ impl Interpreter {
                             None => continue,
                         }
                     }
+                }
+
+                op if op == OpCode::AddConstStringLeft as u8 => {
+                    let frame = self.call_stack.last_mut().unwrap();
+                    let bytecode = unsafe { &*frame.bytecode };
+                    let bc = &bytecode.bytecode;
+                    let str_idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]);
+                    frame.pc += 2;
+
+                    let rhs = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let _lhs = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let lhs_str = self
+                        .get_const_string_content(bytecode, str_idx)
+                        .unwrap_or_default();
+
+                    let len_rhs = self.value_to_string_len_hint(rhs, bytecode);
+                    let mut out = String::with_capacity(lhs_str.len() + len_rhs);
+                    out.push_str(lhs_str);
+                    self.append_value_to_string(&mut out, rhs, bytecode);
+                    self.bump_runtime_string_concat();
+                    let result = self.create_runtime_string_raw(out);
+                    self.stack.push(result);
+                }
+
+                op if op == OpCode::AddConstStringRight as u8 => {
+                    let frame = self.call_stack.last_mut().unwrap();
+                    let bytecode = unsafe { &*frame.bytecode };
+                    let bc = &bytecode.bytecode;
+                    let str_idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]);
+                    frame.pc += 2;
+
+                    let lhs = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let rhs_str = self
+                        .get_const_string_content(bytecode, str_idx)
+                        .unwrap_or_default();
+
+                    let out = if let Some(lhs_str) = self.get_string_content(lhs, bytecode) {
+                        let mut out = String::with_capacity(lhs_str.len() + rhs_str.len());
+                        out.push_str(lhs_str);
+                        out.push_str(rhs_str);
+                        out
+                    } else if let Some(n) = lhs.to_i32() {
+                        let mut buf = [0u8; 16];
+                        let len = i32_to_str(&mut buf, n);
+                        let mut out = String::with_capacity(len + rhs_str.len());
+                        // SAFETY: i32_to_str only writes ASCII decimal digits and optional '-'.
+                        let s = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
+                        out.push_str(s);
+                        out.push_str(rhs_str);
+                        out
+                    } else {
+                        let len_lhs = self.value_to_string_len_hint(lhs, bytecode);
+                        let mut out = String::with_capacity(len_lhs + rhs_str.len());
+                        self.append_value_to_string(&mut out, lhs, bytecode);
+                        out.push_str(rhs_str);
+                        out
+                    };
+                    self.bump_runtime_string_concat();
+                    let result = self.create_runtime_string_raw(out);
+                    self.stack.push(result);
+                }
+
+                op if op == OpCode::AddConstStringSurround as u8 => {
+                    let frame = self.call_stack.last_mut().unwrap();
+                    let bytecode = unsafe { &*frame.bytecode };
+                    let bc = &bytecode.bytecode;
+                    let left_idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]);
+                    let right_idx = u16::from_le_bytes([bc[frame.pc + 2], bc[frame.pc + 3]]);
+                    frame.pc += 4;
+
+                    let middle = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let _left = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let left_str = self
+                        .get_const_string_content(bytecode, left_idx)
+                        .unwrap_or_default();
+                    let right_str = self
+                        .get_const_string_content(bytecode, right_idx)
+                        .unwrap_or_default();
+
+                    let out = if let Some(mid_str) = self.get_string_content(middle, bytecode) {
+                        let mut out =
+                            String::with_capacity(left_str.len() + mid_str.len() + right_str.len());
+                        out.push_str(left_str);
+                        out.push_str(mid_str);
+                        out.push_str(right_str);
+                        out
+                    } else if let Some(n) = middle.to_i32() {
+                        let mut buf = [0u8; 16];
+                        let len = i32_to_str(&mut buf, n);
+                        let mut out = String::with_capacity(left_str.len() + len + right_str.len());
+                        out.push_str(left_str);
+                        // SAFETY: i32_to_str only writes ASCII decimal digits and optional '-'.
+                        let s = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
+                        out.push_str(s);
+                        out.push_str(right_str);
+                        out
+                    } else {
+                        let len_middle = self.value_to_string_len_hint(middle, bytecode);
+                        let mut out =
+                            String::with_capacity(left_str.len() + len_middle + right_str.len());
+                        out.push_str(left_str);
+                        self.append_value_to_string(&mut out, middle, bytecode);
+                        out.push_str(right_str);
+                        out
+                    };
+                    self.bump_runtime_string_concat();
+                    let result = self.create_runtime_string_raw(out);
+                    self.stack.push(result);
                 }
 
                 // Arithmetic: Subtract
@@ -2203,6 +2303,16 @@ impl Interpreter {
                                 let args = [a0, a1];
                                 self.call_native_func(native_idx, Value::undefined(), &args)
                             }
+                            3 => {
+                                let a2 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a1 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0, a1, a2];
+                                self.call_native_func(native_idx, Value::undefined(), &args)
+                            }
                             _ => {
                                 let stack_len = self.stack.len();
                                 let mut args = Vec::with_capacity(argc);
@@ -2233,6 +2343,16 @@ impl Interpreter {
                                 let a0 =
                                     self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                                 let args = [a0, a1];
+                                self.call_builtin_as_function(builtin_idx, &args)
+                            }
+                            3 => {
+                                let a2 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a1 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0, a1, a2];
                                 self.call_builtin_as_function(builtin_idx, &args)
                             }
                             _ => {
@@ -2345,6 +2465,116 @@ impl Interpreter {
                     self.call_stack.push(callee_frame);
 
                     // Continue execution in the new frame (run loop will pick it up)
+                }
+
+                op if op == OpCode::CallArrayPush1 as u8 => {
+                    let mut arg = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let method_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let this_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+
+                    if let Some(arr_idx) = this_val.to_array_idx() {
+                        let discard_result = {
+                            let frame = self.call_stack.last_mut().unwrap();
+                            let bytecode = unsafe { &*frame.bytecode };
+                            let bc = &bytecode.bytecode;
+                            if frame.pc < bc.len() && bc[frame.pc] == OpCode::Drop as u8 {
+                                frame.pc += 1;
+                                true
+                            } else {
+                                false
+                            }
+                        };
+
+                        if arg.is_string() {
+                            let frame = self.call_stack.last().unwrap();
+                            let bytecode = unsafe { &*frame.bytecode };
+                            arg = self.promote_string(arg, bytecode);
+                        }
+
+                        let array = unsafe { self.get_array_mut_unchecked(arr_idx) };
+                        array.push(arg);
+
+                        if !discard_result {
+                            let new_len = unsafe { self.get_array_unchecked(arr_idx) }.len() as i32;
+                            self.stack.push(Value::int(new_len));
+                        }
+                        continue;
+                    }
+
+                    let args = [arg];
+                    let result = if let Some(native_idx) = method_val.to_native_func_idx() {
+                        self.call_native_func(native_idx, this_val, &args)?
+                    } else {
+                        self.call_value(method_val, this_val, &args)?
+                    };
+                    self.stack.push(result);
+                }
+
+                op if op == OpCode::CallArrayMap1 as u8 => {
+                    let callback = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let method_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let this_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+
+                    if this_val.to_array_idx().is_some() {
+                        let args = [callback];
+                        let result = native_array_map(self, this_val, &args)
+                            .map_err(InterpreterError::TypeError)?;
+                        self.stack.push(result);
+                        continue;
+                    }
+
+                    let args = [callback];
+                    let result = if let Some(native_idx) = method_val.to_native_func_idx() {
+                        self.call_native_func(native_idx, this_val, &args)?
+                    } else {
+                        self.call_value(method_val, this_val, &args)?
+                    };
+                    self.stack.push(result);
+                }
+
+                op if op == OpCode::CallArrayFilter1 as u8 => {
+                    let callback = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let method_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let this_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+
+                    if this_val.to_array_idx().is_some() {
+                        let args = [callback];
+                        let result = native_array_filter(self, this_val, &args)
+                            .map_err(InterpreterError::TypeError)?;
+                        self.stack.push(result);
+                        continue;
+                    }
+
+                    let args = [callback];
+                    let result = if let Some(native_idx) = method_val.to_native_func_idx() {
+                        self.call_native_func(native_idx, this_val, &args)?
+                    } else {
+                        self.call_value(method_val, this_val, &args)?
+                    };
+                    self.stack.push(result);
+                }
+
+                op if op == OpCode::CallArrayReduce2 as u8 => {
+                    let initial = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let callback = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let method_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let this_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+
+                    if this_val.to_array_idx().is_some() {
+                        let args = [callback, initial];
+                        let result = native_array_reduce(self, this_val, &args)
+                            .map_err(InterpreterError::TypeError)?;
+                        self.stack.push(result);
+                        continue;
+                    }
+
+                    let args = [callback, initial];
+                    let result = if let Some(native_idx) = method_val.to_native_func_idx() {
+                        self.call_native_func(native_idx, this_val, &args)?
+                    } else {
+                        self.call_value(method_val, this_val, &args)?
+                    };
+                    self.stack.push(result);
                 }
 
                 // CallConstructor - new operator: func args -> new_object
@@ -2751,6 +2981,16 @@ impl Interpreter {
                                 let args = [a0, a1];
                                 self.call_native_func(native_idx, this_val, &args)
                             }
+                            3 => {
+                                let a2 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a1 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let a0 =
+                                    self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                                let args = [a0, a1, a2];
+                                self.call_native_func(native_idx, this_val, &args)
+                            }
                             _ => {
                                 let stack_len = self.stack.len();
                                 let mut args = Vec::with_capacity(argc);
@@ -3138,7 +3378,12 @@ impl Interpreter {
                                 Value::undefined()
                             };
                             if let Some((branch_on_true, offset)) = branch {
-                                if Self::branch_matches_value(val, branch_on_true) {
+                                let take_branch = if val.is_bool() {
+                                    val.to_bool().unwrap_or(false) == branch_on_true
+                                } else {
+                                    Self::branch_matches_value(val, branch_on_true)
+                                };
+                                if take_branch {
                                     let frame = self.call_stack.last_mut().unwrap();
                                     frame.pc = (frame.pc as i32 + offset) as usize;
                                 }
@@ -3263,7 +3508,6 @@ impl Interpreter {
                             // SAFETY: Array index is valid for arrays we created
                             let array = unsafe { self.get_array_mut_unchecked(arr_idx) };
                             if index < array.len() {
-                                // SAFETY: We just checked index < len
                                 unsafe { *array.get_unchecked_mut(index) = val };
                             } else {
                                 // Extend array if index is out of bounds
@@ -4004,234 +4248,13 @@ impl Default for Interpreter {
     }
 }
 
+// Most tests moved to tests/vm_tests.rs.
+// test_recursion_limit remains here because it accesses pub(crate) fields
+// (call_stack) that are not visible from outside the crate.
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_bytecode(bytecode: Vec<u8>) -> FunctionBytecode {
-        let mut fb = FunctionBytecode::new(0, 4);
-        fb.bytecode = bytecode;
-        fb
-    }
-
-    #[test]
-    fn test_push_integers() {
-        let mut interp = Interpreter::new();
-
-        // Push 3, Push 2, Add, Return
-        let bc = make_bytecode(vec![
-            OpCode::Push3 as u8,
-            OpCode::Push2 as u8,
-            OpCode::Add as u8,
-            OpCode::Return as u8,
-        ]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert_eq!(result.to_i32(), Some(5));
-    }
-
-    #[test]
-    fn test_push_i8() {
-        let mut interp = Interpreter::new();
-
-        // PushI8 10, PushI8 -5, Add, Return
-        let bc = make_bytecode(vec![
-            OpCode::PushI8 as u8,
-            10u8,
-            OpCode::PushI8 as u8,
-            (-5i8) as u8,
-            OpCode::Add as u8,
-            OpCode::Return as u8,
-        ]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert_eq!(result.to_i32(), Some(5));
-    }
-
-    #[test]
-    fn test_arithmetic() {
-        let mut interp = Interpreter::new();
-
-        // 10 - 3 * 2 = 4 (but we do it manually: push 10, push 3, push 2, mul, sub)
-        let bc = make_bytecode(vec![
-            OpCode::PushI8 as u8,
-            10,
-            OpCode::Push3 as u8,
-            OpCode::Push2 as u8,
-            OpCode::Mul as u8,
-            OpCode::Sub as u8,
-            OpCode::Return as u8,
-        ]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert_eq!(result.to_i32(), Some(4));
-    }
-
-    #[test]
-    fn test_local_variables() {
-        let mut interp = Interpreter::new();
-
-        // var x = 5; var y = 3; return x + y;
-        // PutLoc0 5, PutLoc1 3, GetLoc0, GetLoc1, Add, Return
-        let bc = make_bytecode(vec![
-            OpCode::Push5 as u8,
-            OpCode::PutLoc0 as u8,
-            OpCode::Push3 as u8,
-            OpCode::PutLoc1 as u8,
-            OpCode::GetLoc0 as u8,
-            OpCode::GetLoc1 as u8,
-            OpCode::Add as u8,
-            OpCode::Return as u8,
-        ]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert_eq!(result.to_i32(), Some(8));
-    }
-
-    #[test]
-    fn test_comparison() {
-        let mut interp = Interpreter::new();
-
-        // 5 < 10 => true
-        let bc = make_bytecode(vec![
-            OpCode::Push5 as u8,
-            OpCode::PushI8 as u8,
-            10,
-            OpCode::Lt as u8,
-            OpCode::Return as u8,
-        ]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert!(result.to_bool().unwrap());
-    }
-
-    #[test]
-    fn test_conditional_jump() {
-        let mut interp = Interpreter::new();
-
-        // if (false) { return 1; } return 2;
-        // Layout:
-        // 0: PushFalse
-        // 1: IfFalse (5 bytes: opcode + 4-byte offset)
-        // 2-5: offset (4 bytes)
-        // 6: Push1
-        // 7: Return
-        // 8: Push2
-        // 9: Return
-        //
-        // When IfFalse executes:
-        // - pc is at 2 (pointing to offset bytes)
-        // - we read offset, pc becomes 6
-        // - if condition is false, pc = 6 + offset should go to 8 (Push2)
-        // - so offset = 2
-        let bc = make_bytecode(vec![
-            OpCode::PushFalse as u8, // 0
-            OpCode::IfFalse as u8,   // 1
-            2,
-            0,
-            0,
-            0,                    // 2-5: offset = 2
-            OpCode::Push1 as u8,  // 6
-            OpCode::Return as u8, // 7
-            OpCode::Push2 as u8,  // 8
-            OpCode::Return as u8, // 9
-        ]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert_eq!(result.to_i32(), Some(2));
-    }
-
-    #[test]
-    fn test_bitwise_operations() {
-        let mut interp = Interpreter::new();
-
-        // 5 & 3 = 1
-        let bc = make_bytecode(vec![
-            OpCode::Push5 as u8,
-            OpCode::Push3 as u8,
-            OpCode::And as u8,
-            OpCode::Return as u8,
-        ]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert_eq!(result.to_i32(), Some(1));
-    }
-
-    #[test]
-    fn test_return_undefined() {
-        let mut interp = Interpreter::new();
-
-        let bc = make_bytecode(vec![OpCode::ReturnUndef as u8]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert!(result.is_undefined());
-    }
-
-    #[test]
-    fn test_logical_not() {
-        let mut interp = Interpreter::new();
-
-        // !false = true
-        let bc = make_bytecode(vec![
-            OpCode::PushFalse as u8,
-            OpCode::LNot as u8,
-            OpCode::Return as u8,
-        ]);
-
-        let result = interp.execute(&bc).unwrap();
-        assert!(result.to_bool().unwrap());
-    }
-
-    #[test]
-    fn test_function_with_args() {
-        let mut interp = Interpreter::new();
-
-        // function add(a, b) { return a + b; }
-        // Called with args [10, 20]
-        let mut fb = FunctionBytecode::new(2, 2); // 2 args, 2 locals (args are locals)
-        fb.bytecode = vec![
-            OpCode::GetArg0 as u8,
-            OpCode::GetArg1 as u8,
-            OpCode::Add as u8,
-            OpCode::Return as u8,
-        ];
-
-        let result = interp
-            .call_function(&fb, Value::undefined(), &[Value::int(10), Value::int(20)])
-            .unwrap();
-        assert_eq!(result.to_i32(), Some(30));
-    }
-
-    #[test]
-    fn test_function_with_this() {
-        let mut interp = Interpreter::new();
-
-        // function getThis() { return this; }
-        let mut fb = FunctionBytecode::new(0, 0);
-        fb.bytecode = vec![OpCode::PushThis as u8, OpCode::Return as u8];
-
-        let this_val = Value::int(42);
-        let result = interp.call_function(&fb, this_val, &[]).unwrap();
-        assert_eq!(result.to_i32(), Some(42));
-    }
-
-    #[test]
-    fn test_function_missing_args() {
-        let mut interp = Interpreter::new();
-
-        // function add(a, b) { return a + b; }
-        // Called with only 1 arg - b should be undefined
-        let mut fb = FunctionBytecode::new(2, 2);
-        fb.bytecode = vec![
-            OpCode::GetArg1 as u8, // Get b (should be undefined)
-            OpCode::Return as u8,
-        ];
-
-        let result = interp
-            .call_function(&fb, Value::undefined(), &[Value::int(10)])
-            .unwrap();
-        assert!(result.is_undefined());
-    }
 
     #[test]
     fn test_recursion_limit() {

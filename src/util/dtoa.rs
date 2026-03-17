@@ -184,38 +184,4 @@ pub fn u64_to_str_radix(buf: &mut [u8], mut val: u64, radix: u32) -> usize {
     end
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_i32_to_str() {
-        let mut buf = [0u8; 32];
-
-        let n = i32_to_str(&mut buf, 0);
-        assert_eq!(&buf[..n], b"0");
-
-        let n = i32_to_str(&mut buf, 42);
-        assert_eq!(&buf[..n], b"42");
-
-        let n = i32_to_str(&mut buf, -123);
-        assert_eq!(&buf[..n], b"-123");
-
-        let n = i32_to_str(&mut buf, i32::MAX);
-        assert_eq!(&buf[..n], b"2147483647");
-    }
-
-    #[test]
-    fn test_u64_to_str_radix() {
-        let mut buf = [0u8; 64];
-
-        let n = u64_to_str_radix(&mut buf, 255, 16);
-        assert_eq!(&buf[..n], b"ff");
-
-        let n = u64_to_str_radix(&mut buf, 255, 2);
-        assert_eq!(&buf[..n], b"11111111");
-
-        let n = u64_to_str_radix(&mut buf, 35, 36);
-        assert_eq!(&buf[..n], b"z");
-    }
-}
+// Tests moved to tests/util_tests.rs.

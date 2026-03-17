@@ -421,6 +421,12 @@ pub struct Interpreter {
     pub(crate) native_functions: Vec<NativeFunction>,
     /// Cached native index for Array.prototype.push
     pub(crate) native_array_push_idx: Option<u32>,
+    /// Cached native index for Array.prototype.map
+    pub(crate) native_array_map_idx: Option<u32>,
+    /// Cached native index for Array.prototype.filter
+    pub(crate) native_array_filter_idx: Option<u32>,
+    /// Cached native index for Array.prototype.reduce
+    pub(crate) native_array_reduce_idx: Option<u32>,
     /// Global variables set by top-level function declarations (SetGlobal opcode)
     pub(crate) global_vars: Vec<(String, Value)>,
     /// Error objects created during execution

@@ -124,6 +124,14 @@ pub enum OpCode {
     Call,
     /// Call method: this func args... -> ret
     CallMethod,
+    /// Specialized `.push(arg)` method call
+    CallArrayPush1,
+    /// Specialized `.map(callback)` method call
+    CallArrayMap1,
+    /// Specialized `.filter(callback)` method call
+    CallArrayFilter1,
+    /// Specialized `.reduce(callback, init)` method call
+    CallArrayReduce2,
     /// Create array from stack values
     ArrayFrom,
     /// Return from function
@@ -236,6 +244,12 @@ pub enum OpCode {
     Mod,
     /// Add: a + b
     Add,
+    /// Add with compile-time string on the left: "x" + a
+    AddConstStringLeft,
+    /// Add with compile-time string on the right: a + "x"
+    AddConstStringRight,
+    /// Add with compile-time strings on both sides: "x" + a + "y"
+    AddConstStringSurround,
     /// Subtract: a - b
     Sub,
     /// Power: a ** b
@@ -445,6 +459,14 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(3, 1, 1, OpFormat::NPop),
     // CallMethod
     OpCodeInfo::new(3, 2, 1, OpFormat::NPop),
+    // CallArrayPush1
+    OpCodeInfo::new(1, 3, 1, OpFormat::None),
+    // CallArrayMap1
+    OpCodeInfo::new(1, 2, 1, OpFormat::None),
+    // CallArrayFilter1
+    OpCodeInfo::new(1, 2, 1, OpFormat::None),
+    // CallArrayReduce2
+    OpCodeInfo::new(1, 3, 1, OpFormat::None),
     // ArrayFrom
     OpCodeInfo::new(3, 0, 1, OpFormat::NPop),
     // Return
@@ -545,6 +567,12 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(1, 2, 1, OpFormat::None),
     // Add
     OpCodeInfo::new(1, 2, 1, OpFormat::None),
+    // AddConstStringLeft
+    OpCodeInfo::new(3, 2, 1, OpFormat::Const16),
+    // AddConstStringRight
+    OpCodeInfo::new(3, 1, 1, OpFormat::Const16),
+    // AddConstStringSurround
+    OpCodeInfo::new(5, 2, 1, OpFormat::U32),
     // Sub
     OpCodeInfo::new(1, 2, 1, OpFormat::None),
     // Pow
@@ -657,21 +685,4 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(3, 1, 0, OpFormat::Const16),
 ];
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_opcode_count() {
-        assert_eq!(OPCODE_INFO.len(), OpCode::COUNT);
-    }
-
-    #[test]
-    fn test_opcode_sizes() {
-        // Verify some known opcode sizes
-        assert_eq!(OPCODE_INFO[OpCode::Drop as usize].size, 1);
-        assert_eq!(OPCODE_INFO[OpCode::PushI8 as usize].size, 2);
-        assert_eq!(OPCODE_INFO[OpCode::PushConst as usize].size, 3);
-        assert_eq!(OPCODE_INFO[OpCode::Goto as usize].size, 5);
-    }
-}
+// Tests moved to tests/stack_opcode_tests.rs.

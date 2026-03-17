@@ -89,6 +89,9 @@ pub struct Compiler<'a> {
     outer_captures: Option<Vec<Capture>>,
     /// Last variable reference (for postfix ++ / --): (is_local, index)
     last_var_ref: Option<(bool, usize)>,
+    /// If the most recently parsed expression was a pure compile-time string,
+    /// record its string index and the start offset of its emitted bytecode.
+    last_expr_string_const: Option<(u16, usize)>,
 }
 
 impl<'a> Compiler<'a> {
@@ -116,6 +119,7 @@ impl<'a> Compiler<'a> {
             outer_locals: None,
             outer_captures: None,
             last_var_ref: None,
+            last_expr_string_const: None,
         }
     }
 
@@ -359,6 +363,76 @@ impl<'a> Compiler<'a> {
             self.emit_op(OpCode::PushConst);
             self.emit_u16(index);
         }
+    }
+
+    fn plain_string_const_index(&mut self, s: String) -> u16 {
+        let idx = self.string_constants.len() as u16;
+        self.string_constants.push(s);
+        idx
+    }
+
+    fn string_const_content(&self, idx: u16) -> Option<&str> {
+        if let Some(s) = crate::value::get_builtin_string(idx) {
+            Some(s)
+        } else {
+            self.string_constants.get(idx as usize).map(|s| s.as_str())
+        }
+    }
+
+    fn rewrite_last_add_const_string_right(&mut self, right_idx: u16) -> bool {
+        let len = self.bytecode.len();
+        if len < 3 || self.bytecode[len - 3] != OpCode::AddConstStringRight as u8 {
+            return false;
+        }
+        let existing_idx = u16::from_le_bytes([self.bytecode[len - 2], self.bytecode[len - 1]]);
+        let Some(existing) = self.string_const_content(existing_idx) else {
+            return false;
+        };
+        let Some(right) = self.string_const_content(right_idx) else {
+            return false;
+        };
+        let combined_idx = self.plain_string_const_index(format!("{}{}", existing, right));
+        self.bytecode[len - 2] = (combined_idx & 0xff) as u8;
+        self.bytecode[len - 1] = (combined_idx >> 8) as u8;
+        true
+    }
+
+    fn rewrite_last_add_const_string_surround(&mut self, right_idx: u16) -> bool {
+        let len = self.bytecode.len();
+        if len < 5 || self.bytecode[len - 5] != OpCode::AddConstStringSurround as u8 {
+            return false;
+        }
+        let left_idx = u16::from_le_bytes([self.bytecode[len - 4], self.bytecode[len - 3]]);
+        let existing_right_idx =
+            u16::from_le_bytes([self.bytecode[len - 2], self.bytecode[len - 1]]);
+        let Some(existing_right) = self.string_const_content(existing_right_idx) else {
+            return false;
+        };
+        let Some(right) = self.string_const_content(right_idx) else {
+            return false;
+        };
+        let combined_right_idx =
+            self.plain_string_const_index(format!("{}{}", existing_right, right));
+        self.bytecode[len - 4] = (left_idx & 0xff) as u8;
+        self.bytecode[len - 3] = (left_idx >> 8) as u8;
+        self.bytecode[len - 2] = (combined_right_idx & 0xff) as u8;
+        self.bytecode[len - 1] = (combined_right_idx >> 8) as u8;
+        true
+    }
+
+    fn try_merge_trailing_concat_with_right_const(&mut self, right_idx: u16) -> bool {
+        let len = self.bytecode.len();
+        if len >= 3 && self.bytecode[len - 3] == OpCode::AddConstStringLeft as u8 {
+            let left_idx = u16::from_le_bytes([self.bytecode[len - 2], self.bytecode[len - 1]]);
+            self.bytecode.truncate(len - 3);
+            self.emit_op(OpCode::AddConstStringSurround);
+            self.emit_u16(left_idx);
+            self.emit_u16(right_idx);
+            return true;
+        }
+
+        self.rewrite_last_add_const_string_right(right_idx)
+            || self.rewrite_last_add_const_string_surround(right_idx)
     }
 
     /// Emit local variable get
@@ -1651,24 +1725,28 @@ impl<'a> Compiler<'a> {
                 break;
             }
 
+            let left_const_string = self.last_expr_string_const.take();
             let op = self.current_token.clone();
             self.advance();
 
             // Handle assignment specially
             if prec == Precedence::Assignment {
                 self.assignment_expr(&op)?;
+                self.last_expr_string_const = None;
                 continue;
             }
 
             // Handle ternary operator
             if matches!(op, Token::Question) {
                 self.ternary_expr()?;
+                self.last_expr_string_const = None;
                 continue;
             }
 
             // Handle short-circuit operators
             if matches!(op, Token::AmpAmp | Token::PipePipe) {
                 self.short_circuit_expr(&op)?;
+                self.last_expr_string_const = None;
                 continue;
             }
 
@@ -1680,7 +1758,8 @@ impl<'a> Compiler<'a> {
             };
 
             self.parse_precedence(next_prec)?;
-            self.emit_binary_op(&op)?;
+            let right_const_string = self.last_expr_string_const.take();
+            self.emit_binary_op(&op, left_const_string, right_const_string)?;
         }
 
         Ok(())
@@ -1690,6 +1769,7 @@ impl<'a> Compiler<'a> {
     fn prefix_expr(&mut self) -> Result<(), CompileError> {
         // Clear last variable reference (set when we parse an identifier)
         self.last_var_ref = None;
+        self.last_expr_string_const = None;
         match &self.current_token {
             // Literals
             Token::Number(n) => {
@@ -1710,8 +1790,10 @@ impl<'a> Compiler<'a> {
             Token::String(s) => {
                 let s = s.clone();
                 self.advance();
+                let start = self.bytecode.len();
                 if s.is_empty() {
                     self.emit_op(OpCode::PushEmptyString);
+                    self.last_expr_string_const = Some((crate::value::STR_EMPTY, start));
                 } else {
                     // Check for built-in strings used by typeof
                     use crate::value::{
@@ -1733,6 +1815,7 @@ impl<'a> Compiler<'a> {
                         self.emit_op(OpCode::PushConst);
                         let const_idx = self.add_constant(Value::string(idx));
                         self.emit_u16(const_idx);
+                        self.last_expr_string_const = Some((idx, start));
                     } else {
                         // Store string in string constant pool
                         let idx = self.string_constants.len() as u16;
@@ -1742,6 +1825,7 @@ impl<'a> Compiler<'a> {
                         // We'll encode this as a Value::string(idx) in the constants
                         let const_idx = self.add_constant(Value::string(idx));
                         self.emit_u16(const_idx);
+                        self.last_expr_string_const = Some((idx, start));
                     }
                 }
             }
@@ -2126,6 +2210,10 @@ impl<'a> Compiler<'a> {
                     if let Token::Ident(name) = &self.current_token {
                         let name = name.clone();
                         let is_length = bytecode_length_property_name(&name);
+                        let is_push = name == "push";
+                        let is_map = name == "map";
+                        let is_filter = name == "filter";
+                        let is_reduce = name == "reduce";
                         self.advance();
 
                         // Store property name as string constant
@@ -2139,15 +2227,25 @@ impl<'a> Compiler<'a> {
                             self.emit_op(OpCode::PutField);
                             self.emit_u16(str_idx);
                         } else if self.check(&Token::LParen) {
-                            // Method call: obj.method(args)
-                            // Use GetField2 to keep obj on stack, then CallMethod
+                            self.advance(); // consume LParen
+                                            // Method calls need the receiver duplicated before
+                                            // argument evaluation so calls see
+                                            // `[this, method, arg0, ...]`.
                             self.emit_op(OpCode::GetField2);
                             self.emit_u16(str_idx);
-                            // Now stack is: [obj, method]
-                            self.advance(); // consume LParen
                             let arg_count = self.argument_list()?;
-                            self.emit_op(OpCode::CallMethod);
-                            self.emit_u16(arg_count);
+                            if is_push && arg_count == 1 {
+                                self.emit_op(OpCode::CallArrayPush1);
+                            } else if is_map && arg_count == 1 {
+                                self.emit_op(OpCode::CallArrayMap1);
+                            } else if is_filter && arg_count == 1 {
+                                self.emit_op(OpCode::CallArrayFilter1);
+                            } else if is_reduce && arg_count == 2 {
+                                self.emit_op(OpCode::CallArrayReduce2);
+                            } else {
+                                self.emit_op(OpCode::CallMethod);
+                                self.emit_u16(arg_count);
+                            }
                         } else if is_length {
                             self.emit_op(OpCode::GetLength);
                         } else {
@@ -2501,9 +2599,49 @@ impl<'a> Compiler<'a> {
     }
 
     /// Emit binary operator
-    fn emit_binary_op(&mut self, op: &Token) -> Result<(), CompileError> {
+    fn emit_binary_op(
+        &mut self,
+        op: &Token,
+        left_const_string: Option<(u16, usize)>,
+        right_const_string: Option<(u16, usize)>,
+    ) -> Result<(), CompileError> {
+        self.last_expr_string_const = None;
         match op {
-            Token::Plus => self.emit_op(OpCode::Add),
+            Token::Plus => {
+                if let (Some((left_idx, left_start)), Some((right_idx, _right_start))) =
+                    (left_const_string, right_const_string)
+                {
+                    let Some(left) = self.string_const_content(left_idx).map(|s| s.to_string())
+                    else {
+                        self.emit_op(OpCode::Add);
+                        return Ok(());
+                    };
+                    let Some(right) = self.string_const_content(right_idx).map(|s| s.to_string())
+                    else {
+                        self.emit_op(OpCode::Add);
+                        return Ok(());
+                    };
+                    self.bytecode.truncate(left_start);
+                    let combined_idx = self.plain_string_const_index(format!("{}{}", left, right));
+                    self.emit_op(OpCode::PushConst);
+                    let const_idx = self.add_constant(Value::string(combined_idx));
+                    self.emit_u16(const_idx);
+                    self.last_expr_string_const = Some((combined_idx, left_start));
+                } else if let Some((str_idx, start)) = right_const_string {
+                    // The right-hand expression was emitted most recently, so we
+                    // can replace its constant push with a dedicated concat op.
+                    self.bytecode.truncate(start);
+                    if !self.try_merge_trailing_concat_with_right_const(str_idx) {
+                        self.emit_op(OpCode::AddConstStringRight);
+                        self.emit_u16(str_idx);
+                    }
+                } else if let Some((str_idx, _)) = left_const_string {
+                    self.emit_op(OpCode::AddConstStringLeft);
+                    self.emit_u16(str_idx);
+                } else {
+                    self.emit_op(OpCode::Add);
+                }
+            }
             Token::Minus => self.emit_op(OpCode::Sub),
             Token::Star => self.emit_op(OpCode::Mul),
             Token::Slash => self.emit_op(OpCode::Div),
@@ -2668,156 +2806,4 @@ impl core::fmt::Display for CompileError {
 #[cfg(feature = "std")]
 impl std::error::Error for CompileError {}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn compile_expr(source: &str) -> Result<CompiledFunction, CompileError> {
-        // Wrap expression in a statement
-        let full_source = format!("{};", source);
-        Compiler::new(&full_source).compile()
-    }
-
-    #[test]
-    fn test_compile_integers() {
-        let func = compile_expr("42").unwrap();
-        // Should emit: PushI8 42, Drop, ReturnUndef
-        assert!(!func.bytecode.is_empty());
-    }
-
-    #[test]
-    fn test_compile_small_integers() {
-        // Test optimized integer opcodes (0-7)
-        // Note: -1 is parsed as unary minus + 1, so it produces Push1, Neg
-        for i in 0..=7 {
-            let func = compile_expr(&i.to_string()).unwrap();
-            // First byte should be one of the optimized push opcodes
-            let expected = match i {
-                0 => OpCode::Push0 as u8,
-                1 => OpCode::Push1 as u8,
-                2 => OpCode::Push2 as u8,
-                3 => OpCode::Push3 as u8,
-                4 => OpCode::Push4 as u8,
-                5 => OpCode::Push5 as u8,
-                6 => OpCode::Push6 as u8,
-                7 => OpCode::Push7 as u8,
-                _ => unreachable!(),
-            };
-            assert_eq!(func.bytecode[0], expected);
-        }
-    }
-
-    #[test]
-    fn test_compile_negative_one() {
-        // -1 is parsed as unary minus + 1
-        let func = compile_expr("-1").unwrap();
-        // Should emit: Push1, Neg, Drop, ReturnUndef
-        assert_eq!(func.bytecode[0], OpCode::Push1 as u8);
-        assert_eq!(func.bytecode[1], OpCode::Neg as u8);
-    }
-
-    #[test]
-    fn test_compile_boolean() {
-        let func = compile_expr("true").unwrap();
-        assert_eq!(func.bytecode[0], OpCode::PushTrue as u8);
-
-        let func = compile_expr("false").unwrap();
-        assert_eq!(func.bytecode[0], OpCode::PushFalse as u8);
-    }
-
-    #[test]
-    fn test_compile_null() {
-        let func = compile_expr("null").unwrap();
-        assert_eq!(func.bytecode[0], OpCode::Null as u8);
-    }
-
-    #[test]
-    fn test_compile_addition() {
-        let func = compile_expr("1 + 2").unwrap();
-        // Should emit: Push1, Push2, Add, Drop, ReturnUndef
-        assert_eq!(func.bytecode[0], OpCode::Push1 as u8);
-        assert_eq!(func.bytecode[1], OpCode::Push2 as u8);
-        assert_eq!(func.bytecode[2], OpCode::Add as u8);
-    }
-
-    #[test]
-    fn test_compile_precedence() {
-        // 1 + 2 * 3 should be 1 + (2 * 3)
-        let func = compile_expr("1 + 2 * 3").unwrap();
-        // Should emit: Push1, Push2, Push3, Mul, Add
-        assert_eq!(func.bytecode[0], OpCode::Push1 as u8);
-        assert_eq!(func.bytecode[1], OpCode::Push2 as u8);
-        assert_eq!(func.bytecode[2], OpCode::Push3 as u8);
-        assert_eq!(func.bytecode[3], OpCode::Mul as u8);
-        assert_eq!(func.bytecode[4], OpCode::Add as u8);
-    }
-
-    #[test]
-    fn test_compile_parentheses() {
-        // (1 + 2) * 3
-        let func = compile_expr("(1 + 2) * 3").unwrap();
-        // Should emit: Push1, Push2, Add, Push3, Mul
-        assert_eq!(func.bytecode[0], OpCode::Push1 as u8);
-        assert_eq!(func.bytecode[1], OpCode::Push2 as u8);
-        assert_eq!(func.bytecode[2], OpCode::Add as u8);
-        assert_eq!(func.bytecode[3], OpCode::Push3 as u8);
-        assert_eq!(func.bytecode[4], OpCode::Mul as u8);
-    }
-
-    #[test]
-    fn test_compile_unary_minus() {
-        let func = compile_expr("-5").unwrap();
-        // Should emit: Push5, Neg
-        assert_eq!(func.bytecode[0], OpCode::Push5 as u8);
-        assert_eq!(func.bytecode[1], OpCode::Neg as u8);
-    }
-
-    #[test]
-    fn test_compile_comparison() {
-        let func = compile_expr("1 < 2").unwrap();
-        assert_eq!(func.bytecode[0], OpCode::Push1 as u8);
-        assert_eq!(func.bytecode[1], OpCode::Push2 as u8);
-        assert_eq!(func.bytecode[2], OpCode::Lt as u8);
-    }
-
-    #[test]
-    fn test_compile_var_declaration() {
-        let source = "var x = 10;";
-        let func = Compiler::new(source).compile().unwrap();
-        // Should declare local and initialize it
-        assert_eq!(func.local_count, 1);
-    }
-
-    #[test]
-    fn test_compile_var_usage() {
-        let source = "var x = 10; x;";
-        let func = Compiler::new(source).compile().unwrap();
-        // Check that GetLoc0 is emitted for x
-        assert!(func.bytecode.contains(&(OpCode::GetLoc0 as u8)));
-    }
-
-    #[test]
-    fn test_compile_if_statement() {
-        let source = "var x = 1; if (x) { x; }";
-        let func = Compiler::new(source).compile().unwrap();
-        // Should contain IfFalse jump
-        assert!(func.bytecode.contains(&(OpCode::IfFalse as u8)));
-    }
-
-    #[test]
-    fn test_compile_while_loop() {
-        let source = "var i = 0; while (i < 5) { i; }";
-        let func = Compiler::new(source).compile().unwrap();
-        // Should contain IfFalse and Goto
-        assert!(func.bytecode.contains(&(OpCode::IfFalse as u8)));
-        assert!(func.bytecode.contains(&(OpCode::Goto as u8)));
-    }
-
-    #[test]
-    fn test_compile_ternary() {
-        let func = compile_expr("1 ? 2 : 3").unwrap();
-        // Should contain IfFalse and Goto for branches
-        assert!(func.bytecode.contains(&(OpCode::IfFalse as u8)));
-        assert!(func.bytecode.contains(&(OpCode::Goto as u8)));
-    }
-}
+// Tests moved to tests/compiler_tests.rs

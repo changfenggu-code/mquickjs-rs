@@ -197,40 +197,4 @@ pub struct GcStats {
     pub bytes_moved: usize,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gc_ref() {
-        let mut r = GcRef::new(Value::int(42));
-        assert_eq!(r.get().to_i32(), Some(42));
-
-        r.set(Value::int(100));
-        assert_eq!(r.get().to_i32(), Some(100));
-    }
-
-    #[test]
-    fn test_collect_empty_heap() {
-        let mut heap = Heap::new(4096);
-        collect(&mut heap);
-        // Should not crash on empty heap
-    }
-
-    #[test]
-    fn test_collect_with_objects() {
-        let mut heap = Heap::new(4096);
-
-        // Allocate some objects
-        heap.alloc(32, MemoryTag::Object);
-        heap.alloc(64, MemoryTag::String);
-        heap.alloc(16, MemoryTag::Float64);
-
-        let used_before = heap.heap_used();
-
-        collect(&mut heap);
-
-        // Since we mark everything, nothing should be freed
-        assert_eq!(heap.heap_used(), used_before);
-    }
-}
+// Tests moved to tests/gc_tests.rs.

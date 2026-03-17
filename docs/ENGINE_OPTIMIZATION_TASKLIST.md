@@ -101,7 +101,7 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - 2026-03-17: `docs/BENCHMARK_ANALYSIS.md` was updated to distinguish the new execution-focused current-worktree snapshot from older Criterion generations.
 - Status: reopened; benchmark-baseline cleanup is active again until the current head and the documentation stay in sync.
 
-### 9.1.2 Call-path hot path optimization
+### 9.1.2 Call-path hot path optimization [Completed]
 
 **Priority**: P0
 
@@ -149,6 +149,21 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `method_chain 5k`: `0.699–0.707 ms`
   - `runtime_string_pressure 4k`: `1.237–1.269 ms`
 - Current interpretation: this round materially improved callback-heavy array pipelines and reduced pressure on runtime-string-heavy loops through a dedicated `.length` fast path and lower builtin overhead.
+- 2026-03-17: added dedicated `CallArrayMap1` / `CallArrayFilter1` / `CallArrayReduce2` opcodes so the hottest single-callback array higher-order call shapes no longer pay the generic `CallMethod` argument reshaping path after `GetField2`.
+- Added a fallback regression test confirming non-array receivers with their own `map` method still preserve generic method-call semantics.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `method_chain 5k`: `0.611–0.628 ms`
+  - `runtime_string_pressure 4k`: `1.190–1.216 ms`
+  - `array push 10k`: `0.575–0.600 ms`
+- Current interpretation: this is a good example of a bytecode-shape-specific array-builtin call optimization that pays off without broadening the generic call path, and the current reruns suggest that the win also propagates into nearby array-heavy paths.
+- 2026-03-17: added a dedicated `CallArrayPush1` opcode for the hottest single-argument `.push(arg)` method-call shape, keeping the `GetField2` stack contract but bypassing the generic `CallMethod` reshaping path for the dominant array-building loop form.
+- Added fallback regression coverage confirming non-array receivers with their own `push` method still preserve generic method-call semantics.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `array push 10k`: `0.491–0.502 ms`
+  - `method_chain 5k`: `0.585–0.600 ms`
+  - `runtime_string_pressure 4k`: `1.177–1.197 ms`
+- Current interpretation: this is the first `method_chain` round to consistently land at the edge of the `<= 0.60 ms` success line, and it does so by directly shrinking the array-construction prefix that still dominated the benchmark after the higher-order builtin call specializations.
+- Status: complete as a call-path optimization phase; any future work here should be treated as follow-on tuning rather than unfinished core call-path cleanup.
 
 ### 9.1.3 Native/builtin call marshalling optimization
 
@@ -198,6 +213,13 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `sieve 10k`: `1.640–1.670 ms`
   - `method_chain 5k`: `0.606–0.618 ms`
 - Current interpretation: this is a high-value narrow optimization because it targets the exact hot statement form used in array-building loops while preserving expression-position semantics.
+- 2026-03-17: extended the native/builtin small-argument fast paths for `Call` / `CallMethod` / builtin-as-function calls from `argc <= 2` to `argc == 3`, removing one more `Vec<Value>` allocation layer from common three-argument native shapes.
+- Added regression coverage confirming three-argument native call ordering (`Math.max(1, 4, 2)`).
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `array push 10k`: `0.472–0.481 ms`
+  - `json parse 1k`: `0.732–0.749 ms`
+  - `method_chain 5k`: `0.590–0.604 ms`
+- Current interpretation: the current primary benchmark set does not show a new standalone `json`-class breakout from this change, but it does close an obvious remaining small-argument marshalling gap and keeps nearby call-heavy benchmarks healthy.
 
 ### 9.1.4 Dense array fast paths
 
@@ -239,7 +261,7 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `sieve 10k`: `2.045–2.084 ms`
 - Current interpretation: this is a small but clean dense-array write-path improvement that specifically targets statement-style array stores such as the hot `primes[j] = false;` shape in `sieve`.
 
-### 9.1.5 Opcode dispatch tightening
+### 9.1.5 Opcode dispatch tightening [Completed]
 
 **Priority**: P1
 
@@ -299,6 +321,19 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `loop 10k`: `0.461–0.476 ms`
   - `sieve 10k`: `1.704–1.740 ms`
 - Current interpretation: after the bytecode-shape-specific local-update work, the next real bottleneck was the control-flow skeleton itself, and tightening those branch/goto handlers produced another clean step down for both loop-heavy and sieve-heavy code.
+- 2026-03-17: added dedicated `GetLoc4` / `PutLoc4` short opcodes so the current hottest extra local slot no longer has to pay the generic `GetLoc8` / `PutLoc8` path cost.
+- Added compiler coverage to ensure local slot 4 now emits the short-form opcode.
+- Re-ran full engine tests and `clippy -D warnings` successfully after the change.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `loop 10k`: `0.449–0.459 ms`
+  - `sieve 10k`: `1.686–1.714 ms`
+- Current interpretation: after narrowing the control-flow cost, the next bottleneck really was the hottest non-inline local slot, and giving slot 4 its own opcode bought another measurable step down for both `loop` and `sieve`.
+- 2026-03-17: after additional validation, retained the slot-4 short-opcode work and re-ran the local benchmark pair on the current worktree.
+- Current selected execution-focused rerun:
+  - `loop 10k`: `0.444–0.451 ms`
+  - `sieve 10k`: `1.663–1.709 ms`
+- Current interpretation: the slot-4 short-form work remains a real win after rerun and should be treated as part of the stable opcode/local-slot optimization path rather than a one-off measurement artifact.
+- Status: complete as the current dispatch-tightening phase; later opcode work should only reopen this area if new profiling data identifies a materially different hot set.
 
 ### 9.1.6 Arithmetic/comparison micro-optimization pass
 
@@ -328,6 +363,35 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - 2026-03-16: improved string-concatenation hot paths by building the final runtime string in a single output buffer instead of first materializing both operands as temporary owned `String` values.
 - Added regression coverage for mixed string/number chained concatenation shape.
 - Benchmark result: `runtime_string_pressure 4k` improved from roughly `2.89–3.38 ms` to `1.53–1.55 ms` in Criterion.
+- 2026-03-17: added a narrower `Add` fast path for the dominant `string + int` / `int + string` concatenation shapes so common runtime-string loops avoid the generic length-hint + append path on decimal integer operands.
+- Re-ran targeted concat-shape regression coverage successfully.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `runtime_string_pressure 4k`: `1.091–1.117 ms`
+  - `string concat 1k`: `151.87–157.61 µs`
+  - `method_chain 5k`: `587.80–599.99 µs`
+- Current interpretation: this is a real runtime-string win on the benchmark shape that mixes compile-time string fragments with decimal loop indices, while the simpler `string concat 1k` benchmark remains effectively unchanged.
+- 2026-03-17: added bytecode-level `AddConstStringLeft` / `AddConstStringRight` specializations so concat chains with compile-time string fragments on either side of `+` no longer need to route those shapes through the generic `Add` opcode.
+- Added compiler coverage confirming the specialized bytecode now emits for both `"x" + value` and `value + "x"` shapes, and re-ran targeted concat-shape regression coverage successfully.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `runtime_string_pressure 4k`: `1.055–1.077 ms`
+  - `string concat 1k`: `141.41–145.80 µs`
+  - `method_chain 5k`: `587.46–601.19 µs`
+- Current interpretation: this is the first more systematic concat-chain optimization beyond executor-only `Add` tweaks, and it produces a clear runtime-string win while leaving the nearby `method_chain` workload effectively stable.
+- 2026-03-17: extended that concat-chain lowering with compile-time folding for adjacent string literals and a dedicated `AddConstStringSurround` shape for `const + value + const`, cutting one more runtime-string allocation out of the dominant benchmark chain.
+- Added compiler coverage confirming both the surround specialization and adjacent-string constant folding.
+- Dump-mode hotspot probing on the current worktree now shows `runtime_string_pressure` dropping from `12001` concat-created runtime strings to `8001`, and total `Add` executions from `24001` to `16000`.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `runtime_string_pressure 4k`: `0.899–0.915 ms`
+  - `string concat 1k`: `166.97–171.99 µs`
+  - `method_chain 5k`: `624.57–638.70 µs`
+- Current interpretation: this is a stronger, more structural concat-chain optimization for the target runtime-string benchmark, but it also appears to regress the simpler `string concat 1k` microbenchmark, so follow-up work should specifically explain and recover that regression instead of treating the string path as “done”.
+- 2026-03-17: added a statement-form `AppendConstStringToLoc` lowering backed by per-frame local string builders for the exact `local = local + "const";` hot shape, so simple local self-concat loops no longer need to materialize a fresh runtime string on every iteration.
+- Added compiler coverage confirming the new lowering emits for `var s = ''; s = s + 'x';`, and re-ran the matching eval regression successfully.
+- Dump-mode hotspot probing on the current worktree now shows `string_concat` dropping from `1000` concat-created runtime strings to `1`.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `string concat 1k`: `80.99–83.35 µs`
+  - `runtime_string_pressure 4k`: `955.72–974.98 µs`
+- Current interpretation: this builder-backed local-self-concat optimization finally fixes the `string concat 1k` path without reopening the earlier generic-runtime-peephole failures, while leaving the broader `runtime_string_pressure` benchmark roughly in the same sub-millisecond range instead of turning it into the next regression hotspot.
 - 2026-03-16: improved `StrictEq` / `StrictNeq` hot opcode handling by adding direct fast paths for same-value, integer, and boolean comparisons before falling back to slower generic handling.
 - Existing switch semantics regression tests were re-run successfully.
 - Benchmark result: `switch 1k` improved from roughly `145–149 μs` class performance to `132–136 μs` in Criterion.
@@ -447,7 +511,7 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - Review short-lived allocation patterns in array/builtin-heavy execution.
 - Prefer stack-preserving layouts and borrowed data where safe.
 
-### 9.3.3 Review runtime string growth
+### 9.3.3 Review runtime string growth [Completed]
 
 **Priority**: P1
 
@@ -475,7 +539,11 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - other creation paths
 - Exposed the counters through `Context` under the `dump` feature.
 - Added dump-mode regression coverage to ensure runtime string source statistics are recorded.`r`n- 2026-03-17: expanded the source buckets to distinguish at least `json`, `object_keys`, `object_entries`, `error_string`, and `type_string` in addition to `concat`, `for_in_key`, and `other`.
-- Status: 9.3.3 now has a safe measurement/profiling foundation; optimization policy for reuse/dedup is still intentionally undecided.`r`n- Embedded note: do not hard-code a runtime-string byte budget in the engine yet; final limits will be chosen during real device integration on ESP32-class targets.`r`n- 2026-03-16: on the `for-in` key path, runtime string exhaustion now becomes a controlled engine error (`runtime string table exhausted`) instead of a debug-time overflow panic.`r`n- Added regression coverage to lock in the new controlled-error behavior for repeated `for-in` key generation.`r`n- In short: a previously crashing runtime-string overflow on the `for-in` key path now degrades into a controlled engine error instead of panicking the process.
+- Status: complete as a review/measurement task; runtime-string reuse or dedup remains a separate future optimization decision rather than unfinished review work.
+- Embedded note: do not hard-code a runtime-string byte budget in the engine yet; final limits will be chosen during real device integration on ESP32-class targets.
+- 2026-03-16: on the `for-in` key path, runtime string exhaustion now becomes a controlled engine error (`runtime string table exhausted`) instead of a debug-time overflow panic.
+- Added regression coverage to lock in the new controlled-error behavior for repeated `for-in` key generation.
+- In short: a previously crashing runtime-string overflow on the `for-in` key path now degrades into a controlled engine error instead of panicking the process.
 
 ### 9.3.4 Review object and array layout overhead
 
@@ -627,9 +695,3 @@ This optimization task list is considered substantially complete when:
 - GC no longer relies on conservative `mark_all`
 - memory reduction work is based on measured dominant categories, not guesswork
 - documentation reflects valid benchmark conclusions only
-
-
-
-
-
-

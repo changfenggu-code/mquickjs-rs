@@ -288,11 +288,7 @@ pub(crate) fn native_array_map(
     let mut result = Vec::with_capacity(len);
 
     for i in 0..len {
-        let element = interp
-            .arrays
-            .get(arr_idx as usize)
-            .and_then(|arr| arr.get(i).copied())
-            .unwrap_or_default();
+        let element = interp.array_element_or_undefined(arr_idx, i);
         let call_args = [element, Value::int(i as i32), this];
         let mapped = interp
             .call_value(callback, Value::undefined(), &call_args)
@@ -333,11 +329,7 @@ pub(crate) fn native_array_filter(
     let mut result = Vec::new();
 
     for i in 0..len {
-        let element = interp
-            .arrays
-            .get(arr_idx as usize)
-            .and_then(|arr| arr.get(i).copied())
-            .unwrap_or_default();
+        let element = interp.array_element_or_undefined(arr_idx, i);
         let call_args = [element, Value::int(i as i32), this];
         let keep = interp
             .call_value(callback, Value::undefined(), &call_args)
@@ -380,11 +372,7 @@ pub(crate) fn native_array_foreach(
         .len();
 
     for i in 0..len {
-        let element = interp
-            .arrays
-            .get(arr_idx as usize)
-            .and_then(|arr| arr.get(i).copied())
-            .unwrap_or_default();
+        let element = interp.array_element_or_undefined(arr_idx, i);
         let call_args = [element, Value::int(i as i32), this];
         interp
             .call_value(callback, Value::undefined(), &call_args)
@@ -427,22 +415,11 @@ pub(crate) fn native_array_reduce(
     let (mut accumulator, start_idx) = if args.len() >= 2 {
         (args[1], 0)
     } else {
-        (
-            interp
-                .arrays
-                .get(arr_idx as usize)
-                .and_then(|arr| arr.first().copied())
-                .unwrap_or_default(),
-            1,
-        )
+        (interp.array_element_or_undefined(arr_idx, 0), 1)
     };
 
     for i in start_idx..len {
-        let element = interp
-            .arrays
-            .get(arr_idx as usize)
-            .and_then(|arr| arr.get(i).copied())
-            .unwrap_or_default();
+        let element = interp.array_element_or_undefined(arr_idx, i);
         let call_args = [accumulator, element, Value::int(i as i32), this];
         accumulator = interp
             .call_value(callback, Value::undefined(), &call_args)
@@ -478,11 +455,7 @@ pub(crate) fn native_array_find(
         .len();
 
     for i in 0..len {
-        let element = interp
-            .arrays
-            .get(arr_idx as usize)
-            .and_then(|arr| arr.get(i).copied())
-            .unwrap_or_default();
+        let element = interp.array_element_or_undefined(arr_idx, i);
         let call_args = [element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
@@ -522,11 +495,7 @@ pub(crate) fn native_array_find_index(
         .len();
 
     for i in 0..len {
-        let element = interp
-            .arrays
-            .get(arr_idx as usize)
-            .and_then(|arr| arr.get(i).copied())
-            .unwrap_or_default();
+        let element = interp.array_element_or_undefined(arr_idx, i);
         let call_args = [element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
@@ -566,11 +535,7 @@ pub(crate) fn native_array_some(
         .len();
 
     for i in 0..len {
-        let element = interp
-            .arrays
-            .get(arr_idx as usize)
-            .and_then(|arr| arr.get(i).copied())
-            .unwrap_or_default();
+        let element = interp.array_element_or_undefined(arr_idx, i);
         let call_args = [element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
@@ -610,11 +575,7 @@ pub(crate) fn native_array_every(
         .len();
 
     for i in 0..len {
-        let element = interp
-            .arrays
-            .get(arr_idx as usize)
-            .and_then(|arr| arr.get(i).copied())
-            .unwrap_or_default();
+        let element = interp.array_element_or_undefined(arr_idx, i);
         let call_args = [element, Value::int(i as i32), this];
         let result = interp
             .call_value(callback, Value::undefined(), &call_args)
@@ -4006,6 +3967,12 @@ impl Interpreter {
         // Array methods
         self.native_array_push_idx =
             Some(self.register_native("Array.prototype.push", native_array_push, 0));
+        self.native_array_map_idx =
+            Some(self.register_native("Array.prototype.map", native_array_map, 1));
+        self.native_array_filter_idx =
+            Some(self.register_native("Array.prototype.filter", native_array_filter, 1));
+        self.native_array_reduce_idx =
+            Some(self.register_native("Array.prototype.reduce", native_array_reduce, 1));
         self.register_native("Array.prototype.pop", native_array_pop, 0);
         self.register_native("Array.prototype.length", native_array_length, 0);
         self.register_native("Array.prototype.shift", native_array_shift, 0);
@@ -4015,10 +3982,7 @@ impl Interpreter {
         self.register_native("Array.prototype.join", native_array_join, 0);
         self.register_native("Array.prototype.reverse", native_array_reverse, 0);
         self.register_native("Array.prototype.slice", native_array_slice, 0);
-        self.register_native("Array.prototype.map", native_array_map, 1);
-        self.register_native("Array.prototype.filter", native_array_filter, 1);
         self.register_native("Array.prototype.forEach", native_array_foreach, 1);
-        self.register_native("Array.prototype.reduce", native_array_reduce, 1);
         self.register_native("Array.prototype.find", native_array_find, 1);
         self.register_native("Array.prototype.findIndex", native_array_find_index, 1);
         self.register_native("Array.prototype.some", native_array_some, 1);

@@ -142,39 +142,4 @@ pub const fn ctz64(x: u64) -> u32 {
     x.trailing_zeros()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_unicode_to_utf8() {
-        let mut buf = [0u8; 4];
-
-        assert_eq!(unicode_to_utf8(&mut buf, 0x41), 1);
-        assert_eq!(buf[0], b'A');
-
-        assert_eq!(unicode_to_utf8(&mut buf, 0x00E9), 2); // é
-        assert_eq!(&buf[..2], &[0xC3, 0xA9]);
-
-        assert_eq!(unicode_to_utf8(&mut buf, 0x4E2D), 3); // 中
-        assert_eq!(&buf[..3], &[0xE4, 0xB8, 0xAD]);
-
-        assert_eq!(unicode_to_utf8(&mut buf, 0x1F600), 4); // 😀
-        assert_eq!(&buf[..4], &[0xF0, 0x9F, 0x98, 0x80]);
-    }
-
-    #[test]
-    fn test_unicode_from_utf8() {
-        assert_eq!(unicode_from_utf8(b"A"), Some((0x41, 1)));
-        assert_eq!(unicode_from_utf8(&[0xC3, 0xA9]), Some((0x00E9, 2)));
-        assert_eq!(unicode_from_utf8(&[0xE4, 0xB8, 0xAD]), Some((0x4E2D, 3)));
-        assert_eq!(
-            unicode_from_utf8(&[0xF0, 0x9F, 0x98, 0x80]),
-            Some((0x1F600, 4))
-        );
-
-        // Invalid sequences
-        assert_eq!(unicode_from_utf8(&[0x80]), None); // Invalid start
-        assert_eq!(unicode_from_utf8(&[0xC3]), None); // Truncated
-    }
-}
+// Tests moved to tests/util_tests.rs.

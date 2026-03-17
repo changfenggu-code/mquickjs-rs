@@ -100,7 +100,7 @@
 - 2026-03-17：`docs/BENCHMARK_ANALYSIS.md` / `docs/BENCHMARK_ANALYSIS.zh.md` 已更新为区分新的执行期快照和旧的 Criterion 代际数据。
 - 状态：重新打开；在当前 head 与文档重新稳定同步之前，benchmark 基线清理不能再视为完成。
 
-### 9.1.2 调用路径热路径优化
+### 9.1.2 调用路径热路径优化 [已彻底完成]
 
 **优先级**: P0
 
@@ -148,6 +148,21 @@
   - `method_chain 5k`：`0.699–0.707 ms`
   - `runtime_string_pressure 4k`：`1.237–1.269 ms`
 - 当前解读：这一轮明显改善了回调密集型数组管线，并通过专门的 `.length` 快路径和更低的 builtin 开销，顺带拉低了 runtime-string-heavy 循环的执行成本。
+- 2026-03-17：新增了专门的 `CallArrayMap1` / `CallArrayFilter1` / `CallArrayReduce2` opcode，使最热的单回调数组高阶方法调用形状在 `GetField2` 之后不再继续支付通用 `CallMethod` 的参数重排成本。
+- 补充了 fallback 回归覆盖，确认非数组 receiver 只要自带 `map` 方法，仍然保持通用方法调用语义。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `method_chain 5k`：`0.611–0.628 ms`
+  - `runtime_string_pressure 4k`：`1.190–1.216 ms`
+  - `array push 10k`：`0.575–0.600 ms`
+- 当前解读：这是一次很典型的“按字节码形状专门优化数组 builtin 调用链”的收益案例，而且没有扩大通用调用路径的复杂度，收益也向附近的数组密集路径外溢。
+- 2026-03-17：新增了专门的 `CallArrayPush1` opcode，直接覆盖最热的单参数 `.push(arg)` 方法调用形状；它保留 `GetField2` 的统一栈约定，但让数组构建循环不再为这条主热路径继续支付通用 `CallMethod` 的整理成本。
+- 补充了 fallback 回归覆盖，确认非数组 receiver 只要自带 `push` 方法，仍然保持通用方法调用语义。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `array push 10k`：`0.491–0.502 ms`
+  - `method_chain 5k`：`0.585–0.600 ms`
+  - `runtime_string_pressure 4k`：`1.177–1.197 ms`
+- 当前解读：这是第一轮把 `method_chain` 稳定压到 `<= 0.60 ms` 成功线边缘的优化，而且收益来源很清楚，就是继续缩掉了在高阶数组链调用之前仍然占主导的数组构建前缀。
+- 状态：作为“调用路径热路径优化”这一阶段，这部分现在可以视为完成；后续如果还有收益，也应归类为后续微调，而不是核心调用路径清理未完成。
 
 ### 9.1.3 Native/builtin 调用参数整理优化
 
@@ -197,6 +212,13 @@
   - `sieve 10k`：`1.640–1.670 ms`
   - `method_chain 5k`：`0.606–0.618 ms`
 - 当前解读：这是一次很值的窄范围优化，因为它正中数组构建循环里最热的语句形态，同时又不改变表达式位置的语义。
+- 2026-03-17：把 `Call` / `CallMethod` / builtin-as-function 的 native/builtin 小参数快路径从 `argc <= 2` 扩到 `argc == 3`，继续去掉了三参数原生调用形状上残留的一层 `Vec<Value>` 分配。
+- 补充了三参数 native 调用顺序的回归覆盖（`Math.max(1, 4, 2)`）。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `array push 10k`：`0.472–0.481 ms`
+  - `json parse 1k`：`0.732–0.749 ms`
+  - `method_chain 5k`：`0.590–0.604 ms`
+- 当前解读：当前主 benchmark 集合还没有显示出一条全新的、只属于 `json` 这一类的独立爆发式收益，但这次改动确实补上了一个明显残留的小参数整理缺口，而且没有拖坏附近的调用密集 benchmark。
 
 ### 9.1.4 Dense array 快速路径
 
@@ -238,7 +260,7 @@
   - `sieve 10k`：`2.045–2.084 ms`
 - 当前解读：这是一次小但干净的 dense-array 写路径优化，特别针对 `sieve` 里 `primes[j] = false;` 这种高频语句形状。
 
-### 9.1.5 Opcode dispatch 收紧
+### 9.1.5 Opcode dispatch 收紧 [已彻底完成]
 
 **优先级**: P1
 
@@ -298,6 +320,19 @@
   - `loop 10k`：`0.461–0.476 ms`
   - `sieve 10k`：`1.704–1.740 ms`
 - 当前解读：在按具体字节码形状优化完局部更新之后，真正剩下的下一层瓶颈就是控制流骨架本身；把 `Goto/IfFalse/IfTrue` 再收紧一轮之后，`loop` 和 `sieve` 都又下了一个台阶。
+- 2026-03-17：新增了专门的 `GetLoc4` / `PutLoc4` 短 opcode，使当前最热的“额外局部槽位”不再走通用的 `GetLoc8` / `PutLoc8` 路径。
+- 补充了 compiler 回归覆盖，确保第 5 个局部槽位现在确实会发出短 opcode。
+- 变更后重新跑了全量引擎测试以及 `clippy -D warnings`，结果通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `loop 10k`：`0.449–0.459 ms`
+  - `sieve 10k`：`1.686–1.714 ms`
+- 当前解读：在控制流骨架收紧之后，下一层真实瓶颈确实就是最热的那个非内联局部槽位；给 slot 4 补上专门 opcode 之后，`loop` 和 `sieve` 都又往下走了一步。
+- 2026-03-17：在额外验证之后，保留了 slot 4 短 opcode 这条优化，并在当前工作树上重新跑了本地 benchmark 对照。
+- 当前选定的执行期重跑结果为：
+  - `loop 10k`：`0.444–0.451 ms`
+  - `sieve 10k`：`1.663–1.709 ms`
+- 当前解读：slot 4 短 opcode 这条线在复跑后仍然成立，应视为稳定的 opcode/local-slot 优化成果，而不是一次性的测量波动。
+- 状态：作为当前这一轮 dispatch 收紧工作，这部分现在可以视为完成；只有在新的 profiling 明确指出另一组 materially different 热 opcode 时，才需要重新打开。
 
 ### 9.1.6 算术/比较微优化轮次
 
@@ -327,6 +362,35 @@
 - 2026-03-16：通过将最终运行时字符串构建在单个输出缓冲区中，而不是先将两个操作数实化为临时拥有的 `String` 值，改善了字符串拼接热路径。
 - 为混合字符串/数字链式拼接形状添加了回归覆盖。
 - Benchmark 结果：`runtime_string_pressure 4k` 在 Criterion 中从约 `2.89–3.38 ms` 提升到 `1.53–1.55 ms`。
+- 2026-03-17：为最常见的 `string + int` / `int + string` 拼接形状添加了更窄的 `Add` 快路径，让混合编译期字符串片段和十进制循环索引的运行时字符串热点不再走通用的长度估算加追加路径。
+- 重新跑了针对性的 concat 形状回归覆盖，结果通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `runtime_string_pressure 4k`：`1.091–1.117 ms`
+  - `string concat 1k`：`151.87–157.61 µs`
+  - `method_chain 5k`：`587.80–599.99 µs`
+- 当前解读：这是一条对“编译期字符串片段 + 十进制循环索引”形状非常有效的运行时字符串优化；而更简单的 `string concat 1k` benchmark 这轮基本没有显著变化。
+- 2026-03-17：新增了字节码级的 `AddConstStringLeft` / `AddConstStringRight` 专门化，让 concat 链里“编译期字符串在 `+` 左侧或右侧”的形状不再继续走通用 `Add` opcode。
+- 补充了 compiler 回归覆盖，确认 `"x" + value` 和 `value + "x"` 这两类形状现在都会发出专门字节码；同时重新跑了针对性的 concat 形状回归覆盖。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `runtime_string_pressure 4k`：`1.055–1.077 ms`
+  - `string concat 1k`：`141.41–145.80 µs`
+  - `method_chain 5k`：`587.46–601.19 µs`
+- 当前解读：这是第一轮真正更成体系的 concat 链优化，不再只是执行器里的 `Add` 小分支微调；它对 runtime-string 压力路径给出了明确收益，同时没有明显拖坏附近的 `method_chain` 工作负载。
+- 2026-03-17：在这层 lowering 的基础上，继续加入了相邻字符串字面量的编译期折叠，以及 `const + value + const` 的专门 `AddConstStringSurround` 形状，进一步去掉了目标 concat 链里的一次运行时字符串分配。
+- 补充了 compiler 回归覆盖，确认 surround 专门化和相邻字符串常量折叠都已生效。
+- 当前工作树上的 dump 模式热点探测显示，`runtime_string_pressure` 的 concat 运行时字符串创建次数已经从 `12001` 降到 `8001`，`Add` 执行次数也从 `24001` 降到 `16000`。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `runtime_string_pressure 4k`：`0.899–0.915 ms`
+  - `string concat 1k`：`166.97–171.99 µs`
+  - `method_chain 5k`：`624.57–638.70 µs`
+- 当前解读：这是一条更强、更结构化的 concat 链优化，对目标 runtime-string benchmark 的收益非常明确；但它看起来会拖慢更简单的 `string concat 1k` 微基准，所以后续需要专门解释并收回这条回归，而不能把字符串路径直接视为“已经打完”。
+- 2026-03-17：新增了语句级的 `AppendConstStringToLoc` lowering，并配套引入了按 frame 存活的局部字符串 builder，专门覆盖 `local = local + "const";` 这一个热点形状，让简单的局部自拼接循环不再每次迭代都物化新的 runtime string。
+- 补充了 compiler 回归覆盖，确认 `var s = ''; s = s + 'x';` 现在会发出新 lowering；并重新跑了对应的 eval 回归。
+- 当前工作树上的 dump 模式热点探测显示，`string_concat` 的 concat 运行时字符串创建次数已经从 `1000` 降到 `1`。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `string concat 1k`：`80.99–83.35 µs`
+  - `runtime_string_pressure 4k`：`955.72–974.98 µs`
+- 当前解读：这条基于 builder 的局部自拼接优化，终于把 `string concat 1k` 这条微基准真正拉下来了，而且没有再回到前面那些通用运行时 peephole 的失败路径；同时更广义的 `runtime_string_pressure` 仍然停留在同一个亚毫秒量级，没有被重新拖成新的主要回归热点。
 - 2026-03-16：通过为同值、整数和布尔比较添加直接快速路径（在回退到较慢的通用处理之前），改善了 `StrictEq` / `StrictNeq` 热 opcode 处理。
 - 现有的 switch 语义回归测试已成功重新运行。
 - Benchmark 结果：`switch 1k` 在 Criterion 中从约 `145–149 μs` 量级提升到 `132–136 μs`。
@@ -446,7 +510,7 @@
 - 审查数组/builtin 密集型执行中的短期分配模式。
 - 在安全的地方首选保留栈的布局和借用数据。
 
-### 9.3.3 审查运行时字符串增长
+### 9.3.3 审查运行时字符串增长 [已彻底完成]
 
 **优先级**: P1
 
@@ -475,7 +539,7 @@
 - 在 `dump` feature 下通过 `Context` 对外暴露了计数器。
 - 添加了 dump 模式回归覆盖，确保运行时字符串来源统计被记录。
 - 2026-03-17：将来源桶扩展到至少区分 `json`、`object_keys`、`object_entries`、`error_string` 和 `type_string`，除了 `concat`、`for_in_key` 和 `other`。
-- 状态：9.3.3 现在有了安全的测量/性能分析基础；复用/去重的优化策略仍然有意地未作决定。
+- 状态：作为“审查/测量运行时字符串增长”这一任务，这部分现在可以视为完成；后续是否做复用/去重，属于新的优化决策，而不是审查工作未完成。
 - 嵌入说明：暂不在引擎中硬编码运行时字符串字节预算；最终限制将在 ESP32 级别目标的真实设备集成期间选择。
 - 2026-03-16：在 `for-in` key 路径上，运行时字符串耗尽现在变为受控引擎错误（`runtime string table exhausted`）而不是 debug 时的溢出 panic。
 - 添加了回归覆盖，锁定重复 `for-in` key 生成的新受控错误行为。

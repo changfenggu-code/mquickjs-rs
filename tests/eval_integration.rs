@@ -611,6 +611,13 @@ fn test_string_concat_in_variable() {
 }
 
 #[test]
+fn test_string_concat_assignment_statement() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("var s = ''; s = s + 'x'; return s;").unwrap();
+    assert!(result.is_string());
+}
+
+#[test]
 fn test_string_concat_chain() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2032,6 +2039,13 @@ fn test_math_max_min_float_nan_infinity() {
 }
 
 #[test]
+fn test_native_function_three_arg_order() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return Math.max(1, 4, 2);").unwrap();
+    assert_eq!(result.to_i32(), Some(4));
+}
+
+#[test]
 fn test_math_sqrt() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2227,6 +2241,21 @@ fn test_array_length_property() {
 }
 
 #[test]
+fn test_array_element_length_property() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var parts = ['ab', 'cdef'];
+        return parts[1].length;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(4));
+}
+
+#[test]
 fn test_array_push_multiple_args_order() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2240,6 +2269,45 @@ fn test_array_push_multiple_args_order() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(30));
+}
+
+#[test]
+fn test_non_array_push_method_call_fallback() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var obj = {
+            total: 1,
+            push: function (x) {
+                this.total = this.total + x;
+                return this.total;
+            }
+        };
+        return obj.push(5);
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(6));
+}
+
+#[test]
+fn test_generic_method_call_preserves_receiver_before_args() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var obj = {
+            base: 7,
+            add: function (x) { return this.base + x; }
+        };
+        return obj.add(5);
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(12));
 }
 
 #[test]
@@ -2507,6 +2575,22 @@ fn test_string_length() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(5));
+}
+
+#[test]
+fn test_negative_zero_string_conversion() {
+    let mut ctx = Context::new(64 * 1024);
+    // JS spec: String(-0) === "0", sign is dropped
+    let result = ctx.eval("return String(-0) === '0';").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    // Arithmetic sign must be preserved: 1 / -0 === -Infinity
+    let result = ctx.eval("return 1 / -0 === -Infinity;").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    // Concatenation also drops sign
+    let result = ctx.eval("return (-0 + '') === '0';").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
 }
 
 #[test]
@@ -4535,6 +4619,23 @@ fn test_array_method_chain_map_filter_reduce() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(18)); // [6, 12] -> 18
+}
+
+#[test]
+fn test_non_array_map_method_call_fallback() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var obj = {
+            map: function (cb) { return cb(5); }
+        };
+        function plusOne(x) { return x + 1; }
+        return obj.map(plusOne);
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(6));
 }
 
 #[test]
