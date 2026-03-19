@@ -47,6 +47,149 @@ fn test_memory_stats_track_runtime_string_bytes() {
 }
 
 #[test]
+fn test_context_gc_collects_unrooted_cycle_objects() {
+    let mut ctx = Context::new(64 * 1024);
+    let before = ctx.memory_stats();
+
+    ctx.eval(
+        "
+        function makeCycle() {
+            var a = {};
+            a.self = a;
+        }
+        for (var i = 0; i < 50; i = i + 1) {
+            makeCycle();
+        }
+        return 0;
+    ",
+    )
+    .unwrap();
+
+    let after_alloc = ctx.memory_stats();
+    assert!(after_alloc.objects > before.objects);
+
+    ctx.gc();
+
+    let after_gc = ctx.memory_stats();
+    assert!(after_gc.objects < after_alloc.objects);
+    assert!(after_gc.gc_count > before.gc_count);
+}
+
+#[test]
+fn test_gc_auto_triggers_during_js_function_workload() {
+    let mut ctx = Context::new(128 * 1024);
+    let before = ctx.memory_stats();
+
+    ctx.eval(
+        "
+        function makeCycle() {
+            var a = {};
+            a.self = a;
+        }
+        for (var i = 0; i < 1500; i = i + 1) {
+            makeCycle();
+        }
+        return 0;
+    ",
+    )
+    .unwrap();
+
+    let after = ctx.memory_stats();
+    assert!(after.gc_count > before.gc_count);
+}
+
+#[test]
+fn test_gc_frees_dead_arrays() {
+    let mut ctx = Context::new(64 * 1024);
+    let before = ctx.memory_stats();
+
+    // Create and discard many arrays
+    ctx.eval(
+        "
+        for (var i = 0; i < 100; i = i + 1) {
+            var arr = [1, 2, 3];
+            arr.push(i);
+        }
+        return 0;
+    ",
+    )
+    .unwrap();
+
+    let after_alloc = ctx.memory_stats();
+    assert!(after_alloc.arrays > before.arrays);
+
+    ctx.gc();
+
+    let after_gc = ctx.memory_stats();
+    // After GC, dead arrays should be swept and not counted as live
+    assert!(after_gc.arrays <= after_alloc.arrays);
+}
+
+#[test]
+fn test_gc_frees_dead_objects() {
+    let mut ctx = Context::new(64 * 1024);
+    let before = ctx.memory_stats();
+
+    // Create and discard many plain objects
+    ctx.eval(
+        "
+        for (var i = 0; i < 100; i = i + 1) {
+            var obj = { x: i, y: i + 1 };
+            var sum = obj.x + obj.y;
+        }
+        return 0;
+    ",
+    )
+    .unwrap();
+
+    let after_alloc = ctx.memory_stats();
+    assert!(after_alloc.objects > before.objects);
+
+    ctx.gc();
+
+    let after_gc = ctx.memory_stats();
+    assert!(after_gc.objects < after_alloc.objects);
+}
+
+#[test]
+fn test_gc_mixed_arrays_and_objects() {
+    let mut ctx = Context::new(64 * 1024);
+
+    ctx.eval(
+        "
+        var result = [];
+        for (var i = 0; i < 200; i = i + 1) {
+            var obj = { val: i };
+            result.push(obj);
+        }
+        // Keep only the last 10
+        result = result.slice(190);
+        return 0;
+    ",
+    )
+    .unwrap();
+
+    let after_alloc = ctx.memory_stats();
+    let object_count = after_alloc.objects;
+
+    ctx.gc();
+
+    let after_gc = ctx.memory_stats();
+    // GC should have reclaimed most of the dropped objects
+    assert!(after_gc.objects <= object_count);
+}
+
+#[test]
+fn test_gc_no_crash_on_empty() {
+    let mut ctx = Context::new(64 * 1024);
+    // GC on fresh context should not crash
+    ctx.gc();
+    let stats = ctx.memory_stats();
+    assert_eq!(stats.objects, 0);
+    assert_eq!(stats.arrays, 0);
+}
+
+#[test]
 fn test_eval_empty() {
     let mut ctx = Context::new(64 * 1024);
     let result = ctx.eval("").unwrap();
@@ -694,6 +837,57 @@ fn test_simple_closure() {
 }
 
 #[test]
+fn test_later_closure_sees_reassigned_captured_local() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        function outer() {
+            var x = 1;
+            function set(v) {
+                x = v;
+            }
+            set(2);
+            function get() {
+                return x;
+            }
+            return get();
+        }
+        return outer();
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(2));
+}
+
+#[test]
+fn test_captured_local0_string_builder_materializes_for_later_closure() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        function outer() {
+            var s = '';
+            function first() {
+                return s;
+            }
+            s = s + 'x';
+            function second() {
+                return s;
+            }
+            return second();
+        }
+        return outer();
+    ",
+        )
+        .unwrap();
+    assert!(result.is_string());
+    assert_eq!(ctx.string_value(result).as_deref(), Some("x"));
+}
+
+#[test]
 fn test_closure_captures_value() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -871,6 +1065,28 @@ fn test_try_catch_exception_with_finally() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(105)); // 5 + 100
+}
+
+#[test]
+fn test_try_finally_without_catch_runs_before_outer_handler() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var result = 0;
+        try {
+            try {
+                throw 1;
+            } finally {
+                result = 7;
+            }
+        } catch (e) {}
+        return result;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(7));
 }
 
 #[test]
@@ -1081,6 +1297,36 @@ fn test_local_assignment_statement_update() {
 }
 
 #[test]
+fn test_local_assignment_statement_update_preserves_string_plus_one() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var x = 'a';
+        x = x + 1;
+        return x;
+    ",
+        )
+        .unwrap();
+    assert!(result.is_string());
+}
+
+#[test]
+fn test_local_assignment_statement_update_overflow_preserves_result() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var x = 2147483647;
+        x = x + 1;
+        return x;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_number_f32(), Some(2147483648.0));
+}
+
+#[test]
 fn test_array_out_of_bounds_returns_undefined() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -1114,6 +1360,36 @@ fn test_array_in_expression() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(24)); // 2 * 3 * 4
+}
+
+#[test]
+fn test_discarded_array_read_still_evaluates_and_continues() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var arr = [1, 2, 3];
+        arr[1];
+        return 7;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(7));
+}
+
+#[test]
+fn test_discarded_negative_array_read_still_continues() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var arr = [1, 2, 3];
+        arr[-1];
+        return 9;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(9));
 }
 
 #[test]
@@ -1583,6 +1859,16 @@ fn test_typeof_missing_var_returns_undefined() {
 }
 
 #[test]
+fn test_typeof_missing_var_does_not_corrupt_existing_string_constant() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval("var s = 'hello'; typeof missingVar; return s;")
+        .unwrap();
+    assert!(result.is_string());
+    assert_eq!(ctx.string_value(result).as_deref(), Some("hello"));
+}
+
+#[test]
 fn test_for_in_array() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -1886,6 +2172,20 @@ fn test_parse_int() {
 }
 
 #[test]
+fn test_parse_int_partial_and_radix() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return parseInt('123abc');").unwrap();
+    assert_eq!(result.to_i32(), Some(123));
+
+    let result = ctx.eval("return parseInt('0xFF', 16);").unwrap();
+    assert_eq!(result.to_i32(), Some(255));
+
+    let result = ctx.eval("return parseInt('0x10');").unwrap();
+    assert_eq!(result.to_i32(), Some(16));
+}
+
+#[test]
 fn test_is_nan() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -1972,6 +2272,14 @@ fn test_math_abs() {
     // Math.abs with zero
     let result = ctx.eval("return Math.abs(0);").unwrap();
     assert_eq!(result.to_i32(), Some(0));
+}
+
+#[test]
+fn test_math_abs_i32_min_promotes_to_positive_number() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return Math.abs(-2147483648);").unwrap();
+    assert_eq!(result.to_number_f32(), Some(2147483648.0));
 }
 
 #[test]
@@ -2135,6 +2443,15 @@ fn test_math_trunc() {
 }
 
 #[test]
+fn test_math_sign_preserves_negative_zero() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return 1 / Math.sign(-0);").unwrap();
+    assert!(result.to_number_f32().unwrap().is_sign_negative());
+    assert!(result.to_number_f32().unwrap().is_infinite());
+}
+
+#[test]
 fn test_math_log2() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2205,6 +2522,21 @@ fn test_array_push_and_access() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(42));
+}
+
+#[test]
+fn test_array_push_true_specialized_shape() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var arr = [];
+        arr.push(true);
+        return arr[0];
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
 }
 
 #[test]
@@ -2293,6 +2625,25 @@ fn test_non_array_push_method_call_fallback() {
 }
 
 #[test]
+fn test_array_push_property_read_happens_before_args() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var side = 0;
+        var obj = null;
+        try {
+            obj.push(side = 1);
+        } catch (e) {}
+        return side;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(0));
+}
+
+#[test]
 fn test_generic_method_call_preserves_receiver_before_args() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2308,6 +2659,67 @@ fn test_generic_method_call_preserves_receiver_before_args() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(12));
+}
+
+#[test]
+fn test_method_call_preserves_string_arguments_for_user_functions() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        function make() {
+            var color = 1;
+            var handlers = {
+                setConfig: function (key, value) {
+                    if (key === 'color') color = value;
+                }
+            };
+            handlers.setConfig('color', 255);
+            return color;
+        }
+        return make();
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(255));
+}
+
+#[test]
+fn test_method_call_string_arguments_survive_forwarding_chain() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        function createBaseMachine(handlers) {
+            const machine = {
+                speed: 200,
+                setConfig: function (key, value) {
+                    if (key === 'speed') machine.speed = value;
+                    else if (handlers.setConfig) handlers.setConfig(key, value);
+                }
+            };
+            return machine;
+        }
+
+        function make() {
+            var color = 217;
+            var m = createBaseMachine({
+                setConfig: function (key, value) {
+                    if (key === 'color') color = value;
+                }
+            });
+            m.setConfig('speed', 500);
+            m.setConfig('color', 255);
+            return m.speed * 1000 + color;
+        }
+
+        return make();
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(500255));
 }
 
 #[test]
@@ -2483,6 +2895,30 @@ fn test_array_join_with_separator_and_strings() {
 }
 
 #[test]
+fn test_array_to_string_null_and_undefined_become_empty_fields() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return [null, 1, undefined].toString();").unwrap();
+    assert_eq!(ctx.string_value(result).as_deref(), Some(",1,"));
+}
+
+#[test]
+fn test_array_index_of_and_last_index_of_honor_from_index() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return [1,2,1,2].indexOf(1, 1);").unwrap();
+    assert_eq!(result.to_i32(), Some(2));
+
+    let result = ctx.eval("return [1,2,1,2].indexOf(2, -1);").unwrap();
+    assert_eq!(result.to_i32(), Some(3));
+
+    let result = ctx.eval("return [1,2,1,2].lastIndexOf(2, 2);").unwrap();
+    assert_eq!(result.to_i32(), Some(1));
+
+    let result = ctx.eval("return [1,2,1,2].lastIndexOf(1, -2);").unwrap();
+    assert_eq!(result.to_i32(), Some(2));
+}
+
+#[test]
 fn test_array_reverse() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2578,6 +3014,13 @@ fn test_string_length() {
 }
 
 #[test]
+fn test_string_length_counts_utf16_code_units_not_utf8_bytes() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return 'caf\\u00E9'.length;").unwrap();
+    assert_eq!(result.to_i32(), Some(4));
+}
+
+#[test]
 fn test_negative_zero_string_conversion() {
     let mut ctx = Context::new(64 * 1024);
     // JS spec: String(-0) === "0", sign is dropped
@@ -2660,6 +3103,13 @@ fn test_string_index_of_not_found() {
 }
 
 #[test]
+fn test_string_index_of_unicode_uses_character_indices() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return 'caf\\u00E9'.indexOf('\\u00E9');").unwrap();
+    assert_eq!(result.to_i32(), Some(3));
+}
+
+#[test]
 fn test_string_slice() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2674,6 +3124,15 @@ fn test_string_slice() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(5));
+}
+
+#[test]
+fn test_string_slice_unicode_respects_character_boundaries() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval("return 'caf\\u00E9'.slice(3).charCodeAt(0);")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(233));
 }
 
 #[test]
@@ -2799,6 +3258,15 @@ fn test_string_concat_method() {
 }
 
 #[test]
+fn test_string_concat_method_coerces_float_arguments() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return 'x'.concat(3.14);").unwrap();
+    assert!(result.is_string());
+    assert_eq!(ctx.string_value(result).as_deref(), Some("x3.14"));
+}
+
+#[test]
 fn test_string_repeat() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2905,6 +3373,21 @@ fn test_string_pad_end() {
 }
 
 #[test]
+fn test_string_pad_start_and_end_count_unicode_width_correctly() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval("return '\\u00E9'.padStart(2, '\\u00E9').length;")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(2));
+
+    let result = ctx
+        .eval("return '\\u00E9'.padEnd(2, '\\u00E9').length;")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(2));
+}
+
+#[test]
 fn test_string_replace() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -2949,6 +3432,32 @@ fn test_string_includes() {
         )
         .unwrap();
     assert_eq!(result.to_bool(), Some(false));
+}
+
+#[test]
+fn test_string_includes_and_starts_with_unicode() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval("return 'caf\\u00E9'.includes('f\\u00E9');")
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    let result = ctx
+        .eval("return 'caf\\u00E9'.startsWith('f\\u00E9', 2);")
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_string_includes_coerces_missing_and_non_string_args() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return 'xundefinedy'.includes();").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+
+    let result = ctx.eval("return 'abc123'.includes(123);").unwrap();
+    assert_eq!(result.to_bool(), Some(true));
 }
 
 // =========================================================================
@@ -3407,7 +3916,7 @@ fn test_date_now() {
     ",
         )
         .unwrap();
-    assert!(result.to_i32().is_some());
+    assert!(result.to_number_f32().is_some());
 }
 
 #[test]
@@ -3440,6 +3949,13 @@ fn test_date_now_positive() {
     ",
         )
         .unwrap();
+    assert_eq!(result.to_i32(), Some(1));
+}
+
+#[test]
+fn test_date_now_exceeds_i32_range() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return Date.now() > 2147483647 ? 1 : 0;").unwrap();
     assert_eq!(result.to_i32(), Some(1));
 }
 
@@ -4137,6 +4653,27 @@ fn test_parse_float() {
     let result = ctx.eval("return parseFloat('3.14');").unwrap();
     let val = result.to_number_f32().unwrap();
     assert!((val - expected).abs() < 0.01);
+}
+
+#[test]
+fn test_parse_float_parses_leading_valid_portion() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return parseFloat('3.14abc');").unwrap();
+    let val = result.to_number_f32().unwrap();
+    let expected = 314.0_f32 / 100.0;
+    assert!((val - expected).abs() < 0.01);
+
+    let result = ctx.eval("return parseFloat('  -1.5e2px');").unwrap();
+    let val = result.to_number_f32().unwrap();
+    assert!((val + 150.0).abs() < 0.01);
+}
+
+#[test]
+fn test_string_split_coerces_non_string_separator() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return 'a1b1c'.split(1)[1];").unwrap();
+    assert_eq!(ctx.string_value(result).as_deref(), Some("b"));
 }
 
 #[test]
@@ -4914,16 +5451,35 @@ fn test_array_sort_strings_lexicographic() {
 }
 
 #[test]
-fn test_array_sort_comparator_not_supported() {
+fn test_array_sort_default_is_lexicographic_for_numbers() {
     let mut ctx = Context::new(64 * 1024);
 
-    let result = ctx.eval(
-        "
+    let result = ctx
+        .eval(
+            "
+        var arr = [9, 80];
+        arr.sort();
+        return arr[0] === 80 && arr[1] === 9;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_array_sort_supports_compare_function() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
         var arr = [3, 2, 1];
         arr.sort(function(a, b) { return a - b; });
+        return arr[0] === 1 && arr[1] === 2 && arr[2] === 3;
     ",
-    );
-    assert!(result.is_err());
+        )
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
 }
 
 #[test]
@@ -5002,6 +5558,15 @@ fn test_string_last_index_of() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(6));
+}
+
+#[test]
+fn test_string_last_index_of_unicode_uses_character_indices() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval("return 'caf\\u00E9'.lastIndexOf('\\u00E9');")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(3));
 }
 
 #[test]
@@ -5192,6 +5757,20 @@ fn test_array_to_string() {
         )
         .unwrap();
     assert!(result.is_string());
+}
+
+#[test]
+fn test_json_stringify_undefined_returns_undefined() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return JSON.stringify(undefined);").unwrap();
+    assert!(result.is_undefined());
+}
+
+#[test]
+fn test_string_repeat_negative_throws() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return 'x'.repeat(-1);");
+    assert!(result.is_err());
 }
 
 #[test]
@@ -5569,7 +6148,7 @@ fn test_null_plus_number() {
 #[test]
 fn test_undefined_plus_number() {
     let mut ctx = Context::new(64 * 1024);
-    // undefined 鈫?NaN, NaN + 1 = NaN
+    // undefined 閳?NaN, NaN + 1 = NaN
     assert!(ctx.eval("return undefined + 1;").unwrap().is_nan_value());
 }
 
@@ -5661,7 +6240,7 @@ fn test_null_not_equals_false() {
 #[test]
 fn test_bool_coercion_in_eq() {
     let mut ctx = Context::new(64 * 1024);
-    // true鈫?, false鈫?
+    // true閳?, false閳?
     assert_eq!(ctx.eval("return true == 1;").unwrap().to_bool(), Some(true));
     assert_eq!(
         ctx.eval("return false == 0;").unwrap().to_bool(),
@@ -5796,7 +6375,7 @@ fn test_string_concat_with_undefined() {
 #[test]
 fn test_number_plus_string_coercion() {
     let mut ctx = Context::new(64 * 1024);
-    // When one side is a string, + does concatenation (number鈫抯tring)
+    // When one side is a string, + does concatenation (number閳姱tring)
     let result = ctx.eval("return 123 + 'abc';").unwrap();
     assert!(result.is_string());
 }
@@ -6010,13 +6589,22 @@ fn test_string_substring() {
             .to_i32(),
         Some(104)
     );
-    // No end parameter 鈥?to end of string
+    // No end parameter 閳?to end of string
     assert_eq!(
         ctx.eval("return 'hello world'.substring(6).length;")
             .unwrap()
             .to_i32(),
         Some(5) // "world".length
     );
+}
+
+#[test]
+fn test_string_substring_unicode_respects_character_boundaries() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval("return 'caf\\u00E9'.substring(3, 4).charCodeAt(0);")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(233));
 }
 
 // --- Exponentiation operator ---
@@ -6027,6 +6615,15 @@ fn test_exponentiation_operator() {
     assert_eq!(ctx.eval("return 2 ** 10;").unwrap().to_i32(), Some(1024));
     assert_eq!(ctx.eval("return 3 ** 0;").unwrap().to_i32(), Some(1));
     assert_eq!(ctx.eval("return 5 ** 2;").unwrap().to_i32(), Some(25));
+}
+
+#[test]
+fn test_exponentiation_assignment_operator() {
+    let mut ctx = Context::new(64 * 1024);
+    assert_eq!(
+        ctx.eval("var x = 2; x **= 3; return x;").unwrap().to_i32(),
+        Some(8)
+    );
 }
 
 #[test]
@@ -6158,7 +6755,7 @@ fn test_json_stringify_nested_circular() {
 #[test]
 fn test_modulo_overflow_negative_zero() {
     let mut ctx = Context::new(64 * 1024);
-    // Mathematically 0, but dividend is negative → -0.0 per JS spec
+    // Mathematically 0, but dividend is negative 鈫?-0.0 per JS spec
     let result = ctx.eval("return 1 / ((-2147483648) % (-1));").unwrap();
     let f = result.to_f32().unwrap();
     assert!(
@@ -6219,6 +6816,21 @@ fn test_string_unicode_escape() {
     let mut ctx = Context::new(64 * 1024);
     let result = ctx.eval("return \"\\u0041\" === \"A\";").unwrap();
     assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_raw_utf8_string_literal_source_decodes_correctly() {
+    let mut ctx = Context::new(64 * 1024);
+    let script = "return 'caf\u{00E9}'.charCodeAt(3) === 233 && 'caf\u{00E9}'.length === 4;";
+    let result = ctx.eval(script).unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
+fn test_string_property_access_survives_rhs_string_concat_optimization() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("return 10 + 'caf\\u00E9'.length;").unwrap();
+    assert_eq!(result.to_i32(), Some(14));
 }
 
 #[test]
