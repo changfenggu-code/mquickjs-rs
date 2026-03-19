@@ -34,7 +34,7 @@ fn test_blink_create_effect() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         return m.status === "idle";
         "#,
     );
@@ -46,7 +46,7 @@ fn test_blink_default_led_count() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         return m.ledCount;
         "#,
     );
@@ -58,7 +58,7 @@ fn test_blink_default_speed() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         return m.speed;
         "#,
     );
@@ -70,7 +70,7 @@ fn test_blink_leds_is_uint8array() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         return m.leds.length;
         "#,
     );
@@ -85,7 +85,7 @@ fn test_blink_start_sets_running() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.start();
         return m.status === "running";
         "#,
@@ -98,7 +98,7 @@ fn test_blink_pause_resume() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.start();
         m.pause();
         var paused = m.status === "paused";
@@ -115,7 +115,7 @@ fn test_blink_stop_resets() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.start();
         m.stop();
         return m.status === "idle";
@@ -132,7 +132,7 @@ fn test_blink_tick_when_idle_does_nothing() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.tick();
         var allZero = true;
         for (var i = 0; i < m.leds.length; i++) {
@@ -150,7 +150,7 @@ fn test_blink_tick_toggles_leds() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.start();
         m.tick();
         var hasColor = m.leds[0] > 0 || m.leds[1] > 0 || m.leds[2] > 0;
@@ -166,7 +166,7 @@ fn test_blink_tick_second_toggles_off() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.start();
         m.tick();
         m.tick();
@@ -187,7 +187,7 @@ fn test_chase_create_and_tick() {
     let result = eval_effect(
         CHASE_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.start();
         m.tick();
         // First LED should have color (position 0)
@@ -203,7 +203,7 @@ fn test_chase_moves_position() {
     let result = eval_effect(
         CHASE_JS,
         r#"
-        var m = createEffect({ ledCount: 10, chaseCount: 1 });
+        var m = createEffect({ ledCount: 10, chaseCount: 1, frameMs: 1000 });
         m.start();
         m.tick();
         // After first tick, position advances to 1, so LED 1 should be lit
@@ -222,7 +222,7 @@ fn test_rainbow_create_and_tick() {
     let result = eval_effect(
         RAINBOW_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.start();
         m.tick();
         // All LEDs should have color since rainbow fills every LED
@@ -239,7 +239,7 @@ fn test_rainbow_different_colors_per_led() {
     let result = eval_effect(
         RAINBOW_JS,
         r#"
-        var m = createEffect({ ledCount: 5, hueSpread: 72 });
+        var m = createEffect({ ledCount: 5, hueSpread: 72, frameMs: 1000 });
         m.start();
         m.tick();
         // Compare LED 0 and LED 1 - they should differ
@@ -259,7 +259,7 @@ fn test_wave_create_and_tick() {
     let result = eval_effect(
         WAVE_JS,
         r#"
-        var m = createEffect({ ledCount: 10, waveWidth: 3 });
+        var m = createEffect({ ledCount: 10, waveWidth: 3, frameMs: 1000 });
         m.start();
         m.tick();
         // First 3 LEDs should be lit (position 0, width 3)
@@ -275,7 +275,7 @@ fn test_wave_moves() {
     let result = eval_effect(
         WAVE_JS,
         r#"
-        var m = createEffect({ ledCount: 10, waveWidth: 1 });
+        var m = createEffect({ ledCount: 10, waveWidth: 1, frameMs: 1000 });
         m.start();
         m.tick();
         // position was 0, wave at LED 0, then position advances to 1
@@ -296,7 +296,7 @@ fn test_blink_set_speed() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.setConfig("speed", 500);
         return m.speed;
         "#,
@@ -309,7 +309,7 @@ fn test_blink_set_color() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.setConfig("color", { mode: "rgb", r: 255, g: 0, b: 0 });
         m.start();
         m.tick();
@@ -343,7 +343,7 @@ fn test_create_with_custom_config() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect({ ledCount: 5, speed: 100 });
+        var m = createEffect({ ledCount: 5, speed: 100, frameMs: 1000 });
         return m.ledCount * 1000 + m.speed;
         "#,
     );
@@ -356,7 +356,7 @@ fn test_custom_config_leds_buffer_size() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect({ ledCount: 5 });
+        var m = createEffect({ ledCount: 5, frameMs: 1000 });
         return m.leds.length;
         "#,
     );
@@ -371,7 +371,7 @@ fn test_stop_clears_leds() {
     let result = eval_effect(
         BLINK_JS,
         r#"
-        var m = createEffect();
+        var m = createEffect({ frameMs: 1000 });
         m.start();
         m.tick();
         m.stop();

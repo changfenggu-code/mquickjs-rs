@@ -165,8 +165,10 @@ cross-implementation comparison. They include process startup cost.
 - `json` remains a relative strength for the Rust engine.
 - the updated execution-focused rerun still shows `fib` and `loop` as useful call-path and dispatch signals.
 - `array` and `sieve` remain meaningful dense-array and builtin-call signals.
-- `runtime_string_pressure` and `method_chain` both improved again in the latest full rerun; `method_chain` remains effectively near the `0.60 ms` target line, and `runtime_string_pressure` now benefits from a deeper concat-chain lowering pass that materially reduces runtime-string creation count, though the simpler `string concat 1k` microbenchmark should still be treated as a follow-up concern because it regressed in the latest targeted rerun.
-- A newer statement-form local-self-concat lowering (`AppendConstStringToLoc`) substantially improves the dedicated `string concat 1k` microbenchmark and reduces its runtime-string creation count to `1`, while leaving the broader `runtime_string_pressure` benchmark in roughly the same sub-millisecond class.
+- `runtime_string_pressure` and `method_chain` both remain useful runtime-focused targets. The latest string-specific reruns put `runtime_string_pressure` in the `0.87–0.89 ms` class and `method_chain` in the `0.72–0.73 ms` class.
+- A newer narrow statement-form local-self-concat lowering (`AppendConstStringToLoc0`) substantially improves the dedicated `string concat 1k` microbenchmark and reduces its runtime-string creation count to `1`, while leaving the broader `runtime_string_pressure` benchmark in the same sub-millisecond class.
+- The new string-specific diagnostics indicate that repeated copying of the growing string content is still the dominant remaining cost in generic concat loops; the local-update skeleton itself is no longer the main bottleneck for the `string concat 1k` shape.
+- For the current optimization phase, the practical string-path goal has been met: the dedicated `string concat 1k` path is fixed, `runtime_string_pressure` stays in the sub-millisecond class, and `method_chain` is not being re-broken by string work. Any further effort here should be treated as a broader string-representation project.
 - `for_of_array` improved materially again after a `ForOfNext` branch-fusion pass and now looks much healthier, though it remains a useful iterator/control-flow target.
 - `deep_property` remains a strong object-property benchmark and currently looks healthier than the iterator/string-pressure group.
 - `switch_case` is now tracked as a secondary control-flow benchmark and already shows measurable improvement from the latest `StrictEq` hot-path tuning.
@@ -199,7 +201,9 @@ The current codebase still contains the first completed optimization rounds for:
   - adds a narrower `string + int` / `int + string` fast path for decimal loop-index concatenation
   - adds bytecode-level `AddConstStringLeft` / `AddConstStringRight` specializations for compile-time string fragments in concat chains
   - folds adjacent compile-time string literals and lowers `const + value + const` into a dedicated `AddConstStringSurround` shape
-  - adds `AppendConstStringToLoc` plus per-frame local string builders for statement-form local self-concat loops
+  - adds `AppendConstStringToLoc0` plus a per-frame builder for the hottest statement-form local self-concat loop
+  - adds `AddConstStringSurroundValue` for the common `const + value + const + value` concat-chain shape
+  - adds a minimal deferred `RuntimeString` wrapper and serves `.length` from cached runtime-string lengths without forced flattening
 - `for_of_array`
   - removed full array cloning from `ForOfStart`
   - added `ForOfNext` branch fusion for the common `IfTrue` loop-exit shape

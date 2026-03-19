@@ -2,8 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **Note**: 中文版本 available at [CLAUDE.zh.md](CLAUDE.zh.md)
-
 ## Project Overview
 
 MQuickJS-RS is a **Research Project** — a pure safe Rust port of Fabrice Bellard's [MQuickJS](https://github.com/bellard/mquickjs) minimalist JavaScript engine. It implements an ES5 subset with a tracing mark-compact GC, stack-based bytecode VM, and no `unsafe` code.
@@ -109,7 +107,7 @@ This is a Cargo workspace with two members:
 ## Conventions
 
 - **Always verify after making changes** — After any code changes or running scripts, verify the output is as expected. Don't assume it works — test it.
-- **Bilingual docs must stay in sync** — `IMPLEMENTATION_PLAN.md` (English) and `IMPLEMENTATION_PLAN.zh.md` (Chinese) must always be updated together. When editing one, apply the equivalent change to the other in the same session. Similarly for `CLAUDE.md` / `CLAUDE.zh.md`.
+- **Bilingual docs must stay in sync** — `IMPLEMENTATION_PLAN.md` (English) and `IMPLEMENTATION_PLAN.zh.md` (Chinese) must always be updated together. When editing one, apply the equivalent change to the other in the same session.
 - **CI must pass** — run `cargo clippy -- -D warnings` and `cargo fmt --check` before considering work done.
 - **JS scripts** live in `js/examples/` (feature demos) and `js/tests/` (error handling tests). The top-level `examples/` is reserved for Rust examples by Cargo convention.
 - New opcodes go in [src/vm/opcode.rs](src/vm/opcode.rs), with the handler added in the interpreter's main `match` in [src/vm/interpreter.rs](src/vm/interpreter.rs).

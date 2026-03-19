@@ -672,8 +672,25 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 Some(c) => {
-                    self.advance();
-                    s.push(c as char);
+                    if c.is_ascii() {
+                        self.advance();
+                        s.push(c as char);
+                    } else {
+                        let rest = &self.source[self.pos..];
+                        match core::str::from_utf8(rest)
+                            .ok()
+                            .and_then(|rest| rest.chars().next())
+                        {
+                            Some(ch) => {
+                                self.pos += ch.len_utf8();
+                                self.column += 1;
+                                s.push(ch);
+                            }
+                            None => {
+                                return Token::Error("Invalid UTF-8 in string literal".to_string())
+                            }
+                        }
+                    }
                 }
             }
         }

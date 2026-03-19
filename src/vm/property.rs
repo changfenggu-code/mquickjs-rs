@@ -7,6 +7,7 @@ use super::interpreter::{
     BUILTIN_NUMBER, BUILTIN_OBJECT, BUILTIN_PERFORMANCE, BUILTIN_REGEXP, BUILTIN_STRING,
     BUILTIN_UINT16_ARRAY, BUILTIN_UINT32_ARRAY, BUILTIN_UINT8_ARRAY, BUILTIN_UINT8_CLAMPED_ARRAY,
 };
+use crate::util::unicode::utf16_len;
 use crate::value::Value;
 use alloc::format;
 
@@ -109,7 +110,7 @@ impl Interpreter {
                 // Get string length
                 if let Some(str_idx) = str_val.to_string_idx() {
                     if let Some(s) = self.get_string_by_idx(str_idx) {
-                        return Value::int(s.len() as i32);
+                        return Value::int(utf16_len(s) as i32);
                     }
                 }
                 Value::int(0)

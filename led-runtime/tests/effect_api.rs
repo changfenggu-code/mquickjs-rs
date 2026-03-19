@@ -1,4 +1,4 @@
-use led_runtime::{ConfigValue, EffectEngine, EffectManager};
+use led_runtime::{ConfigValue, EffectEngine, EffectError, EffectManager};
 use mquickjs::Context;
 
 const BLINK_JS: &str = include_str!("../js/effects/blink/effect.js");
@@ -8,12 +8,14 @@ const RAINBOW_JS: &str = include_str!("../js/effects/rainbow/effect.js");
 #[test]
 fn effect_engine_from_source_runs_blink() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let mut instance = engine.instantiate_from_expr("{ ledCount: 4 }").unwrap();
+    let mut instance = engine
+        .instantiate_from_expr("{ ledCount: 4, frameMs: 1000 }")
+        .unwrap();
 
     instance.start().unwrap();
     instance.tick().unwrap();
 
-    assert_eq!(instance.led_count().unwrap(), 4);
+    assert_eq!(instance.led_count(), 4);
     let leds = instance.led_buffer().unwrap();
     assert_eq!(leds.len(), 12);
     assert!(leds.iter().any(|b| *b != 0));
@@ -26,12 +28,14 @@ fn effect_engine_from_bytecode_runs_blink() {
     let bytes = bytecode.serialize();
 
     let engine = EffectEngine::from_bytecode(&bytes).unwrap();
-    let mut instance = engine.instantiate_from_expr("{ ledCount: 3 }").unwrap();
+    let mut instance = engine
+        .instantiate_from_expr("{ ledCount: 3, frameMs: 1000 }")
+        .unwrap();
 
     instance.start().unwrap();
     instance.tick().unwrap();
 
-    assert_eq!(instance.led_count().unwrap(), 3);
+    assert_eq!(instance.led_count(), 3);
     let leds = instance.led_buffer().unwrap();
     assert_eq!(leds.len(), 9);
 }
@@ -40,7 +44,7 @@ fn effect_engine_from_bytecode_runs_blink() {
 fn effect_instance_set_config_and_reset() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
     let mut instance = engine
-        .instantiate_from_expr("{ ledCount: 2, speed: 100 }")
+        .instantiate_from_expr("{ ledCount: 2, speed: 100, frameMs: 1000 }")
         .unwrap();
 
     instance.set_config("speed", ConfigValue::Int(500)).unwrap();
@@ -61,8 +65,12 @@ fn effect_instance_set_config_and_reset() {
 fn effect_engine_supports_multiple_independent_instances() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
 
-    let mut a = engine.instantiate_from_expr("{ ledCount: 2 }").unwrap();
-    let mut b = engine.instantiate_from_expr("{ ledCount: 5 }").unwrap();
+    let mut a = engine
+        .instantiate_from_expr("{ ledCount: 2, frameMs: 1000 }")
+        .unwrap();
+    let mut b = engine
+        .instantiate_from_expr("{ ledCount: 5, frameMs: 1000 }")
+        .unwrap();
 
     a.start().unwrap();
     b.start().unwrap();
@@ -71,8 +79,8 @@ fn effect_engine_supports_multiple_independent_instances() {
     let a_buf = a.led_buffer().unwrap().to_vec();
     let b_buf_before = b.led_buffer().unwrap().to_vec();
 
-    assert_eq!(a.led_count().unwrap(), 2);
-    assert_eq!(b.led_count().unwrap(), 5);
+    assert_eq!(a.led_count(), 2);
+    assert_eq!(b.led_count(), 5);
     assert_eq!(a_buf.len(), 6);
     assert_eq!(b_buf_before.len(), 15);
 
@@ -85,7 +93,9 @@ fn effect_engine_supports_multiple_independent_instances() {
 #[test]
 fn effect_instance_pause_resume_stop_lifecycle() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let mut instance = engine.instantiate_from_expr("{ ledCount: 3 }").unwrap();
+    let mut instance = engine
+        .instantiate_from_expr("{ ledCount: 3, frameMs: 1000 }")
+        .unwrap();
 
     instance.start().unwrap();
     instance.tick().unwrap();
@@ -111,7 +121,9 @@ fn effect_instance_pause_resume_stop_lifecycle() {
 #[test]
 fn effect_instance_set_config_changes_behavior() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
-    let mut instance = engine.instantiate_from_expr("{ ledCount: 2 }").unwrap();
+    let mut instance = engine
+        .instantiate_from_expr("{ ledCount: 2, frameMs: 1000 }")
+        .unwrap();
 
     instance
         .set_config(
@@ -141,6 +153,7 @@ fn effect_engine_instantiate_config_supports_nested_objects() {
     let engine = EffectEngine::from_source(BLINK_JS).unwrap();
     let config = ConfigValue::Object(vec![
         ("ledCount".into(), ConfigValue::Int(2)),
+        ("frameMs".into(), ConfigValue::Int(1000)),
         (
             "color".into(),
             ConfigValue::Object(vec![
@@ -186,6 +199,7 @@ fn structured_blink_config_can_instantiate_engine() {
     let config = ConfigValue::Object(vec![
         ("ledCount".into(), ConfigValue::Int(2)),
         ("speed".into(), ConfigValue::Int(100)),
+        ("frameMs".into(), ConfigValue::Int(1000)),
         (
             "color".into(),
             ConfigValue::Object(vec![
@@ -214,6 +228,7 @@ fn structured_rainbow_config_can_instantiate_engine() {
     let config = ConfigValue::Object(vec![
         ("ledCount".into(), ConfigValue::Int(3)),
         ("speed".into(), ConfigValue::Int(100)),
+        ("frameMs".into(), ConfigValue::Int(1000)),
         ("hueStep".into(), ConfigValue::Int(15)),
         ("hueSpread".into(), ConfigValue::Int(60)),
         ("saturation".into(), ConfigValue::Float(1.0)),
@@ -277,9 +292,11 @@ fn different_effect_engines_can_coexist() {
     let blink = EffectEngine::from_source(BLINK_JS).unwrap();
     let chase = EffectEngine::from_source(CHASE_JS).unwrap();
 
-    let mut blink_instance = blink.instantiate_from_expr("{ ledCount: 4 }").unwrap();
+    let mut blink_instance = blink
+        .instantiate_from_expr("{ ledCount: 4, frameMs: 1000 }")
+        .unwrap();
     let mut chase_instance = chase
-        .instantiate_from_expr("{ ledCount: 4, chaseCount: 1 }")
+        .instantiate_from_expr("{ ledCount: 4, chaseCount: 1, frameMs: 1000 }")
         .unwrap();
 
     blink_instance.start().unwrap();
@@ -301,9 +318,11 @@ fn interleaved_multi_script_instances_keep_independent_state() {
     let blink = EffectEngine::from_source(BLINK_JS).unwrap();
     let rainbow = EffectEngine::from_source(RAINBOW_JS).unwrap();
 
-    let mut blink_instance = blink.instantiate_from_expr("{ ledCount: 3 }").unwrap();
+    let mut blink_instance = blink
+        .instantiate_from_expr("{ ledCount: 3, frameMs: 1000 }")
+        .unwrap();
     let mut rainbow_instance = rainbow
-        .instantiate_from_expr("{ ledCount: 3, hueSpread: 60 }")
+        .instantiate_from_expr("{ ledCount: 3, hueSpread: 60, frameMs: 1000 }")
         .unwrap();
 
     blink_instance.start().unwrap();
@@ -337,10 +356,14 @@ fn effect_manager_can_activate_and_tick_instances() {
         .unwrap();
 
     let blink_idx = manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 3 }")
+        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 3, frameMs: 1000 }")
         .unwrap();
     let rainbow_idx = manager
-        .instantiate_from_expr("rainbow", "rainbow-a", "{ ledCount: 3, hueSpread: 60 }")
+        .instantiate_from_expr(
+            "rainbow",
+            "rainbow-a",
+            "{ ledCount: 3, hueSpread: 60, frameMs: 1000 }",
+        )
         .unwrap();
 
     manager.activate(blink_idx).unwrap();
@@ -373,10 +396,14 @@ fn effect_manager_switching_preserves_instance_state() {
         .unwrap();
 
     let blink_idx = manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
     let chase_idx = manager
-        .instantiate_from_expr("chase", "chase-a", "{ ledCount: 2, chaseCount: 1 }")
+        .instantiate_from_expr(
+            "chase",
+            "chase-a",
+            "{ ledCount: 2, chaseCount: 1, frameMs: 1000 }",
+        )
         .unwrap();
 
     manager.activate(blink_idx).unwrap();
@@ -410,10 +437,10 @@ fn effect_manager_can_activate_by_name_and_list_instances() {
     assert_eq!(manager.engine_count(), 2);
 
     manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
     manager
-        .instantiate_from_expr("rainbow", "rainbow-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("rainbow", "rainbow-a", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
 
     assert_eq!(manager.engine_names(), vec!["blink", "rainbow"]);
@@ -433,10 +460,10 @@ fn effect_manager_can_remove_instances() {
         .unwrap();
 
     let a = manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
     let _b = manager
-        .instantiate_from_expr("blink", "blink-b", "{ ledCount: 2 }")
+        .instantiate_from_expr("blink", "blink-b", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
 
     manager.activate(a).unwrap();
@@ -463,10 +490,10 @@ fn effect_manager_rejects_duplicate_names() {
         .is_err());
 
     manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
     assert!(manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2, frameMs: 1000 }")
         .is_err());
 }
 
@@ -481,13 +508,13 @@ fn effect_manager_can_query_and_remove_by_engine() {
         .unwrap();
 
     manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
     manager
-        .instantiate_from_expr("blink", "blink-b", "{ ledCount: 3 }")
+        .instantiate_from_expr("blink", "blink-b", "{ ledCount: 3, frameMs: 1000 }")
         .unwrap();
     manager
-        .instantiate_from_expr("rainbow", "rainbow-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("rainbow", "rainbow-a", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
 
     assert_eq!(
@@ -511,7 +538,10 @@ fn effect_manager_can_set_active_config() {
         .instantiate_config(
             "blink",
             "blink-a",
-            ConfigValue::Object(vec![("ledCount".into(), ConfigValue::Int(2))]),
+            ConfigValue::Object(vec![
+                ("ledCount".into(), ConfigValue::Int(2)),
+                ("frameMs".into(), ConfigValue::Int(1000)),
+            ]),
         )
         .unwrap();
 
@@ -543,7 +573,11 @@ fn effect_manager_can_reset_active() {
         .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
         .unwrap();
     manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2, speed: 100 }")
+        .instantiate_from_expr(
+            "blink",
+            "blink-a",
+            "{ ledCount: 2, speed: 100, frameMs: 1000 }",
+        )
         .unwrap();
 
     manager.activate_by_name("blink-a").unwrap();
@@ -566,7 +600,7 @@ fn effect_manager_can_read_active_memory_stats() {
         .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
         .unwrap();
     manager
-        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2 }")
+        .instantiate_from_expr("blink", "blink-a", "{ ledCount: 2, frameMs: 1000 }")
         .unwrap();
 
     manager.activate_by_name("blink-a").unwrap();
@@ -591,6 +625,7 @@ fn effect_manager_can_instantiate_with_structured_config() {
             ConfigValue::Object(vec![
                 ("ledCount".into(), ConfigValue::Int(2)),
                 ("speed".into(), ConfigValue::Int(100)),
+                ("frameMs".into(), ConfigValue::Int(1000)),
                 (
                     "color".into(),
                     ConfigValue::Object(vec![
@@ -610,4 +645,104 @@ fn effect_manager_can_instantiate_with_structured_config() {
     let leds = manager.active_led_buffer().unwrap().to_vec();
     assert_eq!(leds.len(), 6);
     assert_eq!(leds[0], 255);
+}
+
+// ── EffectError 枚举回归测试 ──
+
+#[test]
+fn duplicate_engine_returns_correct_error() {
+    let mut manager = EffectManager::new();
+    manager
+        .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
+        .unwrap();
+    let err = manager
+        .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
+        .unwrap_err();
+    assert_eq!(err, EffectError::DuplicateEngine);
+}
+
+#[test]
+fn duplicate_instance_returns_correct_error() {
+    let mut manager = EffectManager::new();
+    manager
+        .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
+        .unwrap();
+    manager
+        .instantiate_from_expr("blink", "a", "{ ledCount: 4, frameMs: 1000 }")
+        .unwrap();
+    let err = manager
+        .instantiate_from_expr("blink", "a", "{ ledCount: 4, frameMs: 1000 }")
+        .unwrap_err();
+    assert_eq!(err, EffectError::DuplicateInstance);
+}
+
+#[test]
+fn unknown_engine_returns_correct_error() {
+    let mut manager = EffectManager::new();
+    let err = manager
+        .instantiate_from_expr("nonexistent", "a", "{ ledCount: 4 }")
+        .unwrap_err();
+    assert_eq!(err, EffectError::UnknownEngine);
+}
+
+#[test]
+fn unknown_instance_returns_correct_error() {
+    let mut manager = EffectManager::new();
+    manager
+        .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
+        .unwrap();
+    let err = manager.activate_by_name("nonexistent").unwrap_err();
+    assert_eq!(err, EffectError::UnknownInstance);
+}
+
+#[test]
+fn invalid_index_returns_correct_error() {
+    let mut manager = EffectManager::new();
+    manager
+        .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
+        .unwrap();
+    let err = manager.activate(99).unwrap_err();
+    assert_eq!(err, EffectError::InvalidIndex { index: 99, max: 0 });
+}
+
+#[test]
+fn no_active_instance_returns_correct_error() {
+    let mut manager = EffectManager::new();
+    manager
+        .add_engine("blink", EffectEngine::from_source(BLINK_JS).unwrap())
+        .unwrap();
+    let err = manager.start_active().unwrap_err();
+    assert_eq!(err, EffectError::NoActiveInstance);
+}
+
+#[test]
+fn bytecode_version_error_returns_correct_variant() {
+    // 伪造一个错误版本的字节码（magic + 错误版本号）
+    let bad_bytes: Vec<u8> = b"MQJS"
+        .to_vec()
+        .into_iter()
+        .chain([99u8]) // version = 99
+        .chain([0u8; 10])
+        .collect();
+    let err = EffectEngine::from_bytecode(&bad_bytes).unwrap_err();
+    assert_eq!(
+        err,
+        EffectError::BytecodeVersion {
+            expected: 1,
+            found: 99
+        }
+    );
+}
+
+#[test]
+fn bytecode_deserialize_error_returns_correct_variant() {
+    // 伪造一个 magic 正确但内容损坏的字节码
+    let bad_bytes: Vec<u8> = b"MQJS"
+        .to_vec()
+        .into_iter()
+        .chain([1u8])
+        .chain(vec![0u8; 2])
+        .collect();
+    let err = EffectEngine::from_bytecode(&bad_bytes).unwrap_err();
+    assert_eq!(err, EffectError::BytecodeDeserialize);
 }

@@ -148,14 +148,20 @@ pub enum OpCode {
     GetField,
     /// Get property, keep object: obj -> obj val
     GetField2,
+    /// Get `.push`, keep object: obj -> obj val
+    GetArrayPush2,
     /// Set property by name: obj val ->
     PutField,
     /// Get array element: obj prop -> val
     GetArrayEl,
+    /// Get array element and discard the result: obj prop ->
+    GetArrayElDiscard,
     /// Get array element, keep object: obj prop -> obj val
     GetArrayEl2,
     /// Set array element: obj prop val ->
     PutArrayEl,
+    /// Statement-form array store with literal false: arr idx ->
+    PutArrayElFalseDrop,
     /// Get length property: obj -> val
     GetLength,
     /// Get length, keep object: obj -> obj val
@@ -250,6 +256,10 @@ pub enum OpCode {
     AddConstStringRight,
     /// Add with compile-time strings on both sides: "x" + a + "y"
     AddConstStringSurround,
+    /// Add with compile-time strings around two dynamic values: "x" + a + "y" + b
+    AddConstStringSurroundValue,
+    /// Statement-form local0 self-concat: local0 = local0 + "x"
+    AppendConstStringToLoc0,
     /// Subtract: a - b
     Sub,
     /// Power: a ** b
@@ -337,6 +347,8 @@ pub enum OpCode {
     GetLoc2,
     /// Get local 3
     GetLoc3,
+    /// Get local 4
+    GetLoc4,
     /// Set local 0
     PutLoc0,
     /// Set local 1
@@ -345,6 +357,20 @@ pub enum OpCode {
     PutLoc2,
     /// Set local 3
     PutLoc3,
+    /// Set local 4
+    PutLoc4,
+    /// Statement-form local += 1 for 8-bit local index
+    IncLoc8Drop,
+    /// Statement-form local0 += 1
+    IncLoc0Drop,
+    /// Statement-form local1 += 1
+    IncLoc1Drop,
+    /// Statement-form local2 += 1
+    IncLoc2Drop,
+    /// Statement-form local3 += 1
+    IncLoc3Drop,
+    /// Statement-form local4 += 1
+    IncLoc4Drop,
 
     /// Get argument 0
     GetArg0,
@@ -481,14 +507,20 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(3, 1, 1, OpFormat::Const16),
     // GetField2
     OpCodeInfo::new(3, 1, 2, OpFormat::Const16),
+    // GetArrayPush2
+    OpCodeInfo::new(1, 1, 2, OpFormat::None),
     // PutField
     OpCodeInfo::new(3, 2, 0, OpFormat::Const16),
     // GetArrayEl
     OpCodeInfo::new(1, 2, 1, OpFormat::None),
+    // GetArrayElDiscard
+    OpCodeInfo::new(1, 2, 0, OpFormat::None),
     // GetArrayEl2
     OpCodeInfo::new(1, 2, 2, OpFormat::None),
     // PutArrayEl
     OpCodeInfo::new(1, 3, 0, OpFormat::None),
+    // PutArrayElFalseDrop
+    OpCodeInfo::new(1, 2, 0, OpFormat::None),
     // GetLength
     OpCodeInfo::new(1, 1, 1, OpFormat::None),
     // GetLength2
@@ -573,6 +605,10 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(3, 1, 1, OpFormat::Const16),
     // AddConstStringSurround
     OpCodeInfo::new(5, 2, 1, OpFormat::U32),
+    // AddConstStringSurroundValue
+    OpCodeInfo::new(5, 3, 1, OpFormat::U32),
+    // AppendConstStringToLoc0
+    OpCodeInfo::new(3, 0, 0, OpFormat::Const16),
     // Sub
     OpCodeInfo::new(1, 2, 1, OpFormat::None),
     // Pow
@@ -651,6 +687,8 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(1, 0, 1, OpFormat::NoneLoc),
     // GetLoc3
     OpCodeInfo::new(1, 0, 1, OpFormat::NoneLoc),
+    // GetLoc4
+    OpCodeInfo::new(1, 0, 1, OpFormat::NoneLoc),
     // PutLoc0
     OpCodeInfo::new(1, 1, 0, OpFormat::NoneLoc),
     // PutLoc1
@@ -659,6 +697,20 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(1, 1, 0, OpFormat::NoneLoc),
     // PutLoc3
     OpCodeInfo::new(1, 1, 0, OpFormat::NoneLoc),
+    // PutLoc4
+    OpCodeInfo::new(1, 1, 0, OpFormat::NoneLoc),
+    // IncLoc8Drop
+    OpCodeInfo::new(2, 0, 0, OpFormat::Loc8),
+    // IncLoc0Drop
+    OpCodeInfo::new(1, 0, 0, OpFormat::NoneLoc),
+    // IncLoc1Drop
+    OpCodeInfo::new(1, 0, 0, OpFormat::NoneLoc),
+    // IncLoc2Drop
+    OpCodeInfo::new(1, 0, 0, OpFormat::NoneLoc),
+    // IncLoc3Drop
+    OpCodeInfo::new(1, 0, 0, OpFormat::NoneLoc),
+    // IncLoc4Drop
+    OpCodeInfo::new(1, 0, 0, OpFormat::NoneLoc),
     // GetArg0
     OpCodeInfo::new(1, 0, 1, OpFormat::NoneArg),
     // GetArg1

@@ -131,6 +131,8 @@ pub struct FunctionBytecode {
     pub stack_size: u16,
     /// Whether function uses 'arguments' object
     pub has_arguments: bool,
+    /// Whether this function can ever materialize the local0 string builder
+    pub uses_local0_string_builder: bool,
     /// The compiled bytecode
     pub bytecode: Vec<u8>,
     /// Constant pool
@@ -156,6 +158,7 @@ impl FunctionBytecode {
             local_count,
             stack_size: 0,
             has_arguments: false,
+            uses_local0_string_builder: false,
             bytecode: Vec::new(),
             constants: Vec::new(),
             string_constants: Vec::new(),
@@ -473,6 +476,7 @@ impl FunctionBytecode {
                 local_count,
                 stack_size,
                 has_arguments,
+                uses_local0_string_builder: false,
                 bytecode,
                 constants,
                 string_constants,

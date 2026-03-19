@@ -259,6 +259,109 @@
   - `array push 10k`：`0.609–0.621 ms`
   - `sieve 10k`：`2.045–2.084 ms`
 - 当前解读：这是一次小但干净的 dense-array 写路径优化，特别针对 `sieve` 里 `primes[j] = false;` 这种高频语句形状。
+- 2026-03-18：把更窄的 `PushFalse; PutArrayEl; Drop` 语句形状进一步专门化成了 `PutArrayElFalseDrop`，直接瞄准 `sieve` 内层循环里最热的布尔写入模式。
+- 补充了 compiler 回归覆盖，确认 `arr[idx] = false;` 现在会发出这个新 opcode；同时已有的赋值表达式和数组条件语义回归仍然保持通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `sieve 10k`：`1.638–1.668 ms`
+  - `array push 10k`：`0.556–0.563 ms`
+- 当前解读：这是第一条真正精准落在 `sieve` 核心 `primes[j] = false;` 写路径上的 dense-array 专门化，而且它又把这个 benchmark 往下推了一步，同时没有改变赋值表达式语义。
+- 2026-03-18：把最热的 `.push` 属性读取从通用 `GetField2` 里拆成了专门的 `GetArrayPush2` opcode，使数组初始化热循环在进入 `CallArrayPush1` 之前不再支付通用字符串属性分发成本。
+- 补充了 compiler 回归覆盖，确认 `arr.push(...)` 现在会发出 `GetArrayPush2`；同时新增了 eval 回归，锁定 `obj.push(side_effect())` 在 `obj` 为 `null` 时仍会先抛错，而不会先执行参数副作用。
+- 重新跑了针对性的 push/fallback 回归、全量引擎测试以及 `clippy -D warnings`，结果都通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `array push 10k`：`0.593–0.716 ms`
+  - `sieve 10k`：`1.718–1.753 ms`
+  - `dense array bool read branch 10k`：`1.139–1.153 ms`
+  - `dense array false write only 10k`：`1.500–1.770 ms`
+- 当前解读：这次更像是 dense-array 初始化路径的收益，而不是 `GetArrayEl` 读路径已经被真正打通；但它干净地去掉了 `sieve` 风格数组预热里最热的那层通用 `.push` 属性读取，对新增的 dense-array 诊断 benchmark 也有明确帮助。
+- 2026-03-18：新增了一组 `dense_array_bool_condition_only_hot` 诊断脚本/benchmark，用来把反复执行的 `GetArrayEl + IfFalse` 扫描形状单独拎出来，不再混入 `count = count + 1` 这层额外累加工作。
+- `dump_bytecode` 现在可以直接看到，这个 benchmark 会被编译成最接近目标热点的 `GetArrayEl; IfFalse; IncLoc; Goto` 形状，它是当前最干净的 dense-array 读侧分支复现器。
+- 当前解读：后续 dense-array 读侧调优，现在应该同时参考三种由“混合”到“纯”的诊断形状：`dense array bool read branch 10k`、`dense array bool read hot`、`dense array bool condition only hot`。
+- 2026-03-18：继续新增了一组 `dense_array_read_only_hot` 诊断脚本/benchmark，用来把反复执行的 `GetArrayEl; Drop; IncLoc; Goto` 纯读取扫描单独拎出来，完全不再混入条件分支。
+- `dump_bytecode` 现在可以直接看到，这个 benchmark 是当前最干净的“纯数组读取成本”复现器，可以和 truthiness 分支、计数累加这两层完全分开看。
+- 当前解读：后续 dense-array 读侧调优，现在应该同时参考四种由“混合”到“纯”的诊断形状：
+  - `dense array bool read branch 10k`
+  - `dense array bool read hot`
+  - `dense array bool condition only hot`
+  - `dense array read only hot`
+- 2026-03-19：保留了 `GetArrayElDiscard`，专门承接被立刻丢弃结果的语句形数组读取（`arr[idx];`），这样“纯读取”诊断路径不再额外支付通用 `Drop` 的成本。
+- 补充了 compiler/eval 回归覆盖，确认被丢弃的数组读取现在会降到这个专门 opcode，同时周围程序行为保持不变。
+- 2026-03-19：保留了专门的 `GetArrayElDiscard` 语句形读取 opcode，用来承接被立刻丢弃结果的 `arr[idx];`。这样可以在不改变表达式或分支语义的前提下，保留一条更纯的“只看读取”诊断路径。
+- 补充了回归覆盖，确认被丢弃的数组读取仍然会正常求值并继续执行后续语句。
+- 2026-03-18：最后又新增了一组 `dense_array_loop_only_hot` 诊断脚本/benchmark，把数组读取本身也完全剥掉，只测反复执行的 `Lte; IncLoc; Goto` 纯循环骨架。
+- `dump_bytecode` 现在可以直接看到，这个基线会被编译成最纯的 `PushI16; Lte; IfFalse; IncLoc; Goto` 形状。
+- 当前解读：dense-array 读侧现在已经可以被分解成五层诊断：
+  - `dense array loop only hot`
+  - `dense array read only hot`
+  - `dense array bool condition only hot`
+  - `dense array bool read hot`
+  - `dense array bool read branch 10k`
+  每往后一层，都只比前一层多出真实工作负载中的一块成本。
+- 2026-03-19：继续新增了成对的 `arg0` / `local1` 对照诊断，用来把“数组在 `local0`”和“数组在非 0 槽位”分开测：
+  - `dense array read only hot arg0`
+  - `dense array read only hot local1`
+  - `dense array bool condition only hot arg0`
+  - `dense array bool condition only hot local1`
+- 当前解读：在控制了函数字节码形状和参数个数之后，`local0` 与非 0 槽位之间剩余的差别现在看起来更像小而噪声化的因素，`GetLoc0` 还不足以被判断为当前读侧的主瓶颈。
+- 2026-03-19：新增了 `analyze_dense_array_layers`，用来在一次运行里直接给出各诊断层之间的 delta，避免后续 read-side 优化再手工拼多组 benchmark 输出来做归因。
+- 当前解读：后续在继续打 `GetArrayEl` 之前，优先用 `analyze_dense_array_layers` 判断“真正还贵的是哪一层”，再决定要不要动执行器。
+- 2026-03-19：把 dense-array 索引访问里反复出现的“数组值 + 非负整型索引”解码收成了一条共享的 raw 快路径 helper，并让 `GetArrayEl`、`GetArrayElDiscard`、`PutArrayEl`、`PutArrayElFalseDrop` 共用它。
+- 重新跑了 `cargo check -p mquickjs-rs`、全量 `cargo test -p mquickjs-rs` 以及 `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`，结果都通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `sieve 10k`：`1.3173–1.3389 ms`
+  - `dense array bool read hot`：`68.603–69.468 ms`
+  - `dense array bool condition only hot`：`57.001–58.300 ms`
+- 当前解读：这次收紧终于直接落在 dense-array 索引读写 opcode 本体内部，而不再只是围绕循环骨架或数组初始化路径做外围优化。
+- 2026-03-19：继续把 `GetArrayEl` 的分支 bookkeeping 收紧了一层，把融合后的 `GetArrayEl + IfFalse/IfTrue` 热路径里临时的 `Option<(bool, i32)>` 分支窥探状态改成了更直接的 opcode/offset 局部变量形状。
+- 重新跑了全量 `cargo test -p mquickjs-rs` 和 `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`，结果都通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `dense array bool read hot`：`81.896–87.290 ms`
+  - `dense array bool condition only hot`：`71.628–77.040 ms`
+  - `sieve 10k`：`1.6203–1.7606 ms`
+- 当前解读：这是一条非常窄的 `GetArrayEl` 内部整理，它对读密集的融合分支 workload 有正向帮助，同时没有把更广义的 `sieve` 主路径拖成可测回归。
+- 2026-03-19：继续把融合后的 `GetArrayEl + IfFalse/IfTrue` 分支窥探再收紧了一层，把热路径里的 opcode/offset 解码改成了“单次长度检查 + unchecked 取字节”的形状。
+- 重新跑了 `cargo check -p mquickjs-rs`、全量 `cargo test -p mquickjs-rs` 以及 `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`，结果都通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `sieve 10k`：`1.3077–1.3308 ms`
+  - `dense array bool read hot`：`73.169–74.204 ms`
+  - `dense array bool condition only hot`：`59.915–60.797 ms`
+- 当前解读：这又是一条很窄的 `GetArrayEl` bookkeeping 收益，而且这次在“纯条件扫描”和“读 + 累加”两类 dense-array 读侧 workload 上都能稳定看到改善。
+- 2026-03-19：把 `GetArrayElDiscard` 的 dense-array 快路径判定从会返回 tuple 的 `dense_array_access()` 里拆了出来，单独做成了更轻的布尔判断，这样被立刻丢弃结果的纯读取路径不再为用不上的 `(arr_idx, index)` 解码付费。
+- 重新跑了 `cargo check -p mquickjs-rs`、全量 `cargo test -p mquickjs-rs` 以及 `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`，结果都通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `dense array read only hot`：`51.587–52.737 ms`
+  - `dense array read only hot arg0`：`50.887–51.752 ms`
+  - `dense array read only hot local1`：`52.082–52.993 ms`
+  - `sieve 10k`：`1.3022–1.3268 ms`
+- 当前解读：这是一条小而真实的纯读取路径收益，它继续把更纯的 `GetArrayElDiscard` 诊断基线往下压，同时没有扰动更广义的数组语义。
+- 2026-03-19：继续放宽了 `GetArrayElDiscard` 的 dense-array 快路径判定，让它在普通数组上遇到“任意整型索引”的被丢弃读取时都可以直接视作 no-op，而不再坚持沿用产生值的数组读取那套“必须先解码非负索引”的条件。
+- 补充了 eval 回归覆盖，确认被丢弃的负索引读取（`arr[-1];`）仍然只会等价于一次被忽略的 `undefined` 读取，程序会正常继续执行。
+- 重新跑了 `cargo check -p mquickjs-rs`、针对性的 eval 回归以及 `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`，结果都通过。全量 `cargo test -p mquickjs-rs` 也已通过，只是后续又遇到了与这次改动无关的 Windows linker/pagefile 波动。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `dense array read only hot`：`51.587–52.737 ms`
+  - `dense array read only hot arg0`：`50.887–51.752 ms`
+  - `dense array read only hot local1`：`52.082–52.993 ms`
+  - `sieve 10k`：`1.3022–1.3268 ms`
+- 当前解读：这又是一条非常窄但稳定的 `GetArrayElDiscard` 纯读路径收益，它继续瞄准的是最纯的读取诊断基线，而不是更广义的分支型 `GetArrayEl` workload。
+- 2026-03-18：新增了一组 `IncLoc*Drop` 专门 opcode，用来承接“结果会被立刻丢弃的 `local = local + 1` 语句更新”，并把循环增量和 dense-array 读侧计数里最热的那批尾巴重写成这组指令。
+- 补充了 compiler 回归覆盖，确认 `var i = 0; i = i + 1;` 现在会降到这组专门 opcode；同时新增了语义回归，锁定 `var x = 'a'; x = x + 1;` 仍然保留字符串拼接语义。
+- `dump_bytecode` 现在可以直接看到 dense-array 读侧诊断样例已经被编成更紧凑的 `IncLoc{1,2,3,4}Drop` 尾巴，而不再反复出现 `Push1; Add; Dup; PutLocX; Drop` 这串骨架。
+- 重新跑了全量引擎测试以及 `clippy -D warnings`，结果都通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `loop 10k`：`0.416–0.477 ms`
+  - `sieve 10k`：`1.496–1.514 ms`
+  - `dense array bool read branch 10k`：`0.804–0.822 ms`
+  - `dense array bool read hot`：`69.67–70.63 ms`
+  - `dense array false write then read hot`：`60.76–61.67 ms`
+- 当前解读：这是当前 dense-array 阶段里第一条真正把剩余“读侧循环骨架”明显压下去的优化；它对经典 `loop` 基线也有帮助，但最大的收获是 `GetArrayEl` 周围原本要支付的大量局部自增 bookkeeping 成本现在明显更低了。
+- 2026-03-18：继续收紧了 `GetArrayEl` 自身的分支融合快路径，让最热的“数组 + 整数索引 + 条件分支”形状先直接处理 `true` / `false` / `null` / `undefined` / int 这些常见 truthiness，再回退到通用 helper。
+- 重新跑了全量引擎测试以及 `clippy -D warnings`，结果都通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `sieve 10k`：`1.795–2.085 ms`（无显著变化）
+  - `dense array bool read branch 10k`：`0.919–1.118 ms`（无显著变化）
+  - `dense array bool read hot`：`72.35–73.37 ms`
+  - `dense array bool condition only hot`：`69.42–78.77 ms`
+- 当前解读：这是一条很小的读侧 truthiness 优化，它最明显的收益出现在更纯的 `GetArrayEl + IfFalse` 诊断基线上，而在更大的混合形状 benchmark 上基本保持中性。
 
 ### 9.1.5 Opcode dispatch 收紧 [已彻底完成]
 
@@ -332,9 +435,31 @@
   - `loop 10k`：`0.444–0.451 ms`
   - `sieve 10k`：`1.663–1.709 ms`
 - 当前解读：slot 4 短 opcode 这条线在复跑后仍然成立，应视为稳定的 opcode/local-slot 优化成果，而不是一次性的测量波动。
+- 2026-03-18：新增了一个小型 `dump_bytecode` 开发者工具，使热点 benchmark 脚本现在可以直接编译并反汇编，而不再只能靠 opcode 计数去反推字节码形状。
+- 2026-03-18：重新调整了 C-style `for` 的 lowering 方式：增量段仍然只编译一次，但改为追加到 body 之后，从而去掉了首轮执行时那条“先跳过增量段”的额外 `Goto`。
+- 补充了 compiler 回归覆盖，确认简单 `for (...)` 循环现在只会发出一条回边 `Goto`；同时重新跑通了 `for` / `continue` / `break` / “loop 内 switch” 相关回归。
+- 变更后重新跑了全量引擎测试以及 `clippy -D warnings`，结果通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `loop 10k`：`0.555–0.659 ms`
+  - `sieve 10k`：`1.917–2.219 ms`
+  - `dense array bool read branch 10k`：`1.367–1.669 ms`
+  - `dense array bool read hot`：`131.93–152.53 ms`
+  - `dense array false write then read hot`：`87.45–100.89 ms`
+- 当前解读：这次更像是控制流骨架层面的收益，而不是只打中了 `GetArrayEl` 本体；但它正好落在 dense-array 读侧诊断里现在最重的那类字节码形状上，也把所有 C-style `for` 循环里一个真实存在的结构性冗余去掉了。
+- 2026-03-18：新增了 `IncLoc*Drop` 这一组“语句形局部自增” opcode，并把最热的、结果会被丢弃的 `local = local + 1` 字节码尾巴重写成这组专门指令，同时保留了字符串局部变量上的完整 `+` 语义。
+- 补充了 compiler 回归覆盖，确认 `var i = 0; i = i + 1;` 现在会降到专门 opcode；同时新增了语义回归，锁定 `var x = 'a'; x = x + 1;` 仍然会得到字符串结果。
+- `dump_bytecode` 现在可以直接看到 dense-array 读侧诊断样例已经被编成更紧凑的 `IncLoc{1,2,3,4}Drop` 尾巴，而不再反复出现 `Push1; Add; Dup; PutLocX; Drop` 这一整串骨架。
+- 变更后重新跑了全量引擎测试以及 `clippy -D warnings`，结果通过。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `loop 10k`：`0.483–0.602 ms`
+  - `sieve 10k`：`1.633–1.726 ms`
+  - `dense array bool read branch 10k`：`0.803–0.822 ms`
+  - `dense array bool read hot`：`86.07–105.53 ms`
+  - `dense array false write then read hot`：`64.41–67.69 ms`
+- 当前解读：这是当前 dense-array 阶段里第一条真正把剩余“读侧循环骨架”明显压下去的优化；它对经典 `loop` 基线也有帮助，但最大的收获是新增的 dense-array 读侧诊断 benchmark 现在在 `GetArrayEl` 周围支付的局部自增 bookkeeping 成本明显更低了。
 - 状态：作为当前这一轮 dispatch 收紧工作，这部分现在可以视为完成；只有在新的 profiling 明确指出另一组 materially different 热 opcode 时，才需要重新打开。
 
-### 9.1.6 算术/比较微优化轮次
+### 9.1.6 算术/比较微优化轮次 [已彻底完成]
 
 **优先级**: P1
 
@@ -384,13 +509,32 @@
   - `string concat 1k`：`166.97–171.99 µs`
   - `method_chain 5k`：`624.57–638.70 µs`
 - 当前解读：这是一条更强、更结构化的 concat 链优化，对目标 runtime-string benchmark 的收益非常明确；但它看起来会拖慢更简单的 `string concat 1k` 微基准，所以后续需要专门解释并收回这条回归，而不能把字符串路径直接视为“已经打完”。
-- 2026-03-17：新增了语句级的 `AppendConstStringToLoc` lowering，并配套引入了按 frame 存活的局部字符串 builder，专门覆盖 `local = local + "const";` 这一个热点形状，让简单的局部自拼接循环不再每次迭代都物化新的 runtime string。
-- 补充了 compiler 回归覆盖，确认 `var s = ''; s = s + 'x';` 现在会发出新 lowering；并重新跑了对应的 eval 回归。
+- 2026-03-18：新增了一个非常窄的语句级 `AppendConstStringToLoc0` lowering，并配套引入了仅服务于局部槽位 `0` 的 per-frame builder，专门覆盖 `var s = ''; s = s + 'x';` 这一个热点形状。
+- 补充了 compiler 回归覆盖，确认这一个精确形状现在会发出新 lowering；并重新跑了对应的 eval 回归。
 - 当前工作树上的 dump 模式热点探测显示，`string_concat` 的 concat 运行时字符串创建次数已经从 `1000` 降到 `1`。
 - 在当前执行期 Criterion 口径下，选定重跑结果为：
-  - `string concat 1k`：`80.99–83.35 µs`
-  - `runtime_string_pressure 4k`：`955.72–974.98 µs`
-- 当前解读：这条基于 builder 的局部自拼接优化，终于把 `string concat 1k` 这条微基准真正拉下来了，而且没有再回到前面那些通用运行时 peephole 的失败路径；同时更广义的 `runtime_string_pressure` 仍然停留在同一个亚毫秒量级，没有被重新拖成新的主要回归热点。
+  - `string concat 1k`：`81.24–83.26 µs`
+  - `runtime_string_pressure 4k`：`909.74–921.95 µs`
+  - `method_chain 5k`：`708.67–724.79 µs`
+- 当前解读：这条基于 builder 的局部自拼接优化，终于把 `string concat 1k` 这条微基准真正拉下来了，而且没有再回到前面那些通用运行时 peephole 的失败路径；同时更广义的 `runtime_string_pressure` 仍然停留在同一个亚毫秒量级，而 `method_chain` 现在更适合描述为“仍然保持在亚毫秒区间”，而不是继续沿用更早那条贴着 `0.60 ms` 的说法。
+- 2026-03-18：把 concat-chain lowering 再往前推了一步，新增了 `AddConstStringSurroundValue`，让最热的 `const + value + const + value` 形状也能再少掉一个中间 concat 结果。
+- 补充了 compiler 回归覆盖，确认 `'a' + x + 'b' + y` 现在会发出这个四段 lowering。
+- 当前工作树上的 dump 模式热点探测显示，`runtime_string_pressure` 的 concat 运行时字符串创建次数已经从 `8001` 进一步降到 `4001`，`Add` 总执行次数也从 `16000` 降到 `12000`。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `runtime_string_pressure 4k`：`841.41–855.24 µs`
+  - `string concat 1k`：`82.79–84.89 µs`
+  - `string concat ephemeral 1k`：`113.15–118.99 µs`
+  - `method_chain 5k`：`736.57–751.78 µs`
+- 当前解读：这让字符串主线又收窄了一层，剩下真正没解决的部分更加集中到“通用增长字符串表示”本身。目标 runtime-string benchmark 明显受益，而 `string concat` 和 `method_chain` 仍然留在可接受的区间里。
+- 2026-03-18：引入了一个最小可用的延迟 `RuntimeString` 包装层，并让 `.length` 直接读取 cached runtime-string length，而不是先把延迟 concat 节点强制 flatten。
+- 这一步保住了前面那些局部自拼接和 concat-chain lowering 的收益，同时把之前“取 `.length` 时被强制物化”带回来的回归重新压了下去。
+- 在当前执行期 Criterion 口径下，选定重跑结果为：
+  - `runtime_string_pressure 4k`：`869.62–887.11 µs`
+  - `string concat 1k`：`78.61–80.20 µs`
+  - `string concat ephemeral 1k`：`118.18–121.41 µs`
+  - `method_chain 5k`：`715.62–730.29 µs`
+- 当前解读：字符串主线现在终于更像一个完整的体系了。局部自拼接已经解决，目标 runtime-string benchmark 在 cached-length 路径下重新变快，而剩下真正需要决策的，是不是要把延迟字符串表示继续推广，而不再是“当前这条窄路径有没有明显回归”。
+- 状态：作为当前这一轮算术/字符串拼接微优化阶段，这部分现在可以视为完成；后续如果继续做字符串主线，应归类为更广义的字符串表示改造项目，而不是继续把它当作零碎的热 opcode 清理。
 - 2026-03-16：通过为同值、整数和布尔比较添加直接快速路径（在回退到较慢的通用处理之前），改善了 `StrictEq` / `StrictNeq` 热 opcode 处理。
 - 现有的 switch 语义回归测试已成功重新运行。
 - Benchmark 结果：`switch 1k` 在 Criterion 中从约 `145–149 μs` 量级提升到 `132–136 μs`。

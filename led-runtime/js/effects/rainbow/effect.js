@@ -56,21 +56,36 @@ function makeBlank(ledCount) {
 }
 /**
  * Create a base LED state machine with common lifecycle methods.
+ *
+ * speed: animation tempo in ms (e.g. 500 = change state every 500ms).
+ *        This is NOT the frame rate. The host calls tick() at a fixed
+ *        frame rate (e.g. 30fps / 33ms). The machine internally counts
+ *        elapsed time and only advances the animation when >= speed ms
+ *        have passed.
+ * frameMs: time between tick() calls in ms (default 33, ~30fps).
  */
-function createBaseMachine(ledCount, speed, handlers) {
+function createBaseMachine(ledCount, speed, frameMs, handlers) {
+    var _elapsed = 0;
     const machine = {
         status: 'idle',
         speed: speed,
+        frameMs: frameMs,
         ledCount: ledCount,
         leds: makeBlank(ledCount),
         tick: function () {
             if (machine.status !== 'running')
                 return;
-            handlers.tick(machine);
+            _elapsed = _elapsed + machine.frameMs;
+            if (_elapsed >= machine.speed) {
+                _elapsed = _elapsed - machine.speed;
+                handlers.tick(machine);
+            }
         },
         start: function () {
-            if (machine.status === 'idle')
+            if (machine.status === 'idle') {
                 machine.status = 'running';
+                _elapsed = 0;
+            }
         },
         pause: function () {
             if (machine.status === 'running')
@@ -82,6 +97,7 @@ function createBaseMachine(ledCount, speed, handlers) {
         },
         stop: function () {
             machine.status = 'idle';
+            _elapsed = 0;
             if (handlers.reset)
                 handlers.reset();
             machine.leds = makeBlank(ledCount);
@@ -90,6 +106,8 @@ function createBaseMachine(ledCount, speed, handlers) {
         setConfig: function (key, value) {
             if (key === 'speed')
                 machine.speed = value;
+            else if (key === 'frameMs')
+                machine.frameMs = value;
             else if (handlers.setConfig)
                 handlers.setConfig(key, value);
         }
@@ -106,7 +124,7 @@ function createEffect(config) {
     let saturation = cfg.saturation != null ? cfg.saturation : 1;
     let brightness = cfg.brightness != null ? cfg.brightness : 1;
     let offset = 0;
-    return createBaseMachine(ledCount, cfg.speed || 100, {
+    return createBaseMachine(ledCount, cfg.speed || 100, cfg.frameMs || 33, {
         tick: function (m) {
             const buf = m.leds;
             for (let i = 0; i < ledCount; i++) {

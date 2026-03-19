@@ -176,6 +176,101 @@ fn bench_sieve(c: &mut Criterion) {
     bench_compiled(c, "sieve 10k", 256 * 1024, code);
 }
 
+fn bench_dense_array_bool_read_branch(c: &mut Criterion) {
+    let code = r#"
+        var arr = [];
+        for (var i = 0; i <= 10000; i = i + 1) {
+            arr.push(true);
+        }
+        arr[0] = false;
+        arr[1] = false;
+
+        var count = 0;
+        for (var i = 0; i <= 10000; i = i + 1) {
+            if (arr[i]) count = count + 1;
+        }
+        return count;
+    "#;
+
+    bench_compiled(c, "dense array bool read branch 10k", 256 * 1024, code);
+}
+
+fn bench_dense_array_false_write_only(c: &mut Criterion) {
+    let code = r#"
+        var arr = [];
+        for (var i = 0; i <= 10000; i = i + 1) {
+            arr.push(true);
+        }
+
+        for (var i = 0; i <= 10000; i = i + 1) {
+            arr[i] = false;
+        }
+
+        var sum = 0;
+        for (var i = 0; i <= 10000; i = i + 1) {
+            if (arr[i]) sum = sum + 1;
+        }
+        return sum;
+    "#;
+
+    bench_compiled(c, "dense array false write only 10k", 256 * 1024, code);
+}
+
+fn bench_dense_array_bool_read_hot(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_bool_read_hot.js");
+    bench_compiled(c, "dense array bool read hot", 256 * 1024, code);
+}
+
+fn bench_dense_array_bool_condition_only_hot(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_bool_condition_only_hot.js");
+    bench_compiled(c, "dense array bool condition only hot", 256 * 1024, code);
+}
+
+fn bench_dense_array_bool_condition_only_hot_arg0(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_bool_condition_only_hot_arg0.js");
+    bench_compiled(
+        c,
+        "dense array bool condition only hot arg0",
+        256 * 1024,
+        code,
+    );
+}
+
+fn bench_dense_array_bool_condition_only_hot_local1(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_bool_condition_only_hot_local1.js");
+    bench_compiled(
+        c,
+        "dense array bool condition only hot local1",
+        256 * 1024,
+        code,
+    );
+}
+
+fn bench_dense_array_read_only_hot(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_read_only_hot.js");
+    bench_compiled(c, "dense array read only hot", 256 * 1024, code);
+}
+
+fn bench_dense_array_read_only_hot_arg0(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_read_only_hot_arg0.js");
+    bench_compiled(c, "dense array read only hot arg0", 256 * 1024, code);
+}
+
+fn bench_dense_array_read_only_hot_local1(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_read_only_hot_local1.js");
+    bench_compiled(c, "dense array read only hot local1", 256 * 1024, code);
+}
+
+fn bench_dense_array_loop_only_hot(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_loop_only_hot.js");
+    bench_compiled(c, "dense array loop only hot", 256 * 1024, code);
+}
+
+fn bench_dense_array_false_write_then_read_hot(c: &mut Criterion) {
+    let code = include_str!("scripts/dense_array_false_write_then_read_hot.js");
+    bench_compiled(c, "dense array false write then read hot", 256 * 1024, code);
+}
+
 fn bench_recursion(c: &mut Criterion) {
     // Benchmark recursion with a simpler function
     let code = r#"
@@ -336,6 +431,17 @@ criterion_group!(
     bench_string_concat_ephemeral,
     bench_json_parse,
     bench_sieve,
+    bench_dense_array_bool_read_branch,
+    bench_dense_array_false_write_only,
+    bench_dense_array_bool_read_hot,
+    bench_dense_array_bool_condition_only_hot,
+    bench_dense_array_bool_condition_only_hot_arg0,
+    bench_dense_array_bool_condition_only_hot_local1,
+    bench_dense_array_read_only_hot,
+    bench_dense_array_read_only_hot_arg0,
+    bench_dense_array_read_only_hot_local1,
+    bench_dense_array_loop_only_hot,
+    bench_dense_array_false_write_then_read_hot,
     bench_recursion,
     bench_switch,
     bench_do_while,

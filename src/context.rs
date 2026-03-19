@@ -76,6 +76,8 @@ impl From<CompileError> for EvalError {
 /// Memory usage statistics
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MemoryStats {
+    /// Number of GC cycles completed
+    pub gc_count: u32,
     /// Total memory size
     pub heap_size: usize,
     /// Currently allocated memory boundary (heap pointer position)
@@ -267,6 +269,7 @@ impl Context {
             + interp_stats.typed_arrays * ESTIMATED_TYPEDARRAY_BYTES;
 
         MemoryStats {
+            gc_count: interp_stats.gc_count,
             heap_size: self.heap.total_size,
             used: self.heap.heap_used(),
             stack_used: self.heap.stack_used(),

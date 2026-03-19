@@ -23,6 +23,12 @@ fn test_strings() {
 }
 
 #[test]
+fn test_raw_utf8_string_literal() {
+    let mut lexer = Lexer::new("\"caf\u{00E9}\"");
+    assert_eq!(lexer.next_token(), Token::String("café".to_string()));
+}
+
+#[test]
 fn test_identifiers_and_keywords() {
     let mut lexer = Lexer::new("foo var if else");
 

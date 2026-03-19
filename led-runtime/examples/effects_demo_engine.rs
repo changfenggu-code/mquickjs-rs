@@ -76,6 +76,8 @@ fn run_effect(name: &str, js: &str) {
     print!("  {name} :");
     println!();
 
+    // 步骤 1：编译 JS 源码为字节码，创建引擎
+    // from_source 内部会创建一个临时 Context(48KB) 完成编译，编译完即释放
     let engine = match EffectEngine::from_source(js) {
         Ok(engine) => engine,
         Err(e) => {
@@ -84,7 +86,10 @@ fn run_effect(name: &str, js: &str) {
         }
     };
 
-    let mut instance = match engine.instantiate_from_expr("{ ledCount: 20 }") {
+    // 步骤 2：实例化效果，注入配置（ledCount: 20 表示 20 颗灯）
+    // 内部创建运行时 Context(32KB)，加载字节码，执行 createEffect(config)
+    // 并预编译 tick/start/stop 等调用脚本
+    let mut instance = match engine.instantiate_from_expr("{ ledCount: 20, frameMs: 80 }") {
         Ok(instance) => instance,
         Err(e) => {
             eprintln!("  ERROR: {}", e);
@@ -92,25 +97,25 @@ fn run_effect(name: &str, js: &str) {
         }
     };
 
+    // 步骤 3：启动效果（调用 JS 的 start()，执行初始化逻辑）
     if let Err(e) = instance.start() {
         eprintln!("  ERROR: {}", e);
         return;
     }
 
+    // 步骤 4：主循环，每帧驱动一次动画
     for frame in 0..FRAMES {
+        // 4a：执行一帧（调用 JS 的 tick()，更新内部 leds 数组）
         if let Err(e) = instance.tick() {
             eprintln!("  ERROR: {}", e);
             return;
         }
 
-        let led_count = match instance.led_count() {
-            Ok(count) => count,
-            Err(e) => {
-                eprintln!("  ERROR: {}", e);
-                return;
-            }
-        };
+        // 4b：读取 LED 数量（已缓存，无 JS 调用开销）
+        let led_count = instance.led_count();
 
+        // 4c：读取 LED 颜色缓冲区（从 JS 的 leds Uint8Array，格式 [R,G,B,R,G,B,...]）
+        // 在嵌入式场景中，这里拿到的 &[u8] 直接传给硬件驱动（如 WS2812）
         let data = match instance.led_buffer() {
             Ok(data) => data,
             Err(e) => {
@@ -119,6 +124,7 @@ fn run_effect(name: &str, js: &str) {
             }
         };
 
+        // 4d：渲染到终端（demo 用，嵌入式替换为 drive_leds(data)）
         render_frame(data, led_count, frame, FRAMES);
     }
 }

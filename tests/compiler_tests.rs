@@ -128,6 +128,12 @@ fn test_compile_comparison() {
     assert_eq!(func.bytecode[2], OpCode::Lt as u8);
 }
 
+#[test]
+fn test_compile_pow_assign_emits_pow() {
+    let func = Compiler::new("var x = 2; x **= 3;").compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::Pow as u8)));
+}
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -148,6 +154,20 @@ fn test_compile_var_usage() {
     assert!(func.bytecode.contains(&(OpCode::GetLoc0 as u8)));
 }
 
+#[test]
+fn test_compile_local_slot4_uses_short_form() {
+    let source = "var a=1,b=2,c=3,d=4,e=5; e;";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::GetLoc4 as u8)));
+}
+
+#[test]
+fn test_compile_local_inc_statement_rewrite() {
+    let source = "var i = 0; i = i + 1;";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::IncLoc0Drop as u8)));
+}
+
 // ---------------------------------------------------------------------------
 // Control flow
 // ---------------------------------------------------------------------------
@@ -158,6 +178,15 @@ fn test_compile_if_statement() {
     let func = Compiler::new(source).compile().unwrap();
     // Should contain IfFalse jump
     assert!(func.bytecode.contains(&(OpCode::IfFalse as u8)));
+    assert!(!func.bytecode.contains(&(OpCode::Goto as u8)));
+}
+
+#[test]
+fn test_compile_if_else_still_uses_goto() {
+    let source = "var x = 1; if (x) { x; } else { 0; }";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::IfFalse as u8)));
+    assert!(func.bytecode.contains(&(OpCode::Goto as u8)));
 }
 
 #[test]
@@ -167,6 +196,18 @@ fn test_compile_while_loop() {
     // Should contain IfFalse and Goto
     assert!(func.bytecode.contains(&(OpCode::IfFalse as u8)));
     assert!(func.bytecode.contains(&(OpCode::Goto as u8)));
+}
+
+#[test]
+fn test_compile_for_loop_uses_single_back_edge_goto() {
+    let source = "for (var i = 0; i < 3; i = i + 1) { }";
+    let func = Compiler::new(source).compile().unwrap();
+    let goto_count = func
+        .bytecode
+        .iter()
+        .filter(|&&op| op == OpCode::Goto as u8)
+        .count();
+    assert_eq!(goto_count, 1);
 }
 
 #[test]
@@ -198,6 +239,46 @@ fn test_compile_add_const_string_surround_specialization() {
     assert!(func
         .bytecode
         .contains(&(OpCode::AddConstStringSurround as u8)));
+}
+
+#[test]
+fn test_compile_add_const_string_surround_value_specialization() {
+    let source = "var x = 1, y = 2; 'a' + x + 'b' + y;";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func
+        .bytecode
+        .contains(&(OpCode::AddConstStringSurroundValue as u8)));
+}
+
+#[test]
+fn test_compile_append_const_string_to_loc0_specialization() {
+    let source = "var s = ''; s = s + 'x';";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func
+        .bytecode
+        .contains(&(OpCode::AppendConstStringToLoc0 as u8)));
+}
+
+#[test]
+fn test_compile_put_array_false_drop_specialization() {
+    let source = "var arr = [true]; arr[0] = false;";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::PutArrayElFalseDrop as u8)));
+}
+
+#[test]
+fn test_compile_discarded_array_read_specialization() {
+    let source = "var arr = [1]; arr[0];";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::GetArrayElDiscard as u8)));
+}
+
+#[test]
+fn test_compile_get_array_push2_specialization() {
+    let source = "var arr = []; arr.push(true);";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::GetArrayPush2 as u8)));
+    assert!(!func.bytecode.contains(&(OpCode::GetField2 as u8)));
 }
 
 #[test]

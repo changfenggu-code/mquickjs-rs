@@ -1,4 +1,19 @@
 /target
-Cargo.lock
-_tmp_*.pdb
-_tmp_*.txt
+
+# Temporary files
+_tmp_*
+*.bak
+*.tmp
+
+# Claude Code local settings (personal, not shared)
+.claude/settings.local.json
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

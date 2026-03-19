@@ -148,8 +148,10 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 - `json` 仍然是 Rust 引擎的相对优势项。
 - 更新后的执行期口径重跑说明，`fib` 和 `loop` 仍然是调用路径与 dispatch 的有效观察窗。
 - `array` 和 `sieve` 仍然是 dense array 与 builtin 调用成本的重要观察窗。
-- 在 parser/compiler 噪声被削弱之后，`runtime_string_pressure` 和 `method_chain` 在最新完整重跑里又有一轮明显改善；其中 `method_chain` 仍然基本贴着 `0.60 ms` 目标线，而 `runtime_string_pressure` 现在又吃到了更深一层 concat-chain lowering 的收益，运行时字符串创建次数明显下降。不过，更简单的 `string concat 1k` 微基准在最新定向重跑里出现了回归，所以这条字符串路线还不能算彻底收尾。
-- 更新后的语句级局部自拼接 lowering（`AppendConstStringToLoc`）已经把专门的 `string concat 1k` 微基准明显拉下来了，并把它的运行时字符串创建次数降到了 `1`；与此同时，更广义的 `runtime_string_pressure` 仍然保持在同一个亚毫秒量级。
+- `runtime_string_pressure` 和 `method_chain` 仍然是高价值的运行时目标。最新一轮字符串专项重跑里，`runtime_string_pressure` 落在 `0.87–0.89 ms` 量级，`method_chain` 落在 `0.72–0.73 ms` 量级。
+- 更新后的窄范围语句级局部自拼接 lowering（`AppendConstStringToLoc0`）已经把专门的 `string concat 1k` 微基准明显拉下来了，并把它的运行时字符串创建次数降到了 `1`；与此同时，更广义的 `runtime_string_pressure` 仍然保持在同一个亚毫秒量级。
+- 在这之上，`AddConstStringSurroundValue` 又把最热的 `const + value + const + value` 形状继续合并了一层，使 `runtime_string_pressure` 的 concat 运行时字符串创建次数从 `8001` 进一步降到 `4001`。
+- 对当前这一轮优化来说，字符串主线已经达到了可接受的阶段目标：专门的 `string concat 1k` 路径已修好，`runtime_string_pressure` 仍然保持在亚毫秒量级，同时 `method_chain` 没有再被字符串优化拖坏。后续如果继续做字符串线，更适合视为一个更广义的字符串表示改造项目。
 - `for_of_array` 在 `ForOfNext` 分支融合之后又有一轮明显改善，现在健康得多，但仍然是有价值的迭代器/控制流观察窗。
 - `deep_property` 仍然是高价值的对象属性访问 benchmark，而且当前看起来比迭代器/字符串压力这组路径更健康。
 - `switch_case` 现已作为次要控制流 benchmark 被跟踪，最新的 `StrictEq` 热路径优化已显示出可测量的改善。
@@ -182,7 +184,9 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
   - 为十进制循环索引主导的 `string + int` / `int + string` 拼接形状新增更窄的快路径
   - 为 concat 链里的编译期字符串片段新增字节码级 `AddConstStringLeft` / `AddConstStringRight` 专门化
   - 对相邻字符串字面量做编译期折叠，并把 `const + value + const` lowering 成专门的 `AddConstStringSurround`
-  - 为语句级 `local = local + "const"` 引入 `AppendConstStringToLoc` 和按 frame 存活的局部字符串 builder
+  - 为语句级 `local0 = local0 + "const"` 引入 `AppendConstStringToLoc0` 和只服务于局部槽位 `0` 的 per-frame builder
+  - 为 `const + value + const + value` 引入 `AddConstStringSurroundValue`
+  - 引入一个最小可用的延迟 `RuntimeString` 包装层，并让 `.length` 直接读取 cached runtime-string length
 - `for_of_array`
   - 从 `ForOfStart` 中去除完整数组克隆
   - 为 `ForOfNext` 常见 `IfTrue` 退出形状增加分支融合

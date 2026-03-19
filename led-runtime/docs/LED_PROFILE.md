@@ -32,10 +32,14 @@
 - `createEffect(config)`：创建效果实例
 - 返回对象至少包含：
   - `status` — 当前状态字符串："idle" / "running" / "paused" / "stopped"
-  - `speed` — 播放速度（帧每秒或像素/秒）
-  - `ledCount` — LED 灯珠数量（即 leds.length）
-  - `leds: Uint8Array` — LED 颜色数据数组（每字节一个灯）
-  - `tick()` — 帧更新函数，动画每帧调用一次
+  - `speed` — 动画节奏（毫秒），控制效果内部状态变化的时间间隔，**不是帧率**。
+    例如 blink 的 `speed=500` 表示每 500ms 切换一次亮灭，与宿主调用 `tick()` 的频率无关。
+    宿主以固定帧率（如 30fps / 33ms）调用 `tick()`，效果内部根据 `speed` 和帧间隔自行计数。
+  - `frameMs` — 宿主调用 `tick()` 的时间间隔（毫秒），默认 33（约 30fps）。
+    由宿主在创建时通过 config 传入，效果内部据此计算 `speed` 对应的 tick 次数。
+  - `ledCount` — LED 灯珠数量（即 leds.length / 3）
+  - `leds: Uint8Array` — LED 颜色数据数组（长度 = ledCount * 3，格式 [R,G,B, R,G,B, ...]）
+  - `tick()` — 帧更新函数，宿主以固定帧率调用。效果内部自行决定是否推进动画状态
   - `start()` — 开始播放效果（idle → running）
   - `pause()` — 暂停效果（running → paused）
   - `resume()` — 恢复播放（paused → running）

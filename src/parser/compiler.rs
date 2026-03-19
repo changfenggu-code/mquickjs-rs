@@ -19,8 +19,6 @@ const MAX_CONSTANTS: usize = 65536;
 struct Local {
     name: String,
     depth: u32,
-    /// Whether this local is captured by an inner function
-    is_captured: bool,
 }
 
 /// Captured variable info (for closures)
@@ -92,6 +90,12 @@ pub struct Compiler<'a> {
     /// If the most recently parsed expression was a pure compile-time string,
     /// record its string index and the start offset of its emitted bytecode.
     last_expr_string_const: Option<(u16, usize)>,
+    /// If the most recently parsed expression was a pure boolean literal,
+    /// record its value and the start offset of its emitted bytecode.
+    last_expr_bool_const: Option<(bool, usize)>,
+    /// If the most recently parsed expression ended with `AddConstStringSurround`,
+    /// record its const string indices and opcode start offset.
+    last_expr_concat_surround: Option<(u16, u16, usize)>,
 }
 
 impl<'a> Compiler<'a> {
@@ -120,6 +124,8 @@ impl<'a> Compiler<'a> {
             outer_captures: None,
             last_var_ref: None,
             last_expr_string_const: None,
+            last_expr_bool_const: None,
+            last_expr_concat_surround: None,
         }
     }
 
@@ -435,13 +441,137 @@ impl<'a> Compiler<'a> {
             || self.rewrite_last_add_const_string_surround(right_idx)
     }
 
+    fn try_rewrite_discarded_local0_string_concat(&mut self) -> bool {
+        let len = self.bytecode.len();
+        if len < 6
+            || self.bytecode[len - 1] != OpCode::PutLoc0 as u8
+            || self.bytecode[len - 2] != OpCode::Dup as u8
+            || self.bytecode[len - 6] != OpCode::GetLoc0 as u8
+            || self.bytecode[len - 5] != OpCode::AddConstStringRight as u8
+        {
+            return false;
+        }
+
+        let str_idx = u16::from_le_bytes([self.bytecode[len - 4], self.bytecode[len - 3]]);
+        self.bytecode.truncate(len - 6);
+        self.emit_op(OpCode::AppendConstStringToLoc0);
+        self.emit_u16(str_idx);
+        true
+    }
+
+    fn try_rewrite_discarded_put_array_false(&mut self) -> bool {
+        let len = self.bytecode.len();
+        if len < 2
+            || self.bytecode[len - 1] != OpCode::PutArrayEl as u8
+            || self.bytecode[len - 2] != OpCode::PushFalse as u8
+        {
+            return false;
+        }
+
+        self.bytecode.truncate(len - 2);
+        self.emit_op(OpCode::PutArrayElFalseDrop);
+        true
+    }
+
+    fn try_rewrite_discarded_get_array_el(&mut self) -> bool {
+        let len = self.bytecode.len();
+        if len < 1 || self.bytecode[len - 1] != OpCode::GetArrayEl as u8 {
+            return false;
+        }
+
+        self.bytecode.truncate(len - 1);
+        self.emit_op(OpCode::GetArrayElDiscard);
+        true
+    }
+
+    fn try_rewrite_discarded_local_inc_one(&mut self) -> bool {
+        let len = self.bytecode.len();
+        if len < 5 {
+            return false;
+        }
+
+        let tail = &self.bytecode;
+
+        let rewrite_short = |this: &mut Self, start: usize, op: OpCode| {
+            this.bytecode.truncate(start);
+            this.emit_op(op);
+        };
+
+        if tail[len - 1] == OpCode::PutLoc0 as u8
+            && tail[len - 2] == OpCode::Dup as u8
+            && tail[len - 3] == OpCode::Add as u8
+            && tail[len - 4] == OpCode::Push1 as u8
+            && tail[len - 5] == OpCode::GetLoc0 as u8
+        {
+            rewrite_short(self, len - 5, OpCode::IncLoc0Drop);
+            return true;
+        }
+        if tail[len - 1] == OpCode::PutLoc1 as u8
+            && tail[len - 2] == OpCode::Dup as u8
+            && tail[len - 3] == OpCode::Add as u8
+            && tail[len - 4] == OpCode::Push1 as u8
+            && tail[len - 5] == OpCode::GetLoc1 as u8
+        {
+            rewrite_short(self, len - 5, OpCode::IncLoc1Drop);
+            return true;
+        }
+        if tail[len - 1] == OpCode::PutLoc2 as u8
+            && tail[len - 2] == OpCode::Dup as u8
+            && tail[len - 3] == OpCode::Add as u8
+            && tail[len - 4] == OpCode::Push1 as u8
+            && tail[len - 5] == OpCode::GetLoc2 as u8
+        {
+            rewrite_short(self, len - 5, OpCode::IncLoc2Drop);
+            return true;
+        }
+        if tail[len - 1] == OpCode::PutLoc3 as u8
+            && tail[len - 2] == OpCode::Dup as u8
+            && tail[len - 3] == OpCode::Add as u8
+            && tail[len - 4] == OpCode::Push1 as u8
+            && tail[len - 5] == OpCode::GetLoc3 as u8
+        {
+            rewrite_short(self, len - 5, OpCode::IncLoc3Drop);
+            return true;
+        }
+        if tail[len - 1] == OpCode::PutLoc4 as u8
+            && tail[len - 2] == OpCode::Dup as u8
+            && tail[len - 3] == OpCode::Add as u8
+            && tail[len - 4] == OpCode::Push1 as u8
+            && tail[len - 5] == OpCode::GetLoc4 as u8
+        {
+            rewrite_short(self, len - 5, OpCode::IncLoc4Drop);
+            return true;
+        }
+
+        if len >= 7
+            && tail[len - 1] == tail[len - 6]
+            && tail[len - 2] == OpCode::PutLoc8 as u8
+            && tail[len - 3] == OpCode::Dup as u8
+            && tail[len - 4] == OpCode::Add as u8
+            && tail[len - 5] == OpCode::Push1 as u8
+            && tail[len - 7] == OpCode::GetLoc8 as u8
+        {
+            let idx = tail[len - 1];
+            self.bytecode.truncate(len - 7);
+            self.emit_op(OpCode::IncLoc8Drop);
+            self.emit_byte(idx);
+            return true;
+        }
+
+        false
+    }
+
     /// Emit local variable get
+    ///
+    /// Captured locals still compile to local slot ops in the owning function.
+    /// The interpreter redirects those ops through shared cells at runtime.
     fn emit_get_local(&mut self, index: usize) {
         match index {
             0 => self.emit_op(OpCode::GetLoc0),
             1 => self.emit_op(OpCode::GetLoc1),
             2 => self.emit_op(OpCode::GetLoc2),
             3 => self.emit_op(OpCode::GetLoc3),
+            4 => self.emit_op(OpCode::GetLoc4),
             i if i < 256 => {
                 self.emit_op(OpCode::GetLoc8);
                 self.emit_byte(i as u8);
@@ -454,12 +584,16 @@ impl<'a> Compiler<'a> {
     }
 
     /// Emit local variable set
+    ///
+    /// Captured locals still compile to local slot ops in the owning function.
+    /// The interpreter redirects those ops through shared cells at runtime.
     fn emit_set_local(&mut self, index: usize) {
         match index {
             0 => self.emit_op(OpCode::PutLoc0),
             1 => self.emit_op(OpCode::PutLoc1),
             2 => self.emit_op(OpCode::PutLoc2),
             3 => self.emit_op(OpCode::PutLoc3),
+            4 => self.emit_op(OpCode::PutLoc4),
             i if i < 256 => {
                 self.emit_op(OpCode::PutLoc8);
                 self.emit_byte(i as u8);
@@ -504,6 +638,18 @@ impl<'a> Compiler<'a> {
     /// Patch a jump instruction to jump to the current position
     fn patch_jump(&mut self, patch: JumpPatch) {
         let target = self.bytecode.len() as i32;
+        let jump_end = (patch.offset + 4) as i32;
+        let offset = target - jump_end;
+
+        self.bytecode[patch.offset] = (offset & 0xff) as u8;
+        self.bytecode[patch.offset + 1] = ((offset >> 8) & 0xff) as u8;
+        self.bytecode[patch.offset + 2] = ((offset >> 16) & 0xff) as u8;
+        self.bytecode[patch.offset + 3] = ((offset >> 24) & 0xff) as u8;
+    }
+
+    /// Patch a jump instruction to jump to a specific bytecode offset.
+    fn patch_jump_to_target(&mut self, patch: JumpPatch, target: usize) {
+        let target = target as i32;
         let jump_end = (patch.offset + 4) as i32;
         let offset = target - jump_end;
 
@@ -581,7 +727,6 @@ impl<'a> Compiler<'a> {
         self.locals.push(Local {
             name: name.to_string(),
             depth: self.scope_depth,
-            is_captured: false,
         });
 
         // Track maximum locals for frame allocation
@@ -613,14 +758,9 @@ impl<'a> Compiler<'a> {
         }
 
         // Try to resolve from outer function's locals
-        if let Some(ref mut outer_locals) = self.outer_locals.clone() {
+        if let Some(outer_locals) = self.outer_locals.as_mut() {
             for (i, local) in outer_locals.iter().enumerate().rev() {
                 if local.name == name {
-                    // Mark the outer local as captured
-                    if let Some(ref mut locals) = self.outer_locals {
-                        locals[i].is_captured = true;
-                    }
-
                     // Add a new capture
                     let capture_idx = self.captures.len();
                     self.captures.push(Capture {
@@ -634,19 +774,21 @@ impl<'a> Compiler<'a> {
         }
 
         // Try to resolve from outer function's captures (nested closure)
-        if let Some(ref outer_captures) = self.outer_captures.clone() {
-            for (i, capture) in outer_captures.iter().enumerate() {
-                if capture.name == name {
-                    // Add a new capture that references outer's capture
-                    let capture_idx = self.captures.len();
-                    self.captures.push(Capture {
-                        name: name.to_string(),
-                        outer_index: i,
-                        is_local: false,
-                    });
-                    return Some(capture_idx);
-                }
-            }
+        let outer_capture_index = self.outer_captures.as_ref().and_then(|outer_captures| {
+            outer_captures
+                .iter()
+                .enumerate()
+                .find_map(|(i, capture)| (capture.name == name).then_some(i))
+        });
+        if let Some(i) = outer_capture_index {
+            // Add a new capture that references outer's capture
+            let capture_idx = self.captures.len();
+            self.captures.push(Capture {
+                name: name.to_string(),
+                outer_index: i,
+                is_local: false,
+            });
+            return Some(capture_idx);
         }
 
         None
@@ -950,20 +1092,21 @@ impl<'a> Compiler<'a> {
 
         // Jump over then branch if condition is false
         let then_jump = self.emit_jump(OpCode::IfFalse);
+        let body_start = self.current_offset();
 
         self.statement()?;
 
-        // Jump over else branch
-        let else_jump = self.emit_jump(OpCode::Goto);
-
-        self.patch_jump(then_jump);
-
         // Parse else branch if present
         if self.match_token(&Token::Else) {
+            // Jump over else branch
+            let else_jump = self.emit_jump(OpCode::Goto);
+            self.patch_jump(then_jump);
             self.statement()?;
+            self.patch_jump(else_jump);
+        } else {
+            let _ = body_start;
+            self.patch_jump(then_jump);
         }
-
-        self.patch_jump(else_jump);
 
         Ok(())
     }
@@ -1254,16 +1397,15 @@ impl<'a> Compiler<'a> {
             None
         };
 
-        // Increment (executed at end of each iteration)
-        let increment_start = if !self.check(&Token::RParen) {
-            // Jump over increment initially
-            let body_jump = self.emit_jump(OpCode::Goto);
-            let inc_start = self.current_offset();
+        // Increment bytecode is compiled now but appended after the body so
+        // the initial iteration no longer needs an extra jump over it.
+        let increment_code = if !self.check(&Token::RParen) {
+            let start = self.bytecode.len();
             self.expression()?;
-            self.emit_op(OpCode::Drop); // Discard increment result
-            self.emit_loop(loop_start);
-            self.patch_jump(body_jump);
-            Some(inc_start)
+            if !self.try_rewrite_discarded_local_inc_one() {
+                self.emit_op(OpCode::Drop); // Discard increment result
+            }
+            Some(self.bytecode.split_off(start))
         } else {
             None
         };
@@ -1271,8 +1413,13 @@ impl<'a> Compiler<'a> {
         self.expect(Token::RParen)?;
 
         // Push loop context for break/continue
-        // Continue should jump to increment section if present, otherwise loop start
-        let continue_target = increment_start.unwrap_or(loop_start);
+        // Continue should jump to the increment section if present, but we
+        // only know its final offset after the body has been emitted.
+        let continue_target = if increment_code.is_some() {
+            usize::MAX
+        } else {
+            loop_start
+        };
         self.loop_stack.push(LoopContext {
             continue_target,
             break_patches: Vec::new(),
@@ -1284,9 +1431,18 @@ impl<'a> Compiler<'a> {
         // Body
         self.statement()?;
 
-        // Loop back (to increment if present, otherwise to condition)
-        if let Some(inc) = increment_start {
-            self.emit_loop(inc);
+        // Append increment section after the body and then jump back to the condition.
+        if let Some(code) = increment_code {
+            let increment_start = self.current_offset();
+            let continue_patches = {
+                let ctx = self.loop_stack.last_mut().unwrap();
+                core::mem::take(&mut ctx.continue_patches)
+            };
+            for patch in continue_patches {
+                self.patch_jump_to_target(patch, increment_start);
+            }
+            self.bytecode.extend_from_slice(&code);
+            self.emit_loop(loop_start);
         } else {
             self.emit_loop(loop_start);
         }
@@ -1577,6 +1733,14 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    fn parse_finally_clause(&mut self) -> Result<(), CompileError> {
+        self.expect(Token::Finally)?;
+        if !self.check(&Token::LBrace) {
+            return Err(self.syntax_error("Expected '{' after finally"));
+        }
+        self.block_statement()
+    }
+
     /// Parse try-catch-finally statement
     fn try_statement(&mut self) -> Result<(), CompileError> {
         self.advance(); // consume 'try'
@@ -1598,9 +1762,7 @@ impl<'a> Compiler<'a> {
         self.emit_op(OpCode::DropCatch);
 
         // Jump over catch block
-        self.emit_op(OpCode::Goto);
-        let end_jump = self.bytecode.len();
-        self.emit_i32(0); // placeholder
+        let end_jump = self.emit_jump(OpCode::Goto);
 
         // Patch catch jump target (points here - start of catch block)
         let catch_target = self.bytecode.len() as i32;
@@ -1651,32 +1813,36 @@ impl<'a> Compiler<'a> {
                 self.block_statement()?;
             }
         } else {
-            // No catch clause - we still need to handle the exception value
-            // For now, just re-throw it (must have finally)
+            // No catch clause. If there is a finally block, duplicate it on the
+            // exception path before re-throwing the original exception value.
+        }
+
+        let finally_state = if self.check(&Token::Finally) {
+            Some((
+                self.lexer.clone(),
+                self.current_token.clone(),
+                self.previous_token.clone(),
+                self.current_pos,
+            ))
+        } else {
+            None
+        };
+
+        if !has_catch {
+            if finally_state.is_some() {
+                self.parse_finally_clause()?;
+            }
             self.emit_op(OpCode::Throw);
         }
 
-        // Patch end jump (points here - after catch block)
-        let end_target = self.bytecode.len() as i32;
-        let end_offset = end_target - (end_jump as i32 + 4);
-        self.patch_i32(end_jump, end_offset);
+        self.patch_jump(end_jump);
 
-        // Check for finally clause
-        if self.check(&Token::Finally) {
-            self.advance(); // consume 'finally'
-
-            // Parse finally body
-            if !self.check(&Token::LBrace) {
-                return Err(self.syntax_error("Expected '{' after finally"));
-            }
-            self.block_statement()?;
-        }
-
-        // Must have at least catch or finally
-        if !has_catch && !self.check(&Token::Finally) {
-            // Already consumed finally if present, so check the previous token
-            // Actually this check is wrong - we consumed finally above
-            // Let's just allow try without catch/finally for now (will still work)
+        if let Some((lexer, current_token, previous_token, current_pos)) = finally_state {
+            self.lexer = lexer;
+            self.current_token = current_token;
+            self.previous_token = previous_token;
+            self.current_pos = current_pos;
+            self.parse_finally_clause()?;
         }
 
         Ok(())
@@ -1701,7 +1867,13 @@ impl<'a> Compiler<'a> {
     fn expression_statement(&mut self) -> Result<(), CompileError> {
         self.expression()?;
         self.expect(Token::Semicolon)?;
-        self.emit_op(OpCode::Drop); // Discard expression value
+        if !self.try_rewrite_discarded_local0_string_concat()
+            && !self.try_rewrite_discarded_local_inc_one()
+            && !self.try_rewrite_discarded_get_array_el()
+            && !self.try_rewrite_discarded_put_array_false()
+        {
+            self.emit_op(OpCode::Drop); // Discard expression value
+        }
         Ok(())
     }
 
@@ -1726,6 +1898,8 @@ impl<'a> Compiler<'a> {
             }
 
             let left_const_string = self.last_expr_string_const.take();
+            self.last_expr_bool_const = None;
+            let left_concat_surround = self.last_expr_concat_surround.take();
             let op = self.current_token.clone();
             self.advance();
 
@@ -1733,6 +1907,8 @@ impl<'a> Compiler<'a> {
             if prec == Precedence::Assignment {
                 self.assignment_expr(&op)?;
                 self.last_expr_string_const = None;
+                self.last_expr_bool_const = None;
+                self.last_expr_concat_surround = None;
                 continue;
             }
 
@@ -1740,6 +1916,8 @@ impl<'a> Compiler<'a> {
             if matches!(op, Token::Question) {
                 self.ternary_expr()?;
                 self.last_expr_string_const = None;
+                self.last_expr_bool_const = None;
+                self.last_expr_concat_surround = None;
                 continue;
             }
 
@@ -1747,6 +1925,8 @@ impl<'a> Compiler<'a> {
             if matches!(op, Token::AmpAmp | Token::PipePipe) {
                 self.short_circuit_expr(&op)?;
                 self.last_expr_string_const = None;
+                self.last_expr_bool_const = None;
+                self.last_expr_concat_surround = None;
                 continue;
             }
 
@@ -1759,7 +1939,12 @@ impl<'a> Compiler<'a> {
 
             self.parse_precedence(next_prec)?;
             let right_const_string = self.last_expr_string_const.take();
-            self.emit_binary_op(&op, left_const_string, right_const_string)?;
+            self.emit_binary_op(
+                &op,
+                left_const_string,
+                left_concat_surround,
+                right_const_string,
+            )?;
         }
 
         Ok(())
@@ -1770,6 +1955,7 @@ impl<'a> Compiler<'a> {
         // Clear last variable reference (set when we parse an identifier)
         self.last_var_ref = None;
         self.last_expr_string_const = None;
+        self.last_expr_bool_const = None;
         match &self.current_token {
             // Literals
             Token::Number(n) => {
@@ -1830,12 +2016,16 @@ impl<'a> Compiler<'a> {
                 }
             }
             Token::True => {
+                let start = self.bytecode.len();
                 self.advance();
                 self.emit_op(OpCode::PushTrue);
+                self.last_expr_bool_const = Some((true, start));
             }
             Token::False => {
+                let start = self.bytecode.len();
                 self.advance();
                 self.emit_op(OpCode::PushFalse);
+                self.last_expr_bool_const = Some((false, start));
             }
             Token::Null => {
                 self.advance();
@@ -1935,6 +2125,7 @@ impl<'a> Compiler<'a> {
                         Token::LtLtEq => self.emit_op(OpCode::Shl),
                         Token::GtGtEq => self.emit_op(OpCode::Sar),
                         Token::GtGtGtEq => self.emit_op(OpCode::Shr),
+                        Token::StarStarEq => self.emit_op(OpCode::Pow),
                         _ => {}
                     }
 
@@ -2009,11 +2200,9 @@ impl<'a> Compiler<'a> {
                         self.emit_get_capture(idx);
                     } else {
                         self.emit_op(OpCode::GetGlobalOrUndefined);
-                        let const_idx = self.add_constant(Value::string(0));
-                        // Replace temp constant with actual compile-time string constant
                         let str_idx = self.string_constants.len() as u16;
                         self.string_constants.push(name);
-                        self.constants[const_idx as usize] = Value::string(str_idx);
+                        let const_idx = self.add_constant(Value::string(str_idx));
                         self.emit_u16(const_idx);
                     }
                 } else {
@@ -2182,6 +2371,9 @@ impl<'a> Compiler<'a> {
             match &self.current_token {
                 // Function call
                 Token::LParen => {
+                    self.last_expr_string_const = None;
+                    self.last_expr_bool_const = None;
+                    self.last_expr_concat_surround = None;
                     self.advance();
                     let arg_count = self.argument_list()?;
                     self.emit_op(OpCode::Call);
@@ -2190,6 +2382,9 @@ impl<'a> Compiler<'a> {
 
                 // Array access: a[b] or a[b] = c
                 Token::LBracket => {
+                    self.last_expr_string_const = None;
+                    self.last_expr_bool_const = None;
+                    self.last_expr_concat_surround = None;
                     self.advance();
                     self.expression()?;
                     self.expect(Token::RBracket)?;
@@ -2206,6 +2401,9 @@ impl<'a> Compiler<'a> {
 
                 // Member access: a.b or a.b = c or a.b()
                 Token::Dot => {
+                    self.last_expr_string_const = None;
+                    self.last_expr_bool_const = None;
+                    self.last_expr_concat_surround = None;
                     self.advance();
                     if let Token::Ident(name) = &self.current_token {
                         let name = name.clone();
@@ -2228,13 +2426,18 @@ impl<'a> Compiler<'a> {
                             self.emit_u16(str_idx);
                         } else if self.check(&Token::LParen) {
                             self.advance(); // consume LParen
-                                            // Method calls need the receiver duplicated before
+                                            // Most method calls need the receiver duplicated before
                                             // argument evaluation so calls see
                                             // `[this, method, arg0, ...]`.
-                            self.emit_op(OpCode::GetField2);
-                            self.emit_u16(str_idx);
+                            if is_push {
+                                self.emit_op(OpCode::GetArrayPush2);
+                            } else {
+                                self.emit_op(OpCode::GetField2);
+                                self.emit_u16(str_idx);
+                            }
                             let arg_count = self.argument_list()?;
                             if is_push && arg_count == 1 {
+                                self.last_expr_bool_const = None;
                                 self.emit_op(OpCode::CallArrayPush1);
                             } else if is_map && arg_count == 1 {
                                 self.emit_op(OpCode::CallArrayMap1);
@@ -2261,6 +2464,9 @@ impl<'a> Compiler<'a> {
                 // Post-increment: i++
                 Token::PlusPlus => {
                     if let Some((is_local, idx)) = self.last_var_ref.take() {
+                        self.last_expr_string_const = None;
+                        self.last_expr_bool_const = None;
+                        self.last_expr_concat_surround = None;
                         self.advance();
                         // Old value is on stack (expression result)
                         // Duplicate it, increment, store back
@@ -2280,6 +2486,9 @@ impl<'a> Compiler<'a> {
                 // Post-decrement: i--
                 Token::MinusMinus => {
                     if let Some((is_local, idx)) = self.last_var_ref.take() {
+                        self.last_expr_string_const = None;
+                        self.last_expr_bool_const = None;
+                        self.last_expr_concat_surround = None;
                         self.advance();
                         self.emit_op(OpCode::Dup);
                         self.emit_op(OpCode::Dec);
@@ -2603,9 +2812,11 @@ impl<'a> Compiler<'a> {
         &mut self,
         op: &Token,
         left_const_string: Option<(u16, usize)>,
+        left_concat_surround: Option<(u16, u16, usize)>,
         right_const_string: Option<(u16, usize)>,
     ) -> Result<(), CompileError> {
         self.last_expr_string_const = None;
+        self.last_expr_concat_surround = None;
         match op {
             Token::Plus => {
                 if let (Some((left_idx, left_start)), Some((right_idx, _right_start))) =
@@ -2635,6 +2846,11 @@ impl<'a> Compiler<'a> {
                         self.emit_op(OpCode::AddConstStringRight);
                         self.emit_u16(str_idx);
                     }
+                } else if let Some((left_idx, right_idx, surround_start)) = left_concat_surround {
+                    self.bytecode.drain(surround_start..surround_start + 5);
+                    self.emit_op(OpCode::AddConstStringSurroundValue);
+                    self.emit_u16(left_idx);
+                    self.emit_u16(right_idx);
                 } else if let Some((str_idx, _)) = left_const_string {
                     self.emit_op(OpCode::AddConstStringLeft);
                     self.emit_u16(str_idx);
@@ -2666,6 +2882,12 @@ impl<'a> Compiler<'a> {
             _ => {
                 return Err(self.syntax_error(format!("Unknown binary operator: {:?}", op)));
             }
+        }
+        let len = self.bytecode.len();
+        if len >= 5 && self.bytecode[len - 5] == OpCode::AddConstStringSurround as u8 {
+            let left_idx = u16::from_le_bytes([self.bytecode[len - 4], self.bytecode[len - 3]]);
+            let right_idx = u16::from_le_bytes([self.bytecode[len - 2], self.bytecode[len - 1]]);
+            self.last_expr_concat_surround = Some((left_idx, right_idx, len - 5));
         }
         Ok(())
     }

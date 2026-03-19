@@ -1,102 +1,140 @@
 # GC Implementation Progress
 
-This document tracks the implementation of **Plan B: Mark-Sweep GC** for mquickjs-rs.
+This document tracks the implementation of Plan B: mark-sweep GC for `mquickjs-rs`.
 
-**Start date**: 2026-03-19
-**Strategy**: Generation-based mark-sweep on existing Vec-index architecture (no pointer changes)
-**Upstream**: [docs/ENGINE_OPTIMIZATION_TASKLIST.md](ENGINE_OPTIMIZATION_TASKLIST.md) — Section 9.2
-
----
+Start date: 2026-03-19
+Strategy: generation-based mark-sweep on the existing `Vec`-index architecture
+Upstream: [docs/ENGINE_OPTIMIZATION_TASKLIST.md](ENGINE_OPTIMIZATION_TASKLIST.md), section `9.2`
 
 ## Acceptance Criteria
 
-- [ ] `cargo test -p mquickjs-rs` — all 458 tests pass
-- [ ] `cargo test -p led-runtime` — all led-runtime tests pass
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo build --release --no-default-features` — no_std compiles
-- [ ] Benchmark: memory usage visibly decreases after GC vs before
-- [ ] `gc_count` stat increments during execution
-- [ ] Cycle reference `{ let a = {}; a.self = a; }` is collected after GC
-- [ ] Free slot reuse: dead slots are reclaimed, not leaked
-
----
+- [x] `cargo test -p mquickjs-rs`
+- [x] `cargo test -p led-runtime`
+- [x] `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`
+- [x] `cargo build --release --no-default-features`
+- [x] Benchmark: memory usage visibly decreases after GC vs before
+- [x] `gc_count` increments when GC runs
+- [x] Cycle reference `{ let a = {}; a.self = a; }` can be collected
+- [x] Freed slots are reused instead of leaking
 
 ## Core Design
 
-```
-Generation-based marking (no extra memory overhead):
-  gc_phase: u32  (increments each collection)
-  gen[i] == gc_phase  → slot i is LIVE
-  gen[i] == u32::MAX  → slot i is FREE
+Generation-based marking with no pointer changes:
+
+- `gc_phase: u32` increments on each collection
+- `gen[i] == gc_phase` means slot `i` is live
+- `gen[i] == u32::MAX` means slot `i` is free
 
 GC-managed containers:
-  closures          → closure_idx
-  var_cells         → (via closures)
-  arrays            → array_idx
-  objects           → object_idx
-  for_in_iterators  → iterator_idx
-  for_of_iterators  → for_of_iterator_idx
-  error_objects     → error_object
-  regex_objects     → regexp_object
-  typed_arrays      → typed_array_object
-  array_buffers     → array_buffer_object
-  timers            → manual cleanup
+
+- `closures`
+- `var_cells`
+- `arrays`
+- `objects`
+- `for_in_iterators`
+- `for_of_iterators`
+- `error_objects`
+- `regex_objects`
+- `typed_arrays`
+- `array_buffers`
+- `timers`
 
 Roots:
-  - Value stack (CallFrame.stack)
-  - global_vars
-  - closures → var_cells
-  - timers.callback
-```
 
----
+- value stack / active call frames
+- `global_vars`
+- closures through captured `var_cells`
+- `timers.callback`
 
 ## Implementation Phases
 
-### Phase 1: GC Infrastructure ✅
-- [x] `src/vm/gc.rs` created with:
-  - [x] `GcState` struct with phase, trigger, and adaptive threshold
-  - [x] `gc_mark_value()` — recursive mark for all Value types (arrays, objects, closures, iterators)
-  - [x] `gc_alloc_slot()` — free slot finder with linear scan
-  - [x] `gc_sweep_container()` — dead slot → SLOT_FREE
-  - [x] `adjust_trigger()` — adaptive threshold (grows on high survival, shrinks on low)
+### Phase 1: GC Infrastructure
 
-### Phase 2: Interpreter Integration ✅
-- [x] Add gen arrays (`gen_closures`, `gen_var_cells`, `gen_arrays`, etc.) to `Interpreter`
-- [x] Add `gc: GcState` field to `Interpreter`
-- [x] Implement `gc_mark_roots()` — traverses call_stack + global_vars + timers
-- [x] Implement `gc_sweep()` — sweeps all 11 containers
-- [x] Implement `gc_collect()` — orchestrates mark + sweep + threshold adjust
-- [x] Implement `maybe_gc()` — called on every function call
-- [x] Implement `gc_alloc_*()` wrappers for all 11 container types
+- [x] `src/vm/gc.rs` added
+- [x] `GcState` with phase, trigger, allocation count, and sweep stats
+- [x] `gc_mark_value()` recursive traversal for engine `Value` graphs
+- [x] `alloc_slot()` free-slot reuse
+- [x] `sweep_container()` dead-slot reclamation
+- [x] adaptive trigger adjustment
 
-### Phase 3: Context Integration ✅
-- [x] Call `maybe_gc()` in `Interpreter::execute()` and `Interpreter::call_function()`
-- [x] Call `gc_collect()` in `Context::gc()` (manual trigger)
+### Phase 2: Interpreter Integration
 
-### Phase 4: Testing ✅
-- [x] `cargo test -p mquickjs-rs` — **426 passed, 2 pre-existing failures** (Date.now stub, String.repeat)
-- [x] `cargo test -p led-runtime` — **22 passed, 0 failed**
-- [x] `cargo clippy -- -D warnings` — **zero warnings**
-- [x] `cargo build --release --no-default-features` — **no_std OK**
+- [x] Added generation arrays to `Interpreter`
+- [x] Added `gc: GcState` to `Interpreter`
+- [x] Routed all managed container allocations through GC slot reuse
+- [x] Implemented `gc_mark_roots()`
+- [x] Implemented `gc_sweep()`
+- [x] Implemented `gc_collect()`
+- [x] Implemented `maybe_gc()`
 
-### Phase 5: Benchmarking ⬜
-- [ ] Memory usage comparison (before GC vs after GC)
-- [ ] Performance impact assessment
-- [ ] Decide if Plan C (Mark-Compact) is needed
+### Phase 3: Context Integration
 
----
+- [x] `Interpreter::execute()` calls `maybe_gc()`
+- [x] `Interpreter::call_function()` calls `maybe_gc()`
+- [x] `Context::gc()` manually triggers collection
+- [x] native `gc()` now triggers `gc_collect()` instead of only bumping a counter
+- [x] internal JS `Call` / `CallMethod` / `CallConstructor` paths now also call `maybe_gc()`
+
+### Phase 4: Testing
+
+- [x] `cargo test -p mquickjs-rs` passes
+- [x] `cargo test -p led-runtime` passes
+- [x] `cargo clippy -p mquickjs-rs --all-targets -- -D warnings` passes
+- [x] `cargo build --release --no-default-features` passes
+- [x] Added interpreter-level regression coverage for unrooted self-referential object collection
+- [x] Added interpreter-level regression coverage for freed object slot reuse
+- [x] Added interpreter-level regression coverage for native `gc()` triggering a real collection
+- [x] Added public `Context::gc()` + `memory_stats()` regression coverage for unrooted cycle collection
+- [x] Added public regression coverage that automatic GC triggers during a JS function-call workload
+
+### Phase 4.1: Stats Correctness
+
+- [x] `Interpreter::get_stats()` now reports only live GC-managed slots
+- [x] array/object/typed-array byte and element counts ignore `SLOT_FREE` entries
+- [x] `memory_stats()` now reflects post-GC reclamation instead of raw backing `Vec` lengths
+
+### Phase 5: Benchmarking
+
+- [x] Compare memory usage before and after GC
+- [ ] Measure runtime overhead / trigger behavior
+- [ ] Decide whether mark-compact is still needed
+
+Current probe:
+
+- `src/bin/gc_memory_probe.rs`
+
+Current `cargo run --bin gc_memory_probe` snapshot:
+
+- `object_cycles`
+  - `gc_count`: `0 -> 0 -> 1`
+  - `objects`: `0 -> 200 -> 0`
+  - `estimated_object_bytes`: `0 -> 9600 -> 0`
+- `transient_arrays`
+  - `gc_count`: `0 -> 0 -> 1`
+  - `arrays`: `0 -> 400 -> 0`
+  - `estimated_object_bytes`: `0 -> 12800 -> 0`
+- `auto_gc_cycles`
+  - `gc_count`: `0 -> 1 -> 2`
+  - `objects`: `0 -> 1500 -> 0`
+  - `estimated_object_bytes`: `0 -> 22992 -> 0`
+
+Interpretation:
+
+- Manual `gc()` now visibly reclaims unreachable self-referential objects.
+- Freed array/object slots disappear from public `memory_stats()` after collection.
+- Automatic GC now also triggers during pure JS function-call workloads instead of only through manual `gc()`.
+- The remaining open GC work is no longer “does reclamation happen at all?”, but “what is the runtime overhead / trigger behavior under benchmark workloads?”.
 
 ## Notes
 
-### Phase counter overflow
-`u32::MAX` is reserved as `SLOT_FREE`. If `gc_phase` reaches `u32::MAX - 1`, all generation arrays are reset to 0 on next collection.
+### Phase Counter Overflow
 
-### Thread safety
-The GC is **not** thread-safe. This is acceptable because:
-- The JS engine is single-threaded
-- ESP32 runs on a single core
-- No concurrent execution of JS code
+`u32::MAX` is reserved as `SLOT_FREE`. If `gc_phase` approaches that value, generation arrays must be reset before reuse.
 
-### no_std compatibility
-All GC code uses `alloc` only (no `std`). `Vec<u32>` is available in `alloc`.
+### Thread Safety
+
+The GC is intentionally single-threaded. This matches the current JS engine execution model.
+
+### no_std Compatibility
+
+The GC implementation uses `alloc` only and remains compatible with the engine's `no_std` default.

@@ -308,6 +308,7 @@ mod dirs {
 fn dump_memory_stats(ctx: &Context) {
     let stats = ctx.memory_stats();
     println!("\nMemory usage:");
+    println!("  GC cycles:       {}", stats.gc_count);
     println!("  Heap size:       {} bytes", stats.heap_size);
     println!("  Used:            {} bytes", stats.used);
     println!("  Runtime strings: {}", stats.runtime_strings);

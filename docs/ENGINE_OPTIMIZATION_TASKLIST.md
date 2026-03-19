@@ -260,6 +260,110 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `array push 10k`: `0.609–0.621 ms`
   - `sieve 10k`: `2.045–2.084 ms`
 - Current interpretation: this is a small but clean dense-array write-path improvement that specifically targets statement-style array stores such as the hot `primes[j] = false;` shape in `sieve`.
+- 2026-03-18: specialized the even narrower `PushFalse; PutArrayEl; Drop` statement shape into `PutArrayElFalseDrop`, directly targeting the hottest boolean write pattern in the sieve inner loop.
+- Added compiler coverage confirming `arr[idx] = false;` now emits the new opcode, while existing assignment-expression and array-condition regressions remain green.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `sieve 10k`: `1.638–1.668 ms`
+  - `array push 10k`: `0.556–0.563 ms`
+- Current interpretation: this is the first dense-array write-path specialization that clearly lands on the exact `primes[j] = false;` kernel in `sieve`, and it brings that benchmark down another visible step without changing assignment-expression semantics.
+- 2026-03-18: split the hottest `.push` property read out of generic `GetField2` into a dedicated `GetArrayPush2` opcode, so array-heavy initialization loops no longer pay the general string-indexed property dispatch cost before `CallArrayPush1`.
+- Added compiler coverage confirming `arr.push(...)` now emits `GetArrayPush2`, and added an eval regression locking that `obj.push(side_effect())` still throws on `null` before argument side effects run.
+- Re-ran targeted push/fallback regressions, full engine tests, and `clippy -D warnings`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `array push 10k`: `0.593–0.716 ms`
+  - `sieve 10k`: `1.718–1.753 ms`
+  - `dense array bool read branch 10k`: `1.139–1.153 ms`
+  - `dense array false write only 10k`: `1.500–1.770 ms`
+- Current interpretation: this is a dense-array initialization-path win rather than a true `GetArrayEl` read-path breakthrough, but it cleanly removes the hottest remaining generic `.push` property read from `sieve`-style array setup and measurably helps the new dense-array diagnostics as well.
+- 2026-03-18: added a new diagnostic benchmark/script pair for `dense_array_bool_condition_only_hot`, isolating repeated `GetArrayEl + IfFalse` scans without the extra `count = count + 1` accumulation work.
+- `dump_bytecode` now shows that this benchmark compiles to the minimal shape `GetArrayEl; IfFalse; IncLoc; Goto`, making it the cleanest current reproducer for the remaining read-side branch skeleton.
+- Current interpretation: dense-array read tuning should now be judged against three increasingly pure shapes: `dense array bool read branch 10k`, `dense array bool read hot`, and `dense array bool condition only hot`, in that order of diagnostic sharpness.
+- 2026-03-18: added a further `dense_array_read_only_hot` diagnostic benchmark/script that isolates repeated `GetArrayEl; Drop; IncLoc; Goto` scanning with no condition branch at all.
+- `dump_bytecode` now shows this fourth diagnostic as the cleanest current reproducer for pure array-read cost, separate from both truthiness branching and count accumulation semantics.
+- Current interpretation: dense-array read tuning should now be judged against four shapes:
+  - `dense array bool read branch 10k`
+  - `dense array bool read hot`
+  - `dense array bool condition only hot`
+  - `dense array read only hot`
+  from least pure to most pure.
+- 2026-03-19: retained `GetArrayElDiscard` for discarded statement-form reads (`arr[idx];`) so pure-read diagnostics can measure array access cost without also paying the generic `Drop` path.
+- Added compiler/eval regression coverage confirming discarded array reads now lower to the dedicated opcode and still leave surrounding program behavior unchanged.
+- 2026-03-19: retained a dedicated `GetArrayElDiscard` statement-form read opcode for discarded `arr[idx];` expression statements. This keeps the pure-read diagnostic path available without changing expression or branch semantics.
+- Added regression coverage confirming discarded array reads still evaluate and execution continues normally.
+- 2026-03-18: added a final `dense_array_loop_only_hot` diagnostic benchmark/script that strips array reads out completely and measures just the repeated `Lte; IncLoc; Goto` loop skeleton.
+- `dump_bytecode` now shows this baseline compiling to the pure loop shape `PushI16; Lte; IfFalse; IncLoc; Goto`.
+- Current interpretation: dense-array read tuning can now be decomposed into five layers:
+  - `dense array loop only hot`
+  - `dense array read only hot`
+  - `dense array bool condition only hot`
+  - `dense array bool read hot`
+  - `dense array bool read branch 10k`
+  with each added layer showing the cost of one more piece of the real workload.
+- 2026-03-19: added matched `arg0` / `local1` control variants for the pure read and pure condition diagnostics:
+  - `dense array read only hot arg0`
+  - `dense array read only hot local1`
+  - `dense array bool condition only hot arg0`
+  - `dense array bool condition only hot local1`
+- Current interpretation: after controlling for function shape and parameter count, the remaining `local0` vs non-0-local difference looks small and noisy; `GetLoc0` is not currently supported as the dominant remaining read-side cost center.
+- 2026-03-19: added `analyze_dense_array_layers` to compute per-layer deltas in one run so future read-side work can compare loop-only, read-only, condition-only, and accumulated shapes without manually reconciling multiple benchmark outputs.
+- Current interpretation: use `analyze_dense_array_layers` as the primary “what layer is still expensive?” tool before attempting new `GetArrayEl` optimizations.
+- 2026-03-19: tightened dense-array indexed access itself by collapsing the repeated “array value + non-negative integer index” decode into one raw fast helper shared by `GetArrayEl`, `GetArrayElDiscard`, `PutArrayEl`, and `PutArrayElFalseDrop`.
+- Re-ran `cargo check -p mquickjs-rs`, full `cargo test -p mquickjs-rs`, and `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `sieve 10k`: `1.3173–1.3389 ms`
+  - `dense array bool read hot`: `68.603–69.468 ms`
+  - `dense array bool condition only hot`: `57.001–58.300 ms`
+- Current interpretation: this is a clean read/write-path tightening that finally lands directly inside the dense-array indexed access opcodes themselves, not just around surrounding loop skeletons or array initialization.
+- 2026-03-19: further tightened `GetArrayEl` branch bookkeeping by replacing the temporary `Option<(bool, i32)>` branch peek state with a simpler direct opcode/offset pair inside the fused `GetArrayEl + IfFalse/IfTrue` hot path.
+- Re-ran full `cargo test -p mquickjs-rs` and `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`; both passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `dense array bool read hot`: `81.896–87.290 ms`
+  - `dense array bool condition only hot`: `71.628–77.040 ms`
+  - `sieve 10k`: `1.6203–1.7606 ms`
+- Current interpretation: this is a narrow `GetArrayEl`-internal cleanup that improves the read-heavy fused-branch workload without introducing a measurable regression in the broader `sieve` path.
+- 2026-03-19: tightened the fused `GetArrayEl + IfFalse/IfTrue` branch peek one step further by switching it to a single length check plus unchecked byte reads for the hot opcode/offset decode path.
+- Re-ran `cargo check -p mquickjs-rs`, full `cargo test -p mquickjs-rs`, and `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `sieve 10k`: `1.3077–1.3308 ms`
+  - `dense array bool read hot`: `73.169–74.204 ms`
+  - `dense array bool condition only hot`: `59.915–60.797 ms`
+- Current interpretation: this is another narrow `GetArrayEl` bookkeeping win, and this time the improvement shows up consistently across both pure condition scans and the heavier read-and-accumulate workload.
+- 2026-03-19: split `GetArrayElDiscard`'s dense-array fast predicate out from the tuple-returning `dense_array_access()` helper, so discarded statement-form reads no longer pay to decode and allocate unused `(arr_idx, index)` data on the hottest pure-read path.
+- Re-ran `cargo check -p mquickjs-rs`, full `cargo test -p mquickjs-rs`, and `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `dense array read only hot`: `51.587–52.737 ms`
+  - `dense array read only hot arg0`: `50.887–51.752 ms`
+  - `dense array read only hot local1`: `52.082–52.993 ms`
+  - `sieve 10k`: `1.3022–1.3268 ms`
+- Current interpretation: this is a small but real pure-read-path win, and it keeps the denser `GetArrayElDiscard` diagnostic baseline moving down without perturbing broader array semantics.
+- 2026-03-19: relaxed the discarded dense-array read fast path further so `GetArrayElDiscard` now treats any integer index on a regular array as an immediate no-op read, instead of insisting on the non-negative-index decode used by value-producing array reads.
+- Added eval regression coverage confirming a discarded negative index read (`arr[-1];`) still behaves as an ignored undefined read and execution continues normally.
+- Re-ran `cargo check -p mquickjs-rs`, targeted eval regression coverage, and `cargo clippy -p mquickjs-rs --all-targets -- -D warnings`; all passed. Full `cargo test -p mquickjs-rs` also passed before later Windows linker/pagefile instability returned during unrelated release-tool recompiles.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `dense array read only hot`: `51.587–52.737 ms`
+  - `dense array read only hot arg0`: `50.887–51.752 ms`
+  - `dense array read only hot local1`: `52.082–52.993 ms`
+  - `sieve 10k`: `1.3022–1.3268 ms`
+- Current interpretation: this is another narrow but durable `GetArrayElDiscard` win, aimed squarely at the pure-read diagnostic path rather than the broader branch-heavy `GetArrayEl` workload.
+- 2026-03-18: added a dedicated `IncLoc*Drop` family for statement-form `local = local + 1` updates whose result is immediately discarded, and rewrote those hottest tails in loop increments and dense-array read counters into the new opcodes.
+- Added compiler coverage confirming `var i = 0; i = i + 1;` now lowers to the dedicated local-update opcode family, and added an eval regression locking that `var x = 'a'; x = x + 1;` still preserves string-concatenation semantics.
+- `dump_bytecode` now shows the dense-array read diagnostics compiling to compact `IncLoc{1,2,3,4}Drop` tails instead of repeated `Push1; Add; Dup; PutLocX; Drop` skeletons around `GetArrayEl`.
+- Re-ran full engine tests and `clippy -D warnings`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `loop 10k`: `0.416–0.477 ms`
+  - `sieve 10k`: `1.496–1.514 ms`
+  - `dense array bool read branch 10k`: `0.804–0.822 ms`
+  - `dense array bool read hot`: `69.67–70.63 ms`
+  - `dense array false write then read hot`: `60.76–61.67 ms`
+- Current interpretation: this is the first change in the current dense-array phase that materially shrinks the remaining read-side loop skeleton itself; it still helps the classic `loop` benchmark, but the main effect is that the `GetArrayEl`-heavy diagnostics now spend far less time on local increment bookkeeping around the array read.
+- 2026-03-18: narrowed the `GetArrayEl` branch-fused fast path itself so the hottest array/int-index read case now handles `true` / `false` / `null` / `undefined` / int truthiness directly before falling back to the generic helper.
+- Re-ran full engine tests and `clippy -D warnings`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `sieve 10k`: `1.795–2.085 ms` (no significant change)
+  - `dense array bool read branch 10k`: `0.919–1.118 ms` (no significant change)
+  - `dense array bool read hot`: `72.35–73.37 ms`
+  - `dense array bool condition only hot`: `69.42–78.77 ms`
+- Current interpretation: this is a small read-side truthiness win that shows up most clearly on the purer `GetArrayEl + IfFalse` diagnostics, while staying roughly neutral on the larger mixed-shape baselines.
 
 ### 9.1.5 Opcode dispatch tightening [Completed]
 
@@ -333,9 +437,31 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `loop 10k`: `0.444–0.451 ms`
   - `sieve 10k`: `1.663–1.709 ms`
 - Current interpretation: the slot-4 short-form work remains a real win after rerun and should be treated as part of the stable opcode/local-slot optimization path rather than a one-off measurement artifact.
+- 2026-03-18: added a small `dump_bytecode` developer tool so hot benchmark scripts can now be compiled and disassembled directly, instead of inferring bytecode shape only from opcode counters.
+- 2026-03-18: re-lowered C-style `for` loops so the increment section is compiled once but appended after the body, removing the extra pre-body `Goto` that used to skip over the increment block on the first iteration.
+- Added compiler coverage confirming a simple `for (...)` loop now emits a single back-edge `Goto`, and re-ran `for` / `continue` / `break` / `switch-in-loop` regressions successfully.
+- Re-ran full engine tests and `clippy -D warnings` successfully after the change.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `loop 10k`: `0.555–0.659 ms`
+  - `sieve 10k`: `1.917–2.219 ms`
+  - `dense array bool read branch 10k`: `1.367–1.669 ms`
+  - `dense array bool read hot`: `131.93–152.53 ms`
+  - `dense array false write then read hot`: `87.45–100.89 ms`
+- Current interpretation: this is a control-flow skeleton win rather than a `GetArrayEl`-only win, but it lands directly on the bytecode shape now dominating the dense-array read diagnostics and removes a real structural inefficiency from all C-style `for` loops.
+- 2026-03-18: added `IncLoc*Drop` statement-form local-update opcodes and rewrote the hottest discarded `local = local + 1` bytecode tails into them, while preserving full `+` semantics for string locals.
+- Added compiler coverage confirming `var i = 0; i = i + 1;` now lowers to the dedicated opcode family, and added a regression locking that `var x = 'a'; x = x + 1;` still produces a string.
+- `dump_bytecode` now shows the dense-array read diagnostics compiling down to compact `IncLoc{1,2,3,4}Drop` tails instead of repeated `Push1; Add; Dup; PutLocX; Drop` skeletons.
+- Re-ran full engine tests and `clippy -D warnings` successfully after the change.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `loop 10k`: `0.483–0.602 ms`
+  - `sieve 10k`: `1.633–1.726 ms`
+  - `dense array bool read branch 10k`: `0.803–0.822 ms`
+  - `dense array bool read hot`: `86.07–105.53 ms`
+  - `dense array false write then read hot`: `64.41–67.69 ms`
+- Current interpretation: this is the first optimization in the current dense-array phase that materially shrinks the remaining read-side loop skeleton itself; it helps the classic `loop` baseline too, but the biggest win is that the new dense-array read diagnostics now spend much less time on local increment bookkeeping around `GetArrayEl`.
 - Status: complete as the current dispatch-tightening phase; later opcode work should only reopen this area if new profiling data identifies a materially different hot set.
 
-### 9.1.6 Arithmetic/comparison micro-optimization pass
+### 9.1.6 Arithmetic/comparison micro-optimization pass [Completed]
 
 **Priority**: P1
 
@@ -385,13 +511,37 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `string concat 1k`: `166.97–171.99 µs`
   - `method_chain 5k`: `624.57–638.70 µs`
 - Current interpretation: this is a stronger, more structural concat-chain optimization for the target runtime-string benchmark, but it also appears to regress the simpler `string concat 1k` microbenchmark, so follow-up work should specifically explain and recover that regression instead of treating the string path as “done”.
-- 2026-03-17: added a statement-form `AppendConstStringToLoc` lowering backed by per-frame local string builders for the exact `local = local + "const";` hot shape, so simple local self-concat loops no longer need to materialize a fresh runtime string on every iteration.
-- Added compiler coverage confirming the new lowering emits for `var s = ''; s = s + 'x';`, and re-ran the matching eval regression successfully.
-- Dump-mode hotspot probing on the current worktree now shows `string_concat` dropping from `1000` concat-created runtime strings to `1`.
+- 2026-03-18: added string-specific diagnostic coverage for:
+  - `string local update only 1k`
+  - `string concat ephemeral 1k`
+  and extended dump-mode hotspot profiling so `string_concat` is tracked directly beside `runtime_string_pressure`.
+- Diagnostic conclusion: the dominant cost in `string concat 1k` is repeated copying of the growing string content itself; the local-update skeleton (`Dup` / `PutLoc0` / `Drop`) is not the primary cost center.
+- 2026-03-18: added a very narrow statement-form `AppendConstStringToLoc0` lowering backed by a per-frame builder only for local slot `0`, specifically targeting `var s = ''; s = s + 'x';`.
+- Added compiler coverage confirming the new lowering emits for that exact shape, and re-ran the matching eval regression successfully.
+- Dump-mode hotspot probing on the current worktree now shows `string_concat` dropping from `1000` concat-created runtime strings to `1`, while `runtime_string_pressure` remains at `8001`.
 - Selected execution-focused Criterion reruns on the current worktree:
-  - `string concat 1k`: `80.99–83.35 µs`
-  - `runtime_string_pressure 4k`: `955.72–974.98 µs`
-- Current interpretation: this builder-backed local-self-concat optimization finally fixes the `string concat 1k` path without reopening the earlier generic-runtime-peephole failures, while leaving the broader `runtime_string_pressure` benchmark roughly in the same sub-millisecond range instead of turning it into the next regression hotspot.
+  - `string concat 1k`: `81.24–83.26 µs`
+  - `runtime_string_pressure 4k`: `909.74–921.95 µs`
+  - `method_chain 5k`: `708.67–724.79 µs`
+- Current interpretation: this is the first narrow local-self-concat optimization that genuinely fixes the dedicated `string concat 1k` path without reintroducing the earlier broad peephole regressions. It also keeps the broader runtime-string benchmark in the same sub-millisecond class, though `method_chain` is now better described as staying in the sub-millisecond range rather than sitting on the earlier `0.60 ms` target line.
+- 2026-03-18: extended the concat-chain lowering one more step with `AddConstStringSurroundValue`, so the hot `const + value + const + value` runtime-string shape now avoids one more intermediate concat result.
+- Added compiler coverage confirming the new four-part lowering emits for `'a' + x + 'b' + y`.
+- Dump-mode hotspot probing on the current worktree now shows `runtime_string_pressure` dropping further from `8001` concat-created runtime strings to `4001`, with total `Add` executions reduced from `16000` to `12000`.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `runtime_string_pressure 4k`: `841.41–855.24 µs`
+  - `string concat 1k`: `82.79–84.89 µs`
+  - `string concat ephemeral 1k`: `113.15–118.99 µs`
+  - `method_chain 5k`: `736.57–751.78 µs`
+- Current interpretation: this further narrows the remaining string work from “common concat-chain lowering” to the truly general growing-string case. The dedicated runtime-string benchmark clearly benefits, the ephemeral concat microbenchmark benefits dramatically, and the simpler local self-concat path remains in the same fast class.
+- 2026-03-18: introduced a minimal deferred `RuntimeString` wrapper for runtime-created strings and taught `.length` reads to use cached runtime-string lengths directly instead of flattening deferred concat nodes first.
+- This keeps the existing local-self-concat and concat-chain lowering wins while removing the worst regression that came from flatten-on-length behavior.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `runtime_string_pressure 4k`: `869.62–887.11 µs`
+  - `string concat 1k`: `78.61–80.20 µs`
+  - `string concat ephemeral 1k`: `118.18–121.41 µs`
+  - `method_chain 5k`: `715.62–730.29 µs`
+- Current interpretation: the string path now has a more coherent story. Dedicated local self-concat is fixed, the dominant runtime-string benchmark is faster again after cached-length handling, and the remaining work is more clearly about whether to generalize deferred strings further rather than about obvious regressions in the current narrow path.
+- Status: complete as the current arithmetic/string-concat micro-optimization phase; any future string work should now be treated as a broader string-representation project rather than more incremental hot-op cleanup.
 - 2026-03-16: improved `StrictEq` / `StrictNeq` hot opcode handling by adding direct fast paths for same-value, integer, and boolean comparisons before falling back to slower generic handling.
 - Existing switch semantics regression tests were re-run successfully.
 - Benchmark result: `switch 1k` improved from roughly `145–149 μs` class performance to `132–136 μs` in Criterion.

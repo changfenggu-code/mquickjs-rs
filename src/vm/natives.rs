@@ -4016,15 +4016,13 @@ pub(crate) fn native_object_to_string(
     Ok(interp.create_runtime_string_type(type_str.to_string()))
 }
 
-/// gc() - trigger garbage collection (placeholder)
+/// gc() - trigger garbage collection immediately
 pub(crate) fn native_gc(
     interp: &mut Interpreter,
     _this: Value,
     _args: &[Value],
 ) -> Result<Value, String> {
-    // In a full implementation, this would trigger GC
-    // For now, just increment the count and return undefined
-    interp.gc_count += 1;
+    interp.gc_collect();
     Ok(Value::undefined())
 }
 

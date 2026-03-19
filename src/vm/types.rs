@@ -868,6 +868,8 @@ pub struct Timer {
 /// Statistics about interpreter memory usage
 #[derive(Debug, Clone, Default)]
 pub struct InterpreterStats {
+    /// Number of GC cycles completed
+    pub gc_count: u32,
     /// Number of runtime strings
     pub runtime_strings: usize,
     /// Total bytes of runtime string contents

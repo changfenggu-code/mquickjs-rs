@@ -361,20 +361,87 @@ impl Interpreter {
 
     /// Get memory statistics from the interpreter
     pub fn get_stats(&self) -> InterpreterStats {
+        use crate::vm::gc::SLOT_FREE;
+
+        let closures = self
+            .gen_closures
+            .iter()
+            .filter(|&&g| g != SLOT_FREE)
+            .count();
+        let arrays = self
+            .gen_arrays
+            .iter()
+            .filter(|&&g| g != SLOT_FREE)
+            .count();
+        let array_elements = self
+            .arrays
+            .iter()
+            .zip(self.gen_arrays.iter())
+            .filter(|(_, &g)| g != SLOT_FREE)
+            .map(|(a, _)| a.len())
+            .sum();
+        let objects = self
+            .gen_objects
+            .iter()
+            .filter(|&&g| g != SLOT_FREE)
+            .count();
+        let object_properties = self
+            .objects
+            .iter()
+            .zip(self.gen_objects.iter())
+            .filter(|(_, &g)| g != SLOT_FREE)
+            .map(|(o, _)| o.properties.len())
+            .sum();
+        let error_objects = self
+            .gen_error_objects
+            .iter()
+            .filter(|&&g| g != SLOT_FREE)
+            .count();
+        let regex_objects = self
+            .gen_regex_objects
+            .iter()
+            .filter(|&&g| g != SLOT_FREE)
+            .count();
+        let typed_arrays = self
+            .gen_typed_arrays
+            .iter()
+            .filter(|&&g| g != SLOT_FREE)
+            .count();
+        let typed_array_bytes = self
+            .typed_arrays
+            .iter()
+            .zip(self.gen_typed_arrays.iter())
+            .filter(|(_, &g)| g != SLOT_FREE)
+            .map(|(ta, _)| ta.data.len())
+            .sum();
+        let array_buffers = self
+            .gen_array_buffers
+            .iter()
+            .filter(|&&g| g != SLOT_FREE)
+            .count();
+        let array_buffer_bytes = self
+            .array_buffers
+            .iter()
+            .zip(self.gen_array_buffers.iter())
+            .filter(|(_, &g)| g != SLOT_FREE)
+            .map(|(ab, _)| ab.data.len())
+            .sum();
+
         InterpreterStats {
+            gc_count: self.gc_count,
             runtime_strings: self.runtime_strings.len(),
             runtime_string_bytes: self.runtime_strings.iter().map(|s| s.len()).sum(),
-            arrays: self.arrays.len(),
-            array_elements: self.arrays.iter().map(|a| a.len()).sum(),
-            objects: self.objects.len(),
-            object_properties: self.objects.iter().map(|o| o.properties.len()).sum(),
-            closures: self.closures.len(),
-            error_objects: self.error_objects.len(),
-            regex_objects: self.regex_objects.len(),
-            typed_arrays: self.typed_arrays.len(),
-            typed_array_bytes: self.typed_arrays.iter().map(|ta| ta.data.len()).sum(),
-            array_buffers: self.array_buffers.len(),
-            array_buffer_bytes: self.array_buffers.iter().map(|ab| ab.data.len()).sum(),
+            arrays,
+            array_elements,
+            objects,
+            object_properties,
+            closures,
+            error_objects,
+            regex_objects,
+            typed_arrays,
+            typed_array_bytes,
+            array_buffers,
+            array_buffer_bytes,
         }
     }
 
@@ -2977,8 +3044,10 @@ impl Interpreter {
                                 self.stack.drop_n(argc);
                                 self.call_native_func(native_idx, Value::undefined(), &args)
                             }
-                        }?;
-                        self.stack.push(result);
+                        };
+                        if let Some(result) = self.try_op(result)? {
+                            self.stack.push(result);
+                        }
                         continue;
                     }
 
@@ -3068,6 +3137,7 @@ impl Interpreter {
                             continue;
                         };
 
+                    self.maybe_gc();
                     // Check recursion limit
                     if self.call_stack.len() >= self.max_recursion {
                         self.try_handle_runtime_error(InterpreterError::InternalError(
@@ -3158,7 +3228,12 @@ impl Interpreter {
 
                     let args = [arg];
                     let result = if let Some(native_idx) = method_val.to_native_func_idx() {
-                        self.call_native_func(native_idx, this_val, &args)?
+                        let native_result = self.call_native_func(native_idx, this_val, &args);
+                        if let Some(result) = self.try_op(native_result)? {
+                            result
+                        } else {
+                            continue;
+                        }
                     } else {
                         self.call_value(method_val, this_val, &args)?
                     };
@@ -3172,15 +3247,22 @@ impl Interpreter {
 
                     if this_val.to_array_idx().is_some() {
                         let args = [callback];
-                        let result = native_array_map(self, this_val, &args)
-                            .map_err(InterpreterError::TypeError)?;
-                        self.stack.push(result);
+                        let native_result =
+                            native_array_map(self, this_val, &args).map_err(InterpreterError::TypeError);
+                        if let Some(result) = self.try_op(native_result)? {
+                            self.stack.push(result);
+                        }
                         continue;
                     }
 
                     let args = [callback];
                     let result = if let Some(native_idx) = method_val.to_native_func_idx() {
-                        self.call_native_func(native_idx, this_val, &args)?
+                        let native_result = self.call_native_func(native_idx, this_val, &args);
+                        if let Some(result) = self.try_op(native_result)? {
+                            result
+                        } else {
+                            continue;
+                        }
                     } else {
                         self.call_value(method_val, this_val, &args)?
                     };
@@ -3194,15 +3276,22 @@ impl Interpreter {
 
                     if this_val.to_array_idx().is_some() {
                         let args = [callback];
-                        let result = native_array_filter(self, this_val, &args)
-                            .map_err(InterpreterError::TypeError)?;
-                        self.stack.push(result);
+                        let native_result = native_array_filter(self, this_val, &args)
+                            .map_err(InterpreterError::TypeError);
+                        if let Some(result) = self.try_op(native_result)? {
+                            self.stack.push(result);
+                        }
                         continue;
                     }
 
                     let args = [callback];
                     let result = if let Some(native_idx) = method_val.to_native_func_idx() {
-                        self.call_native_func(native_idx, this_val, &args)?
+                        let native_result = self.call_native_func(native_idx, this_val, &args);
+                        if let Some(result) = self.try_op(native_result)? {
+                            result
+                        } else {
+                            continue;
+                        }
                     } else {
                         self.call_value(method_val, this_val, &args)?
                     };
@@ -3217,15 +3306,22 @@ impl Interpreter {
 
                     if this_val.to_array_idx().is_some() {
                         let args = [callback, initial];
-                        let result = native_array_reduce(self, this_val, &args)
-                            .map_err(InterpreterError::TypeError)?;
-                        self.stack.push(result);
+                        let native_result = native_array_reduce(self, this_val, &args)
+                            .map_err(InterpreterError::TypeError);
+                        if let Some(result) = self.try_op(native_result)? {
+                            self.stack.push(result);
+                        }
                         continue;
                     }
 
                     let args = [callback, initial];
                     let result = if let Some(native_idx) = method_val.to_native_func_idx() {
-                        self.call_native_func(native_idx, this_val, &args)?
+                        let native_result = self.call_native_func(native_idx, this_val, &args);
+                        if let Some(result) = self.try_op(native_result)? {
+                            result
+                        } else {
+                            continue;
+                        }
                     } else {
                         self.call_value(method_val, this_val, &args)?
                     };
@@ -3514,6 +3610,7 @@ impl Interpreter {
                             ));
                         };
 
+                    self.maybe_gc();
                     // Check recursion limit
                     if self.call_stack.len() >= self.max_recursion {
                         return Err(InterpreterError::InternalError(
@@ -3677,8 +3774,10 @@ impl Interpreter {
                                 self.stack.drop_n(argc);
                                 self.call_native_func(native_idx, this_val, &args)
                             }
-                        }?;
-                        self.stack.push(result);
+                        };
+                        if let Some(result) = self.try_op(result)? {
+                            self.stack.push(result);
+                        }
                         continue;
                     }
 
@@ -3725,6 +3824,7 @@ impl Interpreter {
                             continue;
                         };
 
+                    self.maybe_gc();
                     // Check recursion limit
                     if self.call_stack.len() >= self.max_recursion {
                         self.try_handle_runtime_error(InterpreterError::InternalError(
@@ -5074,6 +5174,8 @@ impl Default for Interpreter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::natives::native_gc;
+    use crate::vm::gc::SLOT_FREE;
 
     #[test]
     fn test_recursion_limit() {
@@ -5094,5 +5196,55 @@ mod tests {
         // Next call should fail
         let result = interp.call_function(&fb, Value::undefined(), &[]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gc_collects_unrooted_self_referential_object() {
+        let mut interp = Interpreter::new();
+
+        let obj = interp.create_object();
+        let obj_idx = obj.to_object_idx().unwrap() as usize;
+        interp.objects[obj_idx]
+            .properties
+            .push(("self".to_string(), obj));
+
+        interp.gc_collect();
+
+        assert_eq!(interp.gen_objects[obj_idx], SLOT_FREE);
+    }
+
+    #[test]
+    fn test_gc_reuses_freed_object_slot() {
+        let mut interp = Interpreter::new();
+
+        let first = interp.create_object();
+        let first_idx = first.to_object_idx().unwrap() as usize;
+
+        interp.gc_collect();
+        assert_eq!(interp.gen_objects[first_idx], SLOT_FREE);
+
+        let second = interp.create_object();
+        let second_idx = second.to_object_idx().unwrap() as usize;
+
+        assert_eq!(second_idx, first_idx);
+        assert_ne!(interp.gen_objects[second_idx], SLOT_FREE);
+    }
+
+    #[test]
+    fn test_native_gc_collects_and_increments_count() {
+        let mut interp = Interpreter::new();
+
+        let obj = interp.create_object();
+        let obj_idx = obj.to_object_idx().unwrap() as usize;
+        interp.objects[obj_idx]
+            .properties
+            .push(("self".to_string(), obj));
+
+        let before = interp.gc_count;
+        let result = native_gc(&mut interp, Value::undefined(), &[]).unwrap();
+
+        assert!(result.is_undefined());
+        assert_eq!(interp.gc_count, before + 1);
+        assert_eq!(interp.gen_objects[obj_idx], SLOT_FREE);
     }
 }

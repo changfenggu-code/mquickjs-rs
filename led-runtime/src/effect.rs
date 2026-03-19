@@ -1,6 +1,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::fmt;
 
 use mquickjs::{Context, FunctionBytecode, MemoryStats};
 
@@ -24,7 +25,69 @@ const EFFECT_GLOBAL: &str = "__mquickjs_effect";
 const CONFIG_GLOBAL: &str = "__mquickjs_config";
 
 /// 效果操作的统一返回类型
-pub type EffectResult<T> = Result<T, String>;
+pub type EffectResult<T> = Result<T, EffectError>;
+
+/// 效果引擎/实例操作错误类型，零分配
+#[derive(Clone, Debug, PartialEq)]
+pub enum EffectError {
+    /// 字节码 magic 不匹配（非 MQJS 字节码）
+    BytecodeMagic,
+    /// 字节码版本不兼容
+    BytecodeVersion { expected: u8, found: u8 },
+    /// 字节码反序列化失败
+    BytecodeDeserialize,
+    /// JS 脚本编译失败
+    Compilation,
+    /// JS 运行时执行错误
+    Execution,
+    /// JS eval 求值失败
+    Eval,
+    /// 已存在同名引擎
+    DuplicateEngine,
+    /// 已存在同名实例
+    DuplicateInstance,
+    /// 未注册引擎名
+    UnknownEngine,
+    /// 未注册实例名
+    UnknownInstance,
+    /// 无激活的实例
+    NoActiveInstance,
+    /// 实例索引超出范围
+    InvalidIndex { index: usize, max: usize },
+    /// ledCount 不是整数
+    LedsCountNotInt,
+    /// leds 不是 TypedArray
+    LedsNotTypedArray,
+}
+
+impl fmt::Display for EffectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EffectError::BytecodeMagic => write!(f, "invalid bytecode magic"),
+            EffectError::BytecodeVersion { expected, found } => {
+                write!(
+                    f,
+                    "unsupported bytecode version: {} (expected {})",
+                    found, expected
+                )
+            }
+            EffectError::BytecodeDeserialize => write!(f, "bytecode deserialization failed"),
+            EffectError::Compilation => write!(f, "JS script compilation failed"),
+            EffectError::Execution => write!(f, "JS runtime execution error"),
+            EffectError::Eval => write!(f, "JS eval failed"),
+            EffectError::DuplicateEngine => write!(f, "duplicate effect engine name"),
+            EffectError::DuplicateInstance => write!(f, "duplicate effect instance name"),
+            EffectError::UnknownEngine => write!(f, "unknown effect engine"),
+            EffectError::UnknownInstance => write!(f, "unknown effect instance"),
+            EffectError::NoActiveInstance => write!(f, "no active effect instance"),
+            EffectError::InvalidIndex { index, max } => {
+                write!(f, "invalid effect instance index: {} (max: {})", index, max)
+            }
+            EffectError::LedsCountNotInt => write!(f, "effect ledCount is not an integer"),
+            EffectError::LedsNotTypedArray => write!(f, "effect leds is not a TypedArray"),
+        }
+    }
+}
 
 /// Rust 侧配置值，可递归表示 JS 对象/数组/基本类型
 #[derive(Clone, Debug)]
@@ -78,6 +141,7 @@ impl ConfigValue {
 }
 
 /// 效果引擎：持有编译后的字节码，可创建多个效果实例
+#[derive(Debug)]
 pub struct EffectEngine {
     bytecode_bytes: Vec<u8>,
     memory_limit: usize,
@@ -94,6 +158,7 @@ pub struct EffectInstance {
     stop_bc: FunctionBytecode,
     leds_bc: FunctionBytecode,
     led_count_bc: FunctionBytecode,
+    cached_led_count: usize,
 }
 
 /// 被 EffectManager 管理的效果实例（附带名称和所属引擎名）
@@ -112,12 +177,16 @@ pub struct EffectManager {
 
 impl EffectEngine {
     /// 从 JS 源码编译为字节码，创建效果引擎（开发阶段用）
+    /// MCU 生产环境不需要此方法，使用 `from_bytecode` 直接加载预编译字节码
+    #[cfg(feature = "compiler")]
     pub fn from_source(source: &str) -> EffectResult<Self> {
-        let ctx = Context::new(1024 * 1024);
-        let bytecode = ctx.compile(source).map_err(|e| e.to_string())?;
+        // Use 48KB for compilation — enough for typical effect scripts,
+        // small enough for embedded targets (ESP32-C6 has ~129KB heap)
+        let ctx = Context::new(48 * 1024);
+        let bytecode = ctx.compile(source).map_err(|_| EffectError::Compilation)?;
         Ok(Self {
             bytecode_bytes: bytecode.serialize(),
-            memory_limit: 256 * 1024,
+            memory_limit: 32 * 1024,
         })
     }
 
@@ -125,10 +194,10 @@ impl EffectEngine {
     pub fn from_bytecode(bytes: &[u8]) -> EffectResult<Self> {
         let payload = if bytes.len() >= 5 && &bytes[0..4] == BYTECODE_MAGIC {
             if bytes[4] != BYTECODE_VERSION {
-                return Err(format!(
-                    "Unsupported bytecode version: {} (expected {})",
-                    bytes[4], BYTECODE_VERSION
-                ));
+                return Err(EffectError::BytecodeVersion {
+                    expected: BYTECODE_VERSION,
+                    found: bytes[4],
+                });
             }
             &bytes[5..]
         } else {
@@ -136,11 +205,12 @@ impl EffectEngine {
         };
 
         // validate once
-        let _ = FunctionBytecode::deserialize(payload).map_err(|e| e.to_string())?;
+        let _ =
+            FunctionBytecode::deserialize(payload).map_err(|_| EffectError::BytecodeDeserialize)?;
 
         Ok(Self {
             bytecode_bytes: payload.to_vec(),
-            memory_limit: 256 * 1024,
+            memory_limit: 32 * 1024,
         })
     }
 
@@ -169,45 +239,57 @@ impl EffectEngine {
     fn instantiate_from_literal(&self, config_literal: &str) -> EffectResult<EffectInstance> {
         let mut ctx = Context::new(self.memory_limit);
         // 反序列化字节码并加载到 Context
-        let (bytecode, _) =
-            FunctionBytecode::deserialize(&self.bytecode_bytes).map_err(|e| e.to_string())?;
-        ctx.load_bytecode(bytecode).map_err(|e| e.to_string())?;
+        let (bytecode, _) = FunctionBytecode::deserialize(&self.bytecode_bytes)
+            .map_err(|_| EffectError::BytecodeDeserialize)?;
+        ctx.load_bytecode(bytecode)
+            .map_err(|_| EffectError::Execution)?;
 
         // 解析配置对象并存入全局变量
         let config_val = ctx
             .eval(&format!("return {};", config_literal))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Eval)?;
         ctx.set_global(CONFIG_GLOBAL, config_val);
 
         // 调用 createEffect(config) 生成效果实例
         let create_bc = ctx
             .compile(&format!("return createEffect({CONFIG_GLOBAL});"))
-            .map_err(|e| e.to_string())?;
-        let effect_val = ctx.execute(&create_bc).map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Compilation)?;
+        let effect_val = ctx
+            .execute(&create_bc)
+            .map_err(|_| EffectError::Execution)?;
         ctx.set_global(EFFECT_GLOBAL, effect_val);
 
         // 预编译各生命周期方法的调用脚本，后续 tick/start/stop 直接执行
         let start_bc = ctx
             .compile(&format!("return {EFFECT_GLOBAL}.start();"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Compilation)?;
         let tick_bc = ctx
             .compile(&format!("return {EFFECT_GLOBAL}.tick();"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Compilation)?;
         let pause_bc = ctx
             .compile(&format!("return {EFFECT_GLOBAL}.pause();"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Compilation)?;
         let resume_bc = ctx
             .compile(&format!("return {EFFECT_GLOBAL}.resume();"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Compilation)?;
         let stop_bc = ctx
             .compile(&format!("return {EFFECT_GLOBAL}.stop();"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Compilation)?;
         let leds_bc = ctx
             .compile(&format!("return {EFFECT_GLOBAL}.leds;"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Compilation)?;
         let led_count_bc = ctx
             .compile(&format!("return {EFFECT_GLOBAL}.ledCount;"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Compilation)?;
+
+        // 读取并缓存 ledCount（创建后不会变，避免每帧调用 JS）
+        let led_count_val = ctx
+            .execute(&led_count_bc)
+            .map_err(|_| EffectError::Execution)?;
+        let cached_led_count = led_count_val
+            .to_i32()
+            .map(|v| v as usize)
+            .ok_or(EffectError::LedsCountNotInt)?;
 
         Ok(EffectInstance {
             ctx,
@@ -219,18 +301,26 @@ impl EffectEngine {
             stop_bc,
             leds_bc,
             led_count_bc,
+            cached_led_count,
         })
+    }
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for EffectManager {
+    fn default() -> Self {
+        Self {
+            engines: Vec::new(),
+            instances: Vec::new(),
+            active_instance: None,
+        }
     }
 }
 
 impl EffectManager {
     /// 创建空的效果管理器
     pub fn new() -> Self {
-        Self {
-            engines: Vec::new(),
-            instances: Vec::new(),
-            active_instance: None,
-        }
+        Self::default()
     }
 
     /// 注册一个效果引擎（返回引擎索引）
@@ -241,7 +331,7 @@ impl EffectManager {
     ) -> EffectResult<usize> {
         let name = name.into();
         if self.engines.iter().any(|(existing, _)| existing == &name) {
-            return Err(format!("duplicate effect engine name: {}", name));
+            return Err(EffectError::DuplicateEngine);
         }
 
         self.engines.push((name, engine));
@@ -261,14 +351,14 @@ impl EffectManager {
             .iter()
             .any(|entry| entry.name == instance_name)
         {
-            return Err(format!("duplicate effect instance name: {}", instance_name));
+            return Err(EffectError::DuplicateInstance);
         }
 
         let engine = self
             .engines
             .iter()
             .find(|(name, _)| name == engine_name)
-            .ok_or_else(|| format!("unknown effect engine: {}", engine_name))?;
+            .ok_or(EffectError::UnknownEngine)?;
 
         let instance = engine.1.instantiate_from_expr(config_expr)?;
         self.instances.push(ManagedEffectInstance {
@@ -292,14 +382,14 @@ impl EffectManager {
             .iter()
             .any(|entry| entry.name == instance_name)
         {
-            return Err(format!("duplicate effect instance name: {}", instance_name));
+            return Err(EffectError::DuplicateInstance);
         }
 
         let engine = self
             .engines
             .iter()
             .find(|(name, _)| name == engine_name)
-            .ok_or_else(|| format!("unknown effect engine: {}", engine_name))?;
+            .ok_or(EffectError::UnknownEngine)?;
 
         let instance = engine.1.instantiate_config(config)?;
         self.instances.push(ManagedEffectInstance {
@@ -313,7 +403,10 @@ impl EffectManager {
     /// 按索引激活某个实例（后续 tick/start 等操作将作用于该实例）
     pub fn activate(&mut self, instance_idx: usize) -> EffectResult<()> {
         if instance_idx >= self.instances.len() {
-            return Err(format!("invalid effect instance index: {}", instance_idx));
+            return Err(EffectError::InvalidIndex {
+                index: instance_idx,
+                max: self.instances.len(),
+            });
         }
         self.active_instance = Some(instance_idx);
         Ok(())
@@ -325,7 +418,7 @@ impl EffectManager {
             .instances
             .iter()
             .position(|entry| entry.name == instance_name)
-            .ok_or_else(|| format!("unknown effect instance: {}", instance_name))?;
+            .ok_or(EffectError::UnknownInstance)?;
         self.active_instance = Some(idx);
         Ok(())
     }
@@ -356,7 +449,10 @@ impl EffectManager {
     /// 按索引删除实例（自动修正激活索引）
     pub fn remove_instance(&mut self, instance_idx: usize) -> EffectResult<()> {
         if instance_idx >= self.instances.len() {
-            return Err(format!("invalid effect instance index: {}", instance_idx));
+            return Err(EffectError::InvalidIndex {
+                index: instance_idx,
+                max: self.instances.len(),
+            });
         }
         self.instances.remove(instance_idx);
 
@@ -375,7 +471,7 @@ impl EffectManager {
             .instances
             .iter()
             .position(|entry| entry.name == instance_name)
-            .ok_or_else(|| format!("unknown effect instance: {}", instance_name))?;
+            .ok_or(EffectError::UnknownInstance)?;
         self.remove_instance(idx)
     }
 
@@ -427,13 +523,11 @@ impl EffectManager {
 
     /// 获取当前激活实例的可变引用（内部方法）
     fn active_instance_mut(&mut self) -> EffectResult<&mut EffectInstance> {
-        let idx = self
-            .active_instance
-            .ok_or_else(|| "no active effect instance".to_string())?;
+        let idx = self.active_instance.ok_or(EffectError::NoActiveInstance)?;
         self.instances
             .get_mut(idx)
             .map(|entry| &mut entry.instance)
-            .ok_or_else(|| format!("invalid active effect instance index: {}", idx))
+            .ok_or(EffectError::NoActiveInstance)
     }
 
     /// 启动当前激活实例
@@ -466,6 +560,22 @@ impl EffectManager {
         self.active_instance_mut()?.set_config(key, value)
     }
 
+    /// 热替换当前激活实例的效果脚本（从已注册引擎中选择）
+    pub fn reload_active(&mut self, engine_name: &str, config_expr: &str) -> EffectResult<()> {
+        let engine = self
+            .engines
+            .iter()
+            .find(|(name, _)| name == engine_name)
+            .ok_or(EffectError::UnknownEngine)?;
+        let new_instance = engine.1.instantiate_from_expr(config_expr)?;
+        let active = self.active_instance_mut()?;
+        *active = new_instance;
+        // 更新管理记录中的引擎名
+        let idx = self.active_instance.unwrap();
+        self.instances[idx].engine_name = engine_name.to_string();
+        Ok(())
+    }
+
     /// 重置当前激活实例
     pub fn reset_active(&mut self) -> EffectResult<()> {
         self.active_instance_mut()?.reset()
@@ -478,7 +588,7 @@ impl EffectManager {
 
     /// 返回当前激活实例的 LED 灯珠数量
     pub fn active_led_count(&mut self) -> EffectResult<usize> {
-        self.active_instance_mut()?.led_count()
+        Ok(self.active_instance_mut()?.led_count())
     }
 
     /// 返回当前激活实例的内存统计信息
@@ -492,13 +602,15 @@ impl EffectInstance {
     pub fn start(&mut self) -> EffectResult<()> {
         self.ctx
             .execute(&self.start_bc)
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Execution)?;
         Ok(())
     }
 
     /// 执行一帧动画（调用 JS 的 tick()）
     pub fn tick(&mut self) -> EffectResult<()> {
-        self.ctx.execute(&self.tick_bc).map_err(|e| e.to_string())?;
+        self.ctx
+            .execute(&self.tick_bc)
+            .map_err(|_| EffectError::Execution)?;
         Ok(())
     }
 
@@ -506,7 +618,7 @@ impl EffectInstance {
     pub fn pause(&mut self) -> EffectResult<()> {
         self.ctx
             .execute(&self.pause_bc)
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Execution)?;
         Ok(())
     }
 
@@ -514,33 +626,32 @@ impl EffectInstance {
     pub fn resume(&mut self) -> EffectResult<()> {
         self.ctx
             .execute(&self.resume_bc)
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Execution)?;
         Ok(())
     }
 
     /// 停止效果（调用 JS 的 stop()）
     pub fn stop(&mut self) -> EffectResult<()> {
-        self.ctx.execute(&self.stop_bc).map_err(|e| e.to_string())?;
+        self.ctx
+            .execute(&self.stop_bc)
+            .map_err(|_| EffectError::Execution)?;
         Ok(())
     }
 
     /// 读取 LED 颜色数据（从 JS 的 leds Uint8Array 读取 &[u8]）
     pub fn led_buffer(&mut self) -> EffectResult<&[u8]> {
-        let leds_val = self.ctx.execute(&self.leds_bc).map_err(|e| e.to_string())?;
+        let leds_val = self
+            .ctx
+            .execute(&self.leds_bc)
+            .map_err(|_| EffectError::Execution)?;
         self.ctx
             .read_typed_array(leds_val)
-            .ok_or_else(|| "effect leds is not a TypedArray".to_string())
+            .ok_or(EffectError::LedsNotTypedArray)
     }
 
-    /// 返回 LED 灯珠数量（从 JS 的 ledCount 属性读取）
-    pub fn led_count(&mut self) -> EffectResult<usize> {
-        let val = self
-            .ctx
-            .execute(&self.led_count_bc)
-            .map_err(|e| e.to_string())?;
-        val.to_i32()
-            .map(|v| v as usize)
-            .ok_or_else(|| "effect ledCount is not an integer".to_string())
+    /// 返回 LED 灯珠数量（缓存值，无 JS 调用开销）
+    pub fn led_count(&self) -> usize {
+        self.cached_led_count
     }
 
     /// 动态更新配置（调用 JS 的 setConfig(key, value)）
@@ -552,17 +663,45 @@ impl EffectInstance {
             key = key,
             value = value.to_js_literal()
         );
-        self.ctx.eval(&script).map_err(|e| e.to_string())?;
+        self.ctx.eval(&script).map_err(|_| EffectError::Eval)?;
         Ok(())
     }
 
-    /// 重置效果实例（重新执行 createEffect(config)）
+    /// 重置效果实例（重新执行 createEffect(config)，刷新 ledCount 缓存）
     pub fn reset(&mut self) -> EffectResult<()> {
         let effect_val = self
             .ctx
             .execute(&self.create_bc)
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EffectError::Execution)?;
         self.ctx.set_global(EFFECT_GLOBAL, effect_val);
+
+        let led_count_val = self
+            .ctx
+            .execute(&self.led_count_bc)
+            .map_err(|_| EffectError::Execution)?;
+        self.cached_led_count = led_count_val
+            .to_i32()
+            .map(|v| v as usize)
+            .ok_or(EffectError::LedsCountNotInt)?;
+        Ok(())
+    }
+
+    /// 热替换效果脚本：用新引擎和新配置替换当前实例，旧 Context 自动释放
+    /// 典型场景：前端通过 BLE 发来新脚本，MCU 侧调用此方法无缝切换
+    pub fn reload(&mut self, engine: &EffectEngine, config_expr: &str) -> EffectResult<()> {
+        let new_instance = engine.instantiate_from_expr(config_expr)?;
+        *self = new_instance;
+        Ok(())
+    }
+
+    /// 热替换效果脚本（结构化配置版本）
+    pub fn reload_config(
+        &mut self,
+        engine: &EffectEngine,
+        config: ConfigValue,
+    ) -> EffectResult<()> {
+        let new_instance = engine.instantiate_config(config)?;
+        *self = new_instance;
         Ok(())
     }
 

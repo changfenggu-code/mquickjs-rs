@@ -10,7 +10,7 @@
       "Bash(git status*)",
       "Bash(git log*)",
       "Bash(git diff*)",
-      "Bash(timeout *)",
+      "Bash(ls *)",
       "WebSearch",
       "WebFetch"
     ]

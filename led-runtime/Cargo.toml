@@ -8,11 +8,12 @@ name = "led_runtime"
 path = "src/lib.rs"
 
 [dependencies]
-mquickjs = { package = "mquickjs-rs", path = ".." }
+mquickjs = { package = "mquickjs-rs", path = "..", default-features = false }
 
 [dev-dependencies]
 eframe = "0.30"
 slint = "1.15"
 
 [features]
-default = []
+default = ["compiler"]
+compiler = []

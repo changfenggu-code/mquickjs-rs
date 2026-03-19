@@ -70,7 +70,7 @@
 
 主要入口：
 
-- `EffectEngine::from_source(source)` — JS 源码编译为字节码存入内存，开发阶段使用
+- `EffectEngine::from_source(source)` — JS 源码编译为字节码存入内存，开发阶段使用（需 `compiler` feature，默认开启；MCU 构建可关闭）
 - `EffectEngine::from_bytecode(bytes)` — 直接加载预编译字节码，生产环境秒开
 - `engine.instantiate_from_expr(config_expr)` — 底层接口：直接传 JS 配置表达式字符串
 - `engine.instantiate_config(config)` — 更正式的宿主接口：传 `ConfigValue`
@@ -88,10 +88,13 @@
 - `pause()`
 - `resume()`
 - `stop()`
-- `led_buffer()`
-- `led_count()`
-- `set_config()`
-- `reset()`
+- `led_buffer()` — 返回 `&[u8]`，格式 `[R,G,B, R,G,B, ...]`
+- `led_count()` — 返回 `usize`（缓存值，零开销，无 JS 调用）
+- `set_config(key, value)`
+- `reset()` — 重新执行 `createEffect(config)`，刷新 `led_count` 缓存
+- `reload(engine, config_expr)` — 热替换：用新引擎和配置替换当前实例
+- `reload_config(engine, config)` — 热替换（结构化配置版本）
+- `memory_stats()`
 
 ### `ConfigValue`
 
@@ -146,6 +149,7 @@
 - `start_active()` / `tick_active()` / `pause_active()` / `resume_active()` / `stop_active()`
 - `set_active_config(key, value)`
 - `reset_active()`
+- `reload_active(engine_name, config_expr)` — 热替换当前激活实例的效果脚本
 - `memory_stats_active()`
 - `active_led_buffer()` / `active_led_count()`
 
@@ -163,7 +167,7 @@ let engine = EffectEngine::from_source(js)?;
 ### 创建实例（字符串配置）
 
 ```rust
-let mut instance = engine.instantiate_from_expr("{ ledCount: 4, speed: 100 }")?;
+let mut instance = engine.instantiate_from_expr("{ ledCount: 4, speed: 100, frameMs: 33 }")?;
 ```
 
 这里的 `config_expr` 当前是一个 **JS 对象字面量字符串**。
@@ -171,7 +175,7 @@ let mut instance = engine.instantiate_from_expr("{ ledCount: 4, speed: 100 }")?;
 例如：
 
 - `"{ ledCount: 4 }"`
-- `"{ ledCount: 60, speed: 120 }"`
+- `"{ ledCount: 60, speed: 120, frameMs: 33 }"`
 
 当前设计保留了这条底层接口，用于最大兼容现有脚本和调试场景。
 
@@ -184,6 +188,7 @@ let engine = EffectEngine::from_source(js)?;
 let config = ConfigValue::Object(vec![
     ("ledCount".into(), ConfigValue::Int(4)),
     ("speed".into(), ConfigValue::Int(100)),
+    ("frameMs".into(), ConfigValue::Int(33)),
     (
         "color".into(),
         ConfigValue::Object(vec![
@@ -219,7 +224,7 @@ instance.stop()?;
 
 ```rust
 let leds = instance.led_buffer()?;
-let led_count = instance.led_count()?;
+let led_count = instance.led_count(); // usize，零开销
 ```
 
 当前 `led_buffer()` 返回：
@@ -261,6 +266,38 @@ instance.reset()?;
 
 - 使用当前保存的配置重新调用 `createEffect(config)`
 - 重新生成 effect 实例状态
+
+### frameMs 与 speed 的区别
+
+配置中有两个时间相关参数：
+
+| 参数 | 含义 | 谁控制 |
+|---|---|---|
+| `frameMs` | 宿主调用 `tick()` 的间隔（ms），默认 33（约 30fps） | 宿主在创建时传入 |
+| `speed` | 动画节奏（ms），效果内部状态变化的时间间隔 | 由 `createEffect(config)` 决定，可通过 `set_config("speed", ...)` 修改 |
+
+**举例**：blink `speed=200, frameMs=33`（30fps）→ 每 ~6 帧（200ms）切换一次亮灭。
+
+这种设计让 MCU 侧以固定帧率驱动，所有效果共享同一个 `tick()` 循环，不同效果的动画快慢由 `speed` 独立控制。
+
+### 热替换效果脚本
+
+前端通过 BLE 发来新脚本时，不需要停机重建整个引擎，直接替换实例即可：
+
+```rust
+use led_runtime::EffectEngine;
+
+// MCU 收到新脚本的预编译字节码
+let new_engine = EffectEngine::from_bytecode(&new_bytes)?;
+
+// 替换当前实例，保留相同的 LED 数量配置
+instance.reload(&new_engine, "{ ledCount: 20, frameMs: 33 }")?;
+instance.start()?;
+
+// 下一帧 tick() 就是新效果了，旧 Context 自动释放
+```
+
+`reload` 内部用新引擎重新执行 `createEffect(config)`，整个 JS Context 重建，动画状态重置为零。
 
 ## 4. 从字节码创建引擎
 
@@ -311,13 +348,12 @@ let engine = EffectEngine::from_bytecode(&bytes)?;
 
 当前已具备：
 
-- 从源码/字节码创建引擎
-- 实例化 effect
-- 通过 `instantiate_config(...)` 使用结构化配置实例化 effect
+- 从源码/字节码创建引擎（后者适合 MCU 生产环境）
+- 实例化 effect（字符串表达式 / 结构化配置两种方式）
 - 生命周期方法调用
-- 读取 LED buffer
-- 更新配置
-- 重置实例
+- 读取 LED buffer（零开销缓存的 `led_count`）
+- 更新配置 / 重置实例
+- 热替换效果脚本（reload）
 - 最小调度层（`EffectManager`）
 
 当前仍未完全产品化的部分：
@@ -377,6 +413,7 @@ manager.instantiate_config(
     ConfigValue::Object(vec![
         ("ledCount".into(), ConfigValue::Int(20)),
         ("speed".into(), ConfigValue::Int(100)),
+        ("frameMs".into(), ConfigValue::Int(33)),
     ]),
 )?;
 
@@ -454,19 +491,24 @@ fn main() -> Result<(), String> {
     let js = include_str!("../js/effects/blink/effect.js");
 
     let engine = EffectEngine::from_source(js)?;
-    let mut instance = engine.instantiate_from_expr("{ ledCount: 4, speed: 100 }")?;
+    let mut instance = engine.instantiate_from_expr("{ ledCount: 4, speed: 100, frameMs: 33 }")?;
 
     instance.start()?;
     instance.tick()?;
 
     let leds = instance.led_buffer()?;
-    let led_count = instance.led_count()?;
+    let led_count = instance.led_count(); // usize，零开销
 
     println!("led_count = {}", led_count);
     println!("buffer_len = {}", leds.len());
 
+    // 动态改速度
     instance.set_config("speed", ConfigValue::Int(500))?;
     instance.reset()?;
+
+    // 热替换效果脚本（BLE 发来新字节码）
+    let new_engine = EffectEngine::from_bytecode(&new_bytes)?;
+    instance.reload(&new_engine, "{ ledCount: 20, frameMs: 33 }")?;
 
     Ok(())
 }
