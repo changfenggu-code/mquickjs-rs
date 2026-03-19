@@ -2,6 +2,7 @@
 //!
 //! The VM executes JavaScript bytecode using a stack-based architecture.
 
+pub mod gc;
 pub mod interpreter;
 mod natives;
 pub mod opcode;

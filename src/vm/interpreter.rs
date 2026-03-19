@@ -4,6 +4,7 @@
 
 use crate::runtime::FunctionBytecode;
 use crate::util::dtoa::i32_to_str;
+use crate::util::unicode::utf16_len;
 use crate::value::{float_to_value, Float, Value};
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::Stack;
@@ -51,6 +52,18 @@ impl Interpreter {
             timers: Vec::new(),
             next_timer_id: 1,
             gc_count: 0,
+            gc: super::gc::GcState::new(),
+            gen_closures: Vec::new(),
+            gen_var_cells: Vec::new(),
+            gen_arrays: Vec::new(),
+            gen_objects: Vec::new(),
+            gen_for_in_iterators: Vec::new(),
+            gen_for_of_iterators: Vec::new(),
+            gen_error_objects: Vec::new(),
+            gen_regex_objects: Vec::new(),
+            gen_typed_arrays: Vec::new(),
+            gen_array_buffers: Vec::new(),
+            gen_timers: Vec::new(),
             random_seed: 12345,
             #[cfg(feature = "dump")]
             runtime_string_source_stats: RuntimeStringSourceStats::default(),
@@ -90,6 +103,18 @@ impl Interpreter {
             timers: Vec::new(),
             next_timer_id: 1,
             gc_count: 0,
+            gc: super::gc::GcState::new(),
+            gen_closures: Vec::new(),
+            gen_var_cells: Vec::new(),
+            gen_arrays: Vec::new(),
+            gen_objects: Vec::new(),
+            gen_for_in_iterators: Vec::new(),
+            gen_for_of_iterators: Vec::new(),
+            gen_error_objects: Vec::new(),
+            gen_regex_objects: Vec::new(),
+            gen_typed_arrays: Vec::new(),
+            gen_array_buffers: Vec::new(),
+            gen_timers: Vec::new(),
             random_seed: 12345,
             #[cfg(feature = "dump")]
             runtime_string_source_stats: RuntimeStringSourceStats::default(),
@@ -98,6 +123,242 @@ impl Interpreter {
         };
         interp.register_builtins();
         interp
+    }
+
+    // ---------------------------------------------------------------------------
+    // Garbage Collection
+    // ---------------------------------------------------------------------------
+
+    /// Check if GC should run and collect if threshold is reached.
+    /// Call this on every N allocations to keep memory bounded.
+    pub fn maybe_gc(&mut self) {
+        if self.gc.record_alloc() {
+            self.gc_collect();
+        }
+    }
+
+    /// Run a full mark-sweep garbage collection.
+    /// This marks all reachable objects from roots, then sweeps dead slots.
+    pub fn gc_collect(&mut self) {
+        self.gc.start_cycle();
+
+        // Phase 1: Mark — traverse from all roots
+        self.gc_mark_roots();
+
+        // Phase 2: Sweep — mark dead slots as free
+        self.gc_sweep();
+
+        // Phase 3: Adjust trigger threshold based on survival rate
+        self.gc.adjust_trigger();
+
+        self.gc_count += 1;
+    }
+
+    /// Mark all objects reachable from GC roots.
+    fn gc_mark_roots(&mut self) {
+        use crate::vm::gc::gc_mark_value;
+
+        let phase = self.gc.phase;
+
+        // Extract gen arrays — they are separate fields of self, no borrow conflict
+        let gen_closures = &mut self.gen_closures;
+        let gen_var_cells = &mut self.gen_var_cells;
+        let gen_arrays = &mut self.gen_arrays;
+        let gen_objects = &mut self.gen_objects;
+        let gen_for_in_iterators = &mut self.gen_for_in_iterators;
+        let gen_for_of_iterators = &mut self.gen_for_of_iterators;
+
+        // Mark values on the value stack (active call frames)
+        for frame in &self.call_stack {
+            gc_mark_value(
+                frame.this_val, phase,
+                &self.closures, gen_closures,
+                &self.var_cells, gen_var_cells,
+                &self.arrays, gen_arrays,
+                &self.objects, gen_objects,
+                &self.for_in_iterators, gen_for_in_iterators,
+                &self.for_of_iterators, gen_for_of_iterators,
+            );
+            gc_mark_value(
+                frame.this_func, phase,
+                &self.closures, gen_closures,
+                &self.var_cells, gen_var_cells,
+                &self.arrays, gen_arrays,
+                &self.objects, gen_objects,
+                &self.for_in_iterators, gen_for_in_iterators,
+                &self.for_of_iterators, gen_for_of_iterators,
+            );
+        }
+
+        // Mark global variables
+        for (_name, val) in &self.global_vars {
+            gc_mark_value(
+                *val, phase,
+                &self.closures, gen_closures,
+                &self.var_cells, gen_var_cells,
+                &self.arrays, gen_arrays,
+                &self.objects, gen_objects,
+                &self.for_in_iterators, gen_for_in_iterators,
+                &self.for_of_iterators, gen_for_of_iterators,
+            );
+        }
+
+        // Mark timer callbacks
+        for (i, timer) in self.timers.iter().enumerate() {
+            if !timer.cancelled {
+                // Mark timer slot itself
+                if i < self.gen_timers.len() {
+                    self.gen_timers[i] = phase;
+                }
+                gc_mark_value(
+                    timer.callback, phase,
+                    &self.closures, gen_closures,
+                    &self.var_cells, gen_var_cells,
+                    &self.arrays, gen_arrays,
+                    &self.objects, gen_objects,
+                    &self.for_in_iterators, gen_for_in_iterators,
+                    &self.for_of_iterators, gen_for_of_iterators,
+                );
+            }
+        }
+    }
+
+    /// Sweep all containers, marking dead slots as free.
+    fn gc_sweep(&mut self) {
+        // Sweep closures
+        self.gc.sweep_closures = self.closures.len();
+        self.gc.live_closures = self.gc.sweep_container(
+            &mut self.gen_closures,
+            self.closures.len(),
+        );
+
+        // Sweep var_cells
+        self.gc.sweep_var_cells = self.var_cells.len();
+        self.gc.live_var_cells = self.gc.sweep_container(
+            &mut self.gen_var_cells,
+            self.var_cells.len(),
+        );
+
+        // Sweep arrays
+        self.gc.sweep_arrays = self.arrays.len();
+        self.gc.live_arrays = self.gc.sweep_container(
+            &mut self.gen_arrays,
+            self.arrays.len(),
+        );
+
+        // Sweep objects
+        self.gc.sweep_objects = self.objects.len();
+        self.gc.live_objects = self.gc.sweep_container(
+            &mut self.gen_objects,
+            self.objects.len(),
+        );
+
+        // Sweep for-in iterators
+        self.gc.sweep_for_in_iterators = self.for_in_iterators.len();
+        self.gc.live_for_in_iterators = self.gc.sweep_container(
+            &mut self.gen_for_in_iterators,
+            self.for_in_iterators.len(),
+        );
+
+        // Sweep for-of iterators
+        self.gc.sweep_for_of_iterators = self.for_of_iterators.len();
+        self.gc.live_for_of_iterators = self.gc.sweep_container(
+            &mut self.gen_for_of_iterators,
+            self.for_of_iterators.len(),
+        );
+
+        // Sweep error objects
+        self.gc.sweep_error_objects = self.error_objects.len();
+        self.gc.live_error_objects = self.gc.sweep_container(
+            &mut self.gen_error_objects,
+            self.error_objects.len(),
+        );
+
+        // Sweep regex objects
+        self.gc.sweep_regex_objects = self.regex_objects.len();
+        self.gc.live_regex_objects = self.gc.sweep_container(
+            &mut self.gen_regex_objects,
+            self.regex_objects.len(),
+        );
+
+        // Sweep typed arrays
+        self.gc.sweep_typed_arrays = self.typed_arrays.len();
+        self.gc.live_typed_arrays = self.gc.sweep_container(
+            &mut self.gen_typed_arrays,
+            self.typed_arrays.len(),
+        );
+
+        // Sweep array buffers
+        self.gc.sweep_array_buffers = self.array_buffers.len();
+        self.gc.live_array_buffers = self.gc.sweep_container(
+            &mut self.gen_array_buffers,
+            self.array_buffers.len(),
+        );
+
+        // Sweep timers: remove cancelled or dead timers
+        self.gc.sweep_timers = self.timers.len();
+        self.timers.retain(|t| !t.cancelled);
+        self.gen_timers.truncate(self.timers.len());
+        self.gc.live_timers = self.timers.len();
+    }
+
+    /// Allocate a closure slot, reusing a free slot if available.
+    /// Returns the slot index. Caller must push the ClosureData.
+    pub fn gc_alloc_closure(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_closures)
+    }
+
+    /// Allocate a var_cells slot, reusing a free slot if available.
+    /// Returns the slot index. Caller must push the Value.
+    pub fn gc_alloc_var_cell(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_var_cells)
+    }
+
+    /// Allocate an array slot, reusing a free slot if available.
+    /// Returns the slot index. Caller must push the Vec<Value>.
+    pub fn gc_alloc_array(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_arrays)
+    }
+
+    /// Allocate an object slot, reusing a free slot if available.
+    /// Returns the slot index. Caller must push the ObjectInstance.
+    pub fn gc_alloc_object(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_objects)
+    }
+
+    /// Allocate a for-in iterator slot, reusing a free slot if available.
+    pub fn gc_alloc_for_in_iterator(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_for_in_iterators)
+    }
+
+    /// Allocate a for-of iterator slot, reusing a free slot if available.
+    pub fn gc_alloc_for_of_iterator(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_for_of_iterators)
+    }
+
+    /// Allocate an error object slot, reusing a free slot if available.
+    pub fn gc_alloc_error_object(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_error_objects)
+    }
+
+    /// Allocate a regex object slot, reusing a free slot if available.
+    pub fn gc_alloc_regex_object(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_regex_objects)
+    }
+
+    /// Allocate a typed array slot, reusing a free slot if available.
+    pub fn gc_alloc_typed_array(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_typed_arrays)
+    }
+
+    /// Allocate an array buffer slot, reusing a free slot if available.
+    pub fn gc_alloc_array_buffer(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_array_buffers)
+    }
+
+    /// Allocate a timer slot, reusing a free slot if available.
+    pub fn gc_alloc_timer(&mut self) -> usize {
+        self.gc.alloc_slot(&mut self.gen_timers)
     }
 
     /// Get memory statistics from the interpreter
@@ -144,7 +405,7 @@ impl Interpreter {
         // Check if it's a runtime string
         if idx >= Self::RUNTIME_STRING_OFFSET {
             let runtime_idx = (idx - Self::RUNTIME_STRING_OFFSET) as usize;
-            return self.runtime_strings.get(runtime_idx).map(|s| s.as_str());
+            return self.runtime_string_as_str(runtime_idx);
         }
 
         // Otherwise it's a compile-time string
@@ -173,7 +434,7 @@ impl Interpreter {
     #[inline]
     fn create_runtime_string_raw(&mut self, s: String) -> Value {
         let idx = self.runtime_strings.len();
-        self.runtime_strings.push(s);
+        self.runtime_strings.push(s.into());
         Value::string(Self::RUNTIME_STRING_OFFSET + idx as u16)
     }
 
@@ -376,7 +637,7 @@ impl Interpreter {
             {
                 return val;
             }
-            // Compile-time string 鈥?promote to runtime
+            // Compile-time string 閳?promote to runtime
             if let Some(s) = bytecode.string_constants.get(idx as usize) {
                 return self.create_runtime_string(s.clone());
             }
@@ -393,7 +654,7 @@ impl Interpreter {
         }
         if str_idx >= Self::RUNTIME_STRING_OFFSET {
             let runtime_idx = (str_idx - Self::RUNTIME_STRING_OFFSET) as usize;
-            self.runtime_strings.get(runtime_idx).map(|s| s.as_str())
+            self.runtime_string_as_str(runtime_idx)
         } else {
             // Compile-time string - use current_string_constants if available
             if let Some(constants_ptr) = self.current_string_constants {
@@ -404,6 +665,79 @@ impl Interpreter {
                 None
             }
         }
+    }
+
+    fn runtime_string_part_len(&self, part: &RuntimeStringPart) -> usize {
+        match part {
+            RuntimeStringPart::Runtime(idx) => {
+                let runtime_idx = (*idx - Self::RUNTIME_STRING_OFFSET) as usize;
+                self.runtime_strings
+                    .get(runtime_idx)
+                    .map(|s| s.len())
+                    .unwrap_or_default()
+            }
+            RuntimeStringPart::Owned(s) => s.len(),
+        }
+    }
+
+    fn runtime_string_part_from_value(
+        &self,
+        val: Value,
+        bytecode: &FunctionBytecode,
+    ) -> RuntimeStringPart {
+        if let Some(str_idx) = val.to_string_idx() {
+            if str_idx >= Self::RUNTIME_STRING_OFFSET {
+                return RuntimeStringPart::Runtime(str_idx);
+            }
+            if let Some(s) = self.get_string_content(val, bytecode) {
+                return RuntimeStringPart::Owned(s.to_string());
+            }
+        }
+
+        let mut out = String::new();
+        self.append_value_to_string(&mut out, val, bytecode);
+        RuntimeStringPart::Owned(out)
+    }
+
+    fn append_runtime_string_part(&self, out: &mut String, part: &RuntimeStringPart) {
+        match part {
+            RuntimeStringPart::Runtime(idx) => {
+                if let Some(s) = self.get_string_by_idx(*idx) {
+                    out.push_str(s);
+                }
+            }
+            RuntimeStringPart::Owned(s) => out.push_str(s),
+        }
+    }
+
+    fn runtime_string_as_str(&self, runtime_idx: usize) -> Option<&str> {
+        let runtime = self.runtime_strings.get(runtime_idx)?;
+        unsafe {
+            let flat = &mut *runtime.flat.get();
+            if flat.is_none() {
+                let mut out = String::with_capacity(runtime.len);
+                if let Some(left) = &runtime.left {
+                    self.append_runtime_string_part(&mut out, left);
+                }
+                if let Some(right) = &runtime.right {
+                    self.append_runtime_string_part(&mut out, right);
+                }
+                *flat = Some(out);
+            }
+            flat.as_deref()
+        }
+    }
+
+    fn create_runtime_string_concat(
+        &mut self,
+        left: RuntimeStringPart,
+        right: RuntimeStringPart,
+    ) -> Value {
+        let len = self.runtime_string_part_len(&left) + self.runtime_string_part_len(&right);
+        let idx = self.runtime_strings.len();
+        self.runtime_strings
+            .push(RuntimeString::concat(left, right, len));
+        Value::string(Self::RUNTIME_STRING_OFFSET + idx as u16)
     }
 
     fn lookup_global_value(&self, name: &str) -> Option<Value> {
@@ -508,6 +842,52 @@ impl Interpreter {
     unsafe fn get_array_unchecked(&self, idx: u32) -> &Vec<Value> {
         debug_assert!((idx as usize) < self.arrays.len());
         unsafe { self.arrays.get_unchecked(idx as usize) }
+    }
+
+    #[inline]
+    fn dense_array_access(arr: Value, idx: Value) -> Option<(u32, usize)> {
+        let idx_raw = idx.raw().0;
+        if (idx_raw & 1) != 0 {
+            return None;
+        }
+
+        let index = (idx_raw as i64 >> 1) as i32;
+        if index < 0 {
+            return None;
+        }
+
+        let arr_raw = arr.raw().0;
+        if (arr_raw & 0x1f) != crate::value::SpecialTag::CatchOffset as u64 {
+            return None;
+        }
+
+        let tagged = (arr_raw >> 5) as i32;
+        if (tagged & crate::value::ARRAY_INDEX_MARKER) == 0 {
+            return None;
+        }
+
+        Some((
+            (tagged & !crate::value::ARRAY_INDEX_MARKER) as u32,
+            index as usize,
+        ))
+    }
+
+    #[inline]
+    fn is_dense_array_access(arr: Value, idx: Value) -> bool {
+        let idx_raw = idx.raw().0;
+        if (idx_raw & 1) != 0 {
+            return false;
+        }
+        if (idx_raw as i64 >> 1) < 0 {
+            return false;
+        }
+
+        let arr_raw = arr.raw().0;
+        if (arr_raw & 0x1f) != crate::value::SpecialTag::CatchOffset as u64 {
+            return false;
+        }
+
+        (((arr_raw >> 5) as i32) & crate::value::ARRAY_INDEX_MARKER) != 0
     }
 
     #[inline]
@@ -691,8 +1071,20 @@ impl Interpreter {
                 .unwrap_or_default()
         } else if obj.is_string() {
             obj.to_string_idx()
-                .and_then(|idx| self.get_string_by_idx(idx))
-                .map(|s| Value::int(s.len() as i32))
+                .map(|idx| {
+                    if idx >= Self::RUNTIME_STRING_OFFSET {
+                        let runtime_idx = (idx - Self::RUNTIME_STRING_OFFSET) as usize;
+                        self.runtime_strings
+                            .get(runtime_idx)
+                            .and_then(|_| self.runtime_string_as_str(runtime_idx))
+                            .map(|s| Value::int(utf16_len(s) as i32))
+                            .unwrap_or(Value::int(0))
+                    } else {
+                        self.get_string_by_idx(idx)
+                            .map(|s| Value::int(utf16_len(s) as i32))
+                            .unwrap_or(Value::int(0))
+                    }
+                })
                 .unwrap_or(Value::int(0))
         } else {
             self.get_field_value(obj, "length")
@@ -701,19 +1093,183 @@ impl Interpreter {
 
     #[inline]
     fn store_local_slot(&mut self, idx: usize, val: Value) {
+        if idx == 0 {
+            if let Some(frame) = self.call_stack.last_mut() {
+                frame.local0_string_builder = None;
+            }
+        }
         let Some(frame) = self.call_stack.last() else {
             return;
         };
-        let cell = frame
-            .local_cells
-            .as_ref()
-            .and_then(|lc| lc.get(idx).copied().flatten());
+        let cell = if idx == 0 {
+            frame.local0_cell
+        } else {
+            frame
+                .local_cells
+                .as_ref()
+                .and_then(|lc| lc.get(idx).copied().flatten())
+        };
         let frame_ptr = frame.frame_ptr;
         if let Some(cell_idx) = cell {
             self.var_cells[cell_idx as usize] = val;
         } else {
             self.stack.set_local_at(frame_ptr, idx, val);
         }
+    }
+
+    #[inline]
+    fn load_local_slot(&mut self, idx: usize) -> Value {
+        if idx == 0 {
+            let should_materialize = self
+                .call_stack
+                .last()
+                .is_some_and(|frame| frame.local0_string_builder.is_some());
+            if should_materialize {
+                if let Some(val) = self.materialize_local0_string_builder() {
+                    return val;
+                }
+            }
+        }
+
+        let frame = self.call_stack.last().unwrap();
+        let cell = if idx == 0 {
+            frame.local0_cell
+        } else {
+            frame
+                .local_cells
+                .as_ref()
+                .and_then(|lc| lc.get(idx).copied().flatten())
+        };
+        let frame_ptr = frame.frame_ptr;
+        if let Some(cell_idx) = cell {
+            self.var_cells[cell_idx as usize]
+        } else {
+            unsafe { self.stack.get_local_at_unchecked(frame_ptr, idx) }
+        }
+    }
+
+    #[inline]
+    fn ensure_captured_local_cell(&mut self, idx: usize) -> u32 {
+        if idx == 0 {
+            let should_materialize = self
+                .call_stack
+                .last()
+                .is_some_and(|frame| frame.local0_string_builder.is_some());
+            if should_materialize {
+                let _ = self.materialize_local0_string_builder();
+            }
+        }
+
+        let existing_cell = {
+            let frame = self.call_stack.last().unwrap();
+            frame
+                .local_cells
+                .as_ref()
+                .and_then(|lc| lc.get(idx).copied().flatten())
+                .or(if idx == 0 { frame.local0_cell } else { None })
+        };
+        if let Some(cell_idx) = existing_cell {
+            return cell_idx;
+        }
+
+        let val = self.load_local_slot(idx);
+        let cell_idx = self.alloc_var_cell(val);
+
+        let frame = self.call_stack.last_mut().unwrap();
+        let local_count = unsafe { (*frame.bytecode).local_count as usize };
+        let local_cells = frame
+            .local_cells
+            .get_or_insert_with(|| vec![None; local_count]);
+        if idx < local_cells.len() {
+            local_cells[idx] = Some(cell_idx);
+        }
+        if idx == 0 {
+            frame.local0_cell = Some(cell_idx);
+        }
+
+        cell_idx
+    }
+
+    #[inline]
+    fn try_inc_local_slot_discard(&mut self, idx: usize) -> InterpreterResult<bool> {
+        if idx != 0 {
+            let (cell, frame_ptr, bytecode_ptr) = {
+                let frame = self.call_stack.last().unwrap();
+                let cell = frame
+                    .local_cells
+                    .as_ref()
+                    .and_then(|lc| lc.get(idx).copied().flatten());
+                (cell, frame.frame_ptr, frame.bytecode)
+            };
+
+            let val = if let Some(cell_idx) = cell {
+                self.var_cells[cell_idx as usize]
+            } else {
+                unsafe { self.stack.get_local_at_unchecked(frame_ptr, idx) }
+            };
+
+            if val.is_string() {
+                let bytecode = unsafe { &*bytecode_ptr };
+                let mut out = if let Some(s) = self.get_string_content(val, bytecode) {
+                    String::with_capacity(s.len() + 1)
+                } else {
+                    String::with_capacity(self.value_to_string_len_hint(val, bytecode) + 1)
+                };
+                self.append_value_to_string(&mut out, val, bytecode);
+                out.push('1');
+                self.bump_runtime_string_concat();
+                let result = self.create_runtime_string_raw(out);
+                if let Some(cell_idx) = cell {
+                    self.var_cells[cell_idx as usize] = result;
+                } else {
+                    self.stack.set_local_at(frame_ptr, idx, result);
+                }
+                return Ok(true);
+            }
+        }
+
+        let val = self.load_local_slot(idx);
+        if val.is_string() {
+            let frame = self.call_stack.last().unwrap();
+            let bytecode = unsafe { &*frame.bytecode };
+            let mut out = if let Some(s) = self.get_string_content(val, bytecode) {
+                String::with_capacity(s.len() + 1)
+            } else {
+                String::with_capacity(self.value_to_string_len_hint(val, bytecode) + 1)
+            };
+            self.append_value_to_string(&mut out, val, bytecode);
+            out.push('1');
+            self.bump_runtime_string_concat();
+            let result = self.create_runtime_string_raw(out);
+            self.store_local_slot(idx, result);
+            return Ok(true);
+        }
+        match self.try_op(self.op_add(val, Value::int(1)))? {
+            Some(result) => {
+                self.store_local_slot(idx, result);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    #[inline]
+    fn materialize_local0_string_builder(&mut self) -> Option<Value> {
+        let (cell, frame_ptr, builder) = {
+            let frame = self.call_stack.last_mut()?;
+            let builder = frame.local0_string_builder.take()?;
+            let cell = frame.local0_cell;
+            (cell, frame.frame_ptr, builder)
+        };
+
+        self.bump_runtime_string_concat();
+        let val = self.create_runtime_string_raw(builder);
+        if let Some(cell_idx) = cell {
+            self.var_cells[cell_idx as usize] = val;
+        } else {
+            self.stack.set_local_at(frame_ptr, 0, val);
+        }
+        Some(val)
     }
 
     #[inline]
@@ -725,7 +1281,7 @@ impl Interpreter {
         let bc = &bytecode.bytecode;
         let pc = frame.pc;
 
-        // Hot sieve/local-update shapes:
+        // Hot local-update shapes:
         //   Add; Dup; PutLoc3; Drop
         //   Add; Dup; PutLoc8 4; Drop
         let matched = if bc.get(pc).copied() == Some(OpCode::Dup as u8)
@@ -860,6 +1416,7 @@ impl Interpreter {
     /// # Safety
     /// The bytecode pointer must be valid for the duration of execution.
     pub fn execute(&mut self, bytecode: &FunctionBytecode) -> InterpreterResult<Value> {
+        self.maybe_gc();
         self.call_function(bytecode, Value::undefined(), &[])
     }
 
@@ -880,6 +1437,9 @@ impl Interpreter {
         this_val: Value,
         args: &[Value],
     ) -> InterpreterResult<Value> {
+        // Check if GC should run
+        self.maybe_gc();
+
         // Check recursion limit
         if self.call_stack.len() >= self.max_recursion {
             self.try_handle_runtime_error(InterpreterError::InternalError(
@@ -1178,6 +1738,16 @@ impl Interpreter {
 
                 // Get local 0-3 (optimized)
                 op if op == OpCode::GetLoc0 as u8 => {
+                    let should_materialize = self
+                        .call_stack
+                        .last()
+                        .is_some_and(|frame| frame.local0_string_builder.is_some());
+                    if should_materialize {
+                        if let Some(val) = self.materialize_local0_string_builder() {
+                            self.stack.push(val);
+                            continue;
+                        }
+                    }
                     let frame = self.call_stack.last().unwrap();
                     let cell = frame
                         .local_cells
@@ -1191,45 +1761,90 @@ impl Interpreter {
                     };
                     self.stack.push(val);
                 }
-                op if op == OpCode::GetLoc1 as u8 => {
-                    let frame = self.call_stack.last().unwrap();
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.get(1).copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    let val = if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize]
-                    } else {
-                        unsafe { self.stack.get_local_at_unchecked(frame_ptr, 1) }
+
+                op if op == OpCode::AppendConstStringToLoc0 as u8 => {
+                    let (str_idx, bytecode_ptr) = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let bc = &bytecode.bytecode;
+                        let str_idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]);
+                        frame.pc += 2;
+                        (str_idx, frame.bytecode)
                     };
+                    let bytecode = unsafe { &*bytecode_ptr };
+                    let suffix = self
+                        .get_const_string_content(bytecode, str_idx)
+                        .unwrap_or_default()
+                        .to_string();
+
+                    {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        if let Some(buf) = frame.local0_string_builder.as_mut() {
+                            buf.push_str(&suffix);
+                            continue;
+                        }
+                    }
+
+                    let lhs = if let Some(val) = self.materialize_local0_string_builder() {
+                        val
+                    } else {
+                        let frame = self.call_stack.last().unwrap();
+                        let cell = frame
+                            .local_cells
+                            .as_ref()
+                            .and_then(|lc| lc.first().copied().flatten());
+                        let frame_ptr = frame.frame_ptr;
+                        if let Some(cell_idx) = cell {
+                            self.var_cells[cell_idx as usize]
+                        } else {
+                            unsafe { self.stack.get_local_at_unchecked(frame_ptr, 0) }
+                        }
+                    };
+
+                    let mut out = if let Some(lhs_str) = self.get_string_content(lhs, bytecode) {
+                        String::with_capacity(lhs_str.len() + suffix.len())
+                    } else if let Some(n) = lhs.to_i32() {
+                        let mut buf = [0u8; 16];
+                        let len = i32_to_str(&mut buf, n);
+                        String::with_capacity(len + suffix.len())
+                    } else {
+                        String::with_capacity(
+                            self.value_to_string_len_hint(lhs, bytecode) + suffix.len(),
+                        )
+                    };
+                    self.append_value_to_string(&mut out, lhs, bytecode);
+                    out.push_str(&suffix);
+                    let frame = self.call_stack.last_mut().unwrap();
+                    frame.local0_string_builder = Some(out);
+                }
+                op if op == OpCode::GetLoc1 as u8 => {
+                    let val = self.load_local_slot(1);
                     self.stack.push(val);
                 }
                 op if op == OpCode::GetLoc2 as u8 => {
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.get(2).copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    let val = if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize]
+                    let val = if frame.local_cells.is_none() {
+                        unsafe { self.stack.get_local_at_unchecked(frame.frame_ptr, 2) }
                     } else {
-                        unsafe { self.stack.get_local_at_unchecked(frame_ptr, 2) }
+                        self.load_local_slot(2)
                     };
                     self.stack.push(val);
                 }
                 op if op == OpCode::GetLoc3 as u8 => {
                     let frame = self.call_stack.last().unwrap();
-                    let cell = frame
-                        .local_cells
-                        .as_ref()
-                        .and_then(|lc| lc.get(3).copied().flatten());
-                    let frame_ptr = frame.frame_ptr;
-                    let val = if let Some(cell_idx) = cell {
-                        self.var_cells[cell_idx as usize]
+                    let val = if frame.local_cells.is_none() {
+                        unsafe { self.stack.get_local_at_unchecked(frame.frame_ptr, 3) }
                     } else {
-                        unsafe { self.stack.get_local_at_unchecked(frame_ptr, 3) }
+                        self.load_local_slot(3)
+                    };
+                    self.stack.push(val);
+                }
+                op if op == OpCode::GetLoc4 as u8 => {
+                    let frame = self.call_stack.last().unwrap();
+                    let val = if frame.local_cells.is_none() {
+                        unsafe { self.stack.get_local_at_unchecked(frame.frame_ptr, 4) }
+                    } else {
+                        self.load_local_slot(4)
                     };
                     self.stack.push(val);
                 }
@@ -1250,6 +1865,48 @@ impl Interpreter {
                 op if op == OpCode::PutLoc3 as u8 => {
                     let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     self.store_local_slot(3, val);
+                }
+                op if op == OpCode::PutLoc4 as u8 => {
+                    let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    self.store_local_slot(4, val);
+                }
+
+                op if op == OpCode::IncLoc8Drop as u8 => {
+                    let idx = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let idx = bytecode.bytecode[frame.pc] as usize;
+                        frame.pc += 1;
+                        idx
+                    };
+                    if !self.try_inc_local_slot_discard(idx)? {
+                        continue;
+                    }
+                }
+                op if op == OpCode::IncLoc0Drop as u8 => {
+                    if !self.try_inc_local_slot_discard(0)? {
+                        continue;
+                    }
+                }
+                op if op == OpCode::IncLoc1Drop as u8 => {
+                    if !self.try_inc_local_slot_discard(1)? {
+                        continue;
+                    }
+                }
+                op if op == OpCode::IncLoc2Drop as u8 => {
+                    if !self.try_inc_local_slot_discard(2)? {
+                        continue;
+                    }
+                }
+                op if op == OpCode::IncLoc3Drop as u8 => {
+                    if !self.try_inc_local_slot_discard(3)? {
+                        continue;
+                    }
+                }
+                op if op == OpCode::IncLoc4Drop as u8 => {
+                    if !self.try_inc_local_slot_discard(4)? {
+                        continue;
+                    }
                 }
 
                 // Get local (8-bit index)
@@ -1551,7 +2208,6 @@ impl Interpreter {
                     let lhs_str = self
                         .get_const_string_content(bytecode, str_idx)
                         .unwrap_or_default();
-
                     let len_rhs = self.value_to_string_len_hint(rhs, bytecode);
                     let mut out = String::with_capacity(lhs_str.len() + len_rhs);
                     out.push_str(lhs_str);
@@ -1571,31 +2227,12 @@ impl Interpreter {
                     let lhs = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     let rhs_str = self
                         .get_const_string_content(bytecode, str_idx)
-                        .unwrap_or_default();
-
-                    let out = if let Some(lhs_str) = self.get_string_content(lhs, bytecode) {
-                        let mut out = String::with_capacity(lhs_str.len() + rhs_str.len());
-                        out.push_str(lhs_str);
-                        out.push_str(rhs_str);
-                        out
-                    } else if let Some(n) = lhs.to_i32() {
-                        let mut buf = [0u8; 16];
-                        let len = i32_to_str(&mut buf, n);
-                        let mut out = String::with_capacity(len + rhs_str.len());
-                        // SAFETY: i32_to_str only writes ASCII decimal digits and optional '-'.
-                        let s = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
-                        out.push_str(s);
-                        out.push_str(rhs_str);
-                        out
-                    } else {
-                        let len_lhs = self.value_to_string_len_hint(lhs, bytecode);
-                        let mut out = String::with_capacity(len_lhs + rhs_str.len());
-                        self.append_value_to_string(&mut out, lhs, bytecode);
-                        out.push_str(rhs_str);
-                        out
-                    };
+                        .unwrap_or_default()
+                        .to_string();
                     self.bump_runtime_string_concat();
-                    let result = self.create_runtime_string_raw(out);
+                    let left = self.runtime_string_part_from_value(lhs, bytecode);
+                    let right = RuntimeStringPart::Owned(rhs_str);
+                    let result = self.create_runtime_string_concat(left, right);
                     self.stack.push(result);
                 }
 
@@ -1642,6 +2279,38 @@ impl Interpreter {
                         out.push_str(right_str);
                         out
                     };
+                    self.bump_runtime_string_concat();
+                    let result = self.create_runtime_string_raw(out);
+                    self.stack.push(result);
+                }
+
+                op if op == OpCode::AddConstStringSurroundValue as u8 => {
+                    let frame = self.call_stack.last_mut().unwrap();
+                    let bytecode = unsafe { &*frame.bytecode };
+                    let bc = &bytecode.bytecode;
+                    let left_idx = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]);
+                    let mid_idx = u16::from_le_bytes([bc[frame.pc + 2], bc[frame.pc + 3]]);
+                    frame.pc += 4;
+
+                    let rhs = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let middle = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let _left = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let left_str = self
+                        .get_const_string_content(bytecode, left_idx)
+                        .unwrap_or_default();
+                    let mid_str = self
+                        .get_const_string_content(bytecode, mid_idx)
+                        .unwrap_or_default();
+
+                    let len_middle = self.value_to_string_len_hint(middle, bytecode);
+                    let len_rhs = self.value_to_string_len_hint(rhs, bytecode);
+                    let mut out = String::with_capacity(
+                        left_str.len() + len_middle + mid_str.len() + len_rhs,
+                    );
+                    out.push_str(left_str);
+                    self.append_value_to_string(&mut out, middle, bytecode);
+                    out.push_str(mid_str);
+                    self.append_value_to_string(&mut out, rhs, bytecode);
                     self.bump_runtime_string_concat();
                     let result = self.create_runtime_string_raw(out);
                     self.stack.push(result);
@@ -1864,7 +2533,7 @@ impl Interpreter {
                     }
                 }
 
-                // Comparison: Equal (==) 鈥?abstract equality with type coercion
+                // Comparison: Equal (==) 閳?abstract equality with type coercion
                 op if op == OpCode::Eq as u8 => {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (b, a) = unsafe { self.stack.pop2_unchecked() };
@@ -1883,7 +2552,7 @@ impl Interpreter {
                     }
                 }
 
-                // Comparison: Not equal (!=) 鈥?abstract inequality
+                // Comparison: Not equal (!=) 閳?abstract inequality
                 op if op == OpCode::Neq as u8 => {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (b, a) = unsafe { self.stack.pop2_unchecked() };
@@ -1901,7 +2570,7 @@ impl Interpreter {
                     }
                 }
 
-                // Comparison: Strict equal (===) — no type coercion
+                // Comparison: Strict equal (===) 鈥?no type coercion
                 op if op == OpCode::StrictEq as u8 => {
                     let b = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                     let a = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
@@ -2190,7 +2859,6 @@ impl Interpreter {
                     let bytecode = unsafe { &*frame.bytecode };
                     let bc = &bytecode.bytecode;
                     let pc = frame.pc;
-                    let frame_ptr = frame.frame_ptr;
                     let closure_idx_current = frame.closure_idx;
 
                     let func_idx = u16::from_le_bytes([bc[pc], bc[pc + 1]]) as usize;
@@ -2207,44 +2875,11 @@ impl Interpreter {
                     let mut cell_indices = Vec::with_capacity(inner_func.captures.len());
                     for capture in &inner_func.captures {
                         let cell_idx = if capture.is_local {
-                            // Capture from outer's locals (current frame)
-                            // Check if this local already has a cell (shared with other closures)
-                            let frame_ref = self.call_stack.last().unwrap();
-                            let existing_cell = frame_ref
-                                .local_cells
-                                .as_ref()
-                                .and_then(|lc| lc.get(capture.outer_index).copied().flatten());
-                            if let Some(idx) = existing_cell {
-                                // Reuse existing cell 鈥?but first sync the cell with the
-                                // current local value (the local may have been updated since
-                                // the cell was created)
-                                let current_val = self
-                                    .stack
-                                    .get_local_at(frame_ptr, capture.outer_index)
-                                    .unwrap_or_default();
-                                self.var_cells[idx as usize] = current_val;
-                                idx
-                            } else {
-                                // Allocate a new cell with the current local value
-                                let val = self
-                                    .stack
-                                    .get_local_at(frame_ptr, capture.outer_index)
-                                    .unwrap_or_default();
-                                let idx = self.alloc_var_cell(val);
-                                // Record in the frame's local_cells map
-                                let frame_mut = self.call_stack.last_mut().unwrap();
-                                let local_count =
-                                    unsafe { (*frame_mut.bytecode).local_count } as usize;
-                                let lc = frame_mut
-                                    .local_cells
-                                    .get_or_insert_with(|| vec![None; local_count]);
-                                if capture.outer_index < lc.len() {
-                                    lc[capture.outer_index] = Some(idx);
-                                }
-                                idx
-                            }
+                            // Once a local is captured, later closures and outer-frame
+                            // writes must keep reusing the same shared cell.
+                            self.ensure_captured_local_cell(capture.outer_index)
                         } else {
-                            // Capture from outer's captures 鈥?reuse the same cell index
+                            // Capture from outer's captures: reuse the same cell index.
                             if let Some(closure_idx) = closure_idx_current {
                                 self.get_closure(closure_idx as u32)
                                     .and_then(|c| c.get_cell_index(capture.outer_index))
@@ -2780,7 +3415,7 @@ impl Interpreter {
                             let arr = if let Some(len) = args.first().and_then(|v| v.to_i32()) {
                                 vec![Value::undefined(); len.max(0) as usize]
                             } else if !args.is_empty() {
-                                // new Array(a, b, c) → [a, b, c]
+                                // new Array(a, b, c) 鈫?[a, b, c]
                                 args.to_vec()
                             } else {
                                 Vec::new()
@@ -3003,6 +3638,21 @@ impl Interpreter {
                         }?;
                         self.stack.push(result);
                         continue;
+                    }
+
+                    // Promote compile-time string arguments to runtime strings before
+                    // entering a user-defined method frame so parameter string values
+                    // stay valid across bytecode/string-constant tables.
+                    {
+                        let stack_len = self.stack.len();
+                        for i in 0..argc {
+                            let slot = stack_len - argc + i;
+                            let val = self.stack.get_raw(slot);
+                            if val.is_string() {
+                                let promoted = self.promote_string(val, bytecode);
+                                self.stack.set_raw(slot, promoted);
+                            }
+                        }
                     }
 
                     // Determine if this is a closure or a regular function
@@ -3338,60 +3988,63 @@ impl Interpreter {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (idx, arr) = unsafe { self.stack.pop2_unchecked() };
 
-                    let branch = {
+                    let (branch_op, branch_offset) = {
                         let frame = self.call_stack.last_mut().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
                         let bc = &bytecode.bytecode;
-                        if frame.pc < bc.len() {
-                            let next = bc[frame.pc];
-                            if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
-                                && frame.pc + 4 < bc.len()
-                            {
+                        let pc = frame.pc;
+                        if pc + 4 < bc.len() {
+                            let next = unsafe { *bc.get_unchecked(pc) };
+                            if next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8 {
                                 let offset = i32::from_le_bytes([
-                                    bc[frame.pc + 1],
-                                    bc[frame.pc + 2],
-                                    bc[frame.pc + 3],
-                                    bc[frame.pc + 4],
+                                    unsafe { *bc.get_unchecked(pc + 1) },
+                                    unsafe { *bc.get_unchecked(pc + 2) },
+                                    unsafe { *bc.get_unchecked(pc + 3) },
+                                    unsafe { *bc.get_unchecked(pc + 4) },
                                 ]);
                                 frame.pc += 5;
-                                Some((next == OpCode::IfTrue as u8, offset))
+                                (next, offset)
                             } else {
-                                None
+                                (0, 0)
                             }
                         } else {
-                            None
+                            (0, 0)
                         }
                     };
 
                     // Fast path: regular array with integer index
-                    if arr.is_array() && idx.is_int() {
-                        let arr_idx = unsafe { arr.to_array_idx_unchecked() };
-                        let index = unsafe { idx.to_i32_unchecked() };
-                        if index >= 0 {
-                            let index = index as usize;
-                            // SAFETY: Array index is valid for arrays we created
-                            let array = unsafe { self.get_array_unchecked(arr_idx) };
-                            let val = if index < array.len() {
-                                // SAFETY: We just checked index < len
-                                unsafe { *array.get_unchecked(index) }
+                    if let Some((arr_idx, index)) = Self::dense_array_access(arr, idx) {
+                        // SAFETY: Array index is valid for arrays we created
+                        let array = unsafe { self.get_array_unchecked(arr_idx) };
+                        let val = if index < array.len() {
+                            // SAFETY: We just checked index < len
+                            unsafe { *array.get_unchecked(index) }
+                        } else {
+                            Value::undefined()
+                        };
+                        if branch_op != 0 {
+                            let branch_on_true = branch_op == OpCode::IfTrue as u8;
+                            let raw = val.raw().0;
+                            let take_branch = if raw == crate::value::RawValue::TRUE.0 {
+                                branch_on_true
+                            } else if raw == crate::value::RawValue::FALSE.0
+                                || raw == crate::value::RawValue::NULL.0
+                                || raw == crate::value::RawValue::UNDEFINED.0
+                            {
+                                !branch_on_true
+                            } else if val.is_int() {
+                                (unsafe { val.to_i32_unchecked() != 0 }) == branch_on_true
                             } else {
-                                Value::undefined()
+                                Self::branch_matches_value(val, branch_on_true)
                             };
-                            if let Some((branch_on_true, offset)) = branch {
-                                let take_branch = if val.is_bool() {
-                                    val.to_bool().unwrap_or(false) == branch_on_true
-                                } else {
-                                    Self::branch_matches_value(val, branch_on_true)
-                                };
-                                if take_branch {
-                                    let frame = self.call_stack.last_mut().unwrap();
-                                    frame.pc = (frame.pc as i32 + offset) as usize;
-                                }
-                            } else {
-                                self.stack.push(val);
+                            if take_branch {
+                                let frame = self.call_stack.last_mut().unwrap();
+                                frame.pc = (frame.pc as i32 + branch_offset) as usize;
                             }
-                            continue;
+                        } else {
+                            self.stack.push(val);
                         }
+                        continue;
                     }
 
                     // Check if it's a typed array
@@ -3407,10 +4060,11 @@ impl Interpreter {
                             .get(typed_idx as usize)
                             .and_then(|ta| ta.get(index))
                             .unwrap_or_default();
-                        if let Some((branch_on_true, offset)) = branch {
+                        if branch_op != 0 {
+                            let branch_on_true = branch_op == OpCode::IfTrue as u8;
                             if Self::branch_matches_value(val, branch_on_true) {
                                 let frame = self.call_stack.last_mut().unwrap();
-                                frame.pc = (frame.pc as i32 + offset) as usize;
+                                frame.pc = (frame.pc as i32 + branch_offset) as usize;
                             }
                         } else {
                             self.stack.push(val);
@@ -3432,14 +4086,62 @@ impl Interpreter {
                     })? as usize;
 
                     let val = array.get(index).copied().unwrap_or_default();
-                    if let Some((branch_on_true, offset)) = branch {
+                    if branch_op != 0 {
+                        let branch_on_true = branch_op == OpCode::IfTrue as u8;
                         if Self::branch_matches_value(val, branch_on_true) {
                             let frame = self.call_stack.last_mut().unwrap();
-                            frame.pc = (frame.pc as i32 + offset) as usize;
+                            frame.pc = (frame.pc as i32 + branch_offset) as usize;
                         }
                     } else {
                         self.stack.push(val);
                     }
+                }
+
+                op if op == OpCode::GetArrayElDiscard as u8 => {
+                    let (idx, arr) = unsafe { self.stack.pop2_unchecked() };
+
+                    let idx_raw = idx.raw().0;
+                    let arr_raw = arr.raw().0;
+                    if (idx_raw & 1) == 0
+                        && (arr_raw & 0x1f) == crate::value::SpecialTag::CatchOffset as u64
+                        && (((arr_raw >> 5) as i32) & crate::value::ARRAY_INDEX_MARKER) != 0
+                    {
+                        continue;
+                    }
+
+                    if let Some(typed_idx) = arr.to_typed_array_idx() {
+                        if idx.is_int() {
+                            let _ = typed_idx;
+                            continue;
+                        }
+
+                        let index = idx.to_i32().ok_or_else(|| {
+                            InterpreterError::TypeError(
+                                "typed array index must be a number".to_string(),
+                            )
+                        })? as usize;
+
+                        let _ = self
+                            .typed_arrays
+                            .get(typed_idx as usize)
+                            .and_then(|ta| ta.get(index))
+                            .unwrap_or_default();
+                        continue;
+                    }
+
+                    let arr_idx = arr.to_array_idx().ok_or_else(|| {
+                        InterpreterError::TypeError("cannot read property of non-array".to_string())
+                    })?;
+
+                    let array = self.get_array(arr_idx).ok_or_else(|| {
+                        InterpreterError::InternalError("invalid array index".to_string())
+                    })?;
+
+                    let index = idx.to_i32().ok_or_else(|| {
+                        InterpreterError::TypeError("array index must be a number".to_string())
+                    })? as usize;
+
+                    let _ = array.get(index).copied().unwrap_or_default();
                 }
 
                 // GetArrayEl2 - get array element, keep object: arr idx -> arr val
@@ -3500,25 +4202,20 @@ impl Interpreter {
                     let (val, idx, arr) = unsafe { self.stack.pop3_unchecked() };
 
                     // Fast path: regular array with integer index within bounds
-                    if arr.is_array() && idx.is_int() {
-                        let arr_idx = unsafe { arr.to_array_idx_unchecked() };
-                        let index = unsafe { idx.to_i32_unchecked() };
-                        if index >= 0 {
-                            let index = index as usize;
-                            // SAFETY: Array index is valid for arrays we created
-                            let array = unsafe { self.get_array_mut_unchecked(arr_idx) };
-                            if index < array.len() {
-                                unsafe { *array.get_unchecked_mut(index) = val };
-                            } else {
-                                // Extend array if index is out of bounds
-                                array.resize(index + 1, Value::undefined());
-                                array[index] = val;
-                            }
-                            if !discard_result {
-                                self.stack.push(val);
-                            }
-                            continue;
+                    if let Some((arr_idx, index)) = Self::dense_array_access(arr, idx) {
+                        // SAFETY: Array index is valid for arrays we created
+                        let array = unsafe { self.get_array_mut_unchecked(arr_idx) };
+                        if index < array.len() {
+                            unsafe { *array.get_unchecked_mut(index) = val };
+                        } else {
+                            // Extend array if index is out of bounds
+                            array.resize(index + 1, Value::undefined());
+                            array[index] = val;
                         }
+                        if !discard_result {
+                            self.stack.push(val);
+                        }
+                        continue;
                     }
 
                     // Check if it's a typed array
@@ -3561,6 +4258,52 @@ impl Interpreter {
                     if !discard_result {
                         self.stack.push(val);
                     }
+                }
+
+                op if op == OpCode::PutArrayElFalseDrop as u8 => {
+                    let (idx, arr) = unsafe { self.stack.pop2_unchecked() };
+                    let val = Value::bool(false);
+
+                    if let Some((arr_idx, index)) = Self::dense_array_access(arr, idx) {
+                        let array = unsafe { self.get_array_mut_unchecked(arr_idx) };
+                        if index < array.len() {
+                            unsafe { *array.get_unchecked_mut(index) = val };
+                        } else {
+                            array.resize(index + 1, Value::undefined());
+                            array[index] = val;
+                        }
+                        continue;
+                    }
+
+                    if let Some(typed_idx) = arr.to_typed_array_idx() {
+                        let index = idx.to_i32().ok_or_else(|| {
+                            InterpreterError::TypeError(
+                                "typed array index must be a number".to_string(),
+                            )
+                        })? as usize;
+
+                        if let Some(ta) = self.typed_arrays.get_mut(typed_idx as usize) {
+                            ta.set(index, val);
+                        }
+                        continue;
+                    }
+
+                    let arr_idx = arr.to_array_idx().ok_or_else(|| {
+                        InterpreterError::TypeError("cannot set property of non-array".to_string())
+                    })?;
+
+                    let index = idx.to_i32().ok_or_else(|| {
+                        InterpreterError::TypeError("array index must be a number".to_string())
+                    })? as usize;
+
+                    let array = self.get_array_mut(arr_idx).ok_or_else(|| {
+                        InterpreterError::InternalError("invalid array index".to_string())
+                    })?;
+
+                    if index >= array.len() {
+                        array.resize(index + 1, Value::undefined());
+                    }
+                    array[index] = val;
                 }
 
                 // GetLength - get `.length` property through a dedicated fast path.
@@ -3655,6 +4398,29 @@ impl Interpreter {
                     self.stack.push(val);
                 }
 
+                // GetArrayPush2 - get `.push`, keep object: obj -> obj value
+                op if op == OpCode::GetArrayPush2 as u8 => {
+                    let obj = self.stack.peek().ok_or(InterpreterError::StackUnderflow)?;
+
+                    if obj.is_null() || obj.is_undefined() {
+                        let type_name = if obj.is_null() { "null" } else { "undefined" };
+                        self.try_handle_runtime_error(InterpreterError::TypeError(format!(
+                            "Cannot read properties of {} (reading 'push')",
+                            type_name
+                        )))?;
+                        continue;
+                    }
+
+                    let val = if obj.is_array() {
+                        self.native_array_push_idx
+                            .map(Value::native_func)
+                            .unwrap_or_else(|| self.get_field_value(obj, "push"))
+                    } else {
+                        self.get_field_value(obj, "push")
+                    };
+                    self.stack.push(val);
+                }
+
                 // PutField - set object property: obj val -> val
                 op if op == OpCode::PutField as u8 => {
                     let frame = self.call_stack.last_mut().unwrap();
@@ -3723,7 +4489,8 @@ impl Interpreter {
                                                     (str_idx - Self::RUNTIME_STRING_OFFSET)
                                                         as usize,
                                                 )
-                                                .cloned()
+                                                .and_then(|_| self.get_string_by_idx(str_idx))
+                                                .map(|s| s.to_string())
                                         } else {
                                             // Compile-time string constant
                                             bytecode.string_constants.get(str_idx as usize).cloned()
@@ -3794,7 +4561,8 @@ impl Interpreter {
                                                     (str_idx - Self::RUNTIME_STRING_OFFSET)
                                                         as usize,
                                                 )
-                                                .cloned()
+                                                .and_then(|_| self.get_string_by_idx(str_idx))
+                                                .map(|s| s.to_string())
                                         } else {
                                             bytecode.string_constants.get(str_idx as usize).cloned()
                                         }
@@ -4117,7 +4885,8 @@ impl Interpreter {
                     if str_idx >= Self::RUNTIME_STRING_OFFSET {
                         self.runtime_strings
                             .get((str_idx - Self::RUNTIME_STRING_OFFSET) as usize)
-                            .cloned()
+                            .and_then(|_| self.get_string_by_idx(str_idx))
+                            .map(|s| s.to_string())
                     } else {
                         // It's a compile-time string - we need bytecode access
                         // For now, return None (caller should handle)

@@ -7,6 +7,7 @@ use crate::runtime::FunctionBytecode;
 use crate::value::{float_to_value, Value};
 use crate::vm::stack::Stack;
 use alloc::{string::String, vec, vec::Vec};
+use core::cell::UnsafeCell;
 
 // Builtin object indices
 /// Math object index
@@ -237,6 +238,10 @@ pub struct CallFrame {
     /// Maps local indices to var_cells indices (None = not captured, Some(idx) = cell index).
     /// Lazily allocated when the first local in this frame is captured.
     pub local_cells: Option<Vec<Option<u32>>>,
+    /// Cached var_cell index for local0 when captured.
+    pub local0_cell: Option<u32>,
+    /// Builder for the hottest `local0 = local0 + "const"` statement shape.
+    pub local0_string_builder: Option<String>,
 }
 
 impl CallFrame {
@@ -260,6 +265,8 @@ impl CallFrame {
             closure_idx: None,
             is_constructor: false,
             local_cells: None,
+            local0_cell: None,
+            local0_string_builder: None,
         }
     }
 
@@ -284,6 +291,8 @@ impl CallFrame {
             closure_idx: Some(closure_idx),
             is_constructor: false,
             local_cells: None,
+            local0_cell: None,
+            local0_string_builder: None,
         }
     }
 
@@ -307,6 +316,8 @@ impl CallFrame {
             closure_idx: None,
             is_constructor: true,
             local_cells: None,
+            local0_cell: None,
+            local0_string_builder: None,
         }
     }
 
@@ -331,6 +342,8 @@ impl CallFrame {
             closure_idx: Some(closure_idx),
             is_constructor: true,
             local_cells: None,
+            local0_cell: None,
+            local0_string_builder: None,
         }
     }
 }
@@ -388,6 +401,57 @@ pub struct ExceptionHandler {
     pub stack_depth: usize,
 }
 
+#[derive(Debug, Clone)]
+pub enum RuntimeStringPart {
+    Runtime(u16),
+    Owned(String),
+}
+
+#[derive(Debug)]
+pub struct RuntimeString {
+    pub len: usize,
+    pub flat: UnsafeCell<Option<String>>,
+    pub left: Option<RuntimeStringPart>,
+    pub right: Option<RuntimeStringPart>,
+}
+
+impl RuntimeString {
+    pub fn flat(s: String) -> Self {
+        let len = s.len();
+        RuntimeString {
+            len,
+            flat: UnsafeCell::new(Some(s)),
+            left: None,
+            right: None,
+        }
+    }
+
+    pub fn concat(left: RuntimeStringPart, right: RuntimeStringPart, len: usize) -> Self {
+        RuntimeString {
+            len,
+            flat: UnsafeCell::new(None),
+            left: Some(left),
+            right: Some(right),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl From<String> for RuntimeString {
+    fn from(value: String) -> Self {
+        RuntimeString::flat(value)
+    }
+}
+
 /// Interpreter state
 pub struct Interpreter {
     /// Value stack
@@ -398,7 +462,7 @@ pub struct Interpreter {
     pub(crate) max_recursion: usize,
     /// Runtime strings (created during execution, e.g., from concatenation)
     /// Indices start from 0x8000 to distinguish from compile-time strings
-    pub(crate) runtime_strings: Vec<String>,
+    pub(crate) runtime_strings: Vec<RuntimeString>,
     /// Closures created during execution
     /// Values on the stack can reference closures by index
     pub(crate) closures: Vec<ClosureData>,
@@ -450,6 +514,30 @@ pub struct Interpreter {
     pub(crate) next_timer_id: u32,
     /// GC stats
     pub(crate) gc_count: u32,
+    /// Mark-sweep GC state (phase, trigger, stats)
+    pub(crate) gc: super::gc::GcState,
+    /// Generation array: closures
+    pub(crate) gen_closures: Vec<u32>,
+    /// Generation array: var_cells
+    pub(crate) gen_var_cells: Vec<u32>,
+    /// Generation array: arrays
+    pub(crate) gen_arrays: Vec<u32>,
+    /// Generation array: objects
+    pub(crate) gen_objects: Vec<u32>,
+    /// Generation array: for_in_iterators
+    pub(crate) gen_for_in_iterators: Vec<u32>,
+    /// Generation array: for_of_iterators
+    pub(crate) gen_for_of_iterators: Vec<u32>,
+    /// Generation array: error_objects
+    pub(crate) gen_error_objects: Vec<u32>,
+    /// Generation array: regex_objects
+    pub(crate) gen_regex_objects: Vec<u32>,
+    /// Generation array: typed_arrays
+    pub(crate) gen_typed_arrays: Vec<u32>,
+    /// Generation array: array_buffers
+    pub(crate) gen_array_buffers: Vec<u32>,
+    /// Generation array: timers
+    pub(crate) gen_timers: Vec<u32>,
     /// PRNG seed for Math.random() (no_std compatible)
     pub(crate) random_seed: u64,
     /// Runtime string source counters (dump-only)

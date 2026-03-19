@@ -1,4 +1,4 @@
-﻿//! JavaScript execution context
+//! JavaScript execution context
 //!
 //! The Context is the main entry point for the JavaScript engine.
 //! It owns all memory and provides the API for evaluating JavaScript code.
@@ -177,12 +177,16 @@ impl Context {
         compiled: crate::parser::compiler::CompiledFunction,
     ) -> FunctionBytecode {
         use crate::runtime::CaptureInfo;
-
+        use crate::vm::opcode::OpCode;
         let inner_functions = compiled
             .functions
             .into_iter()
             .map(Self::compiled_to_bytecode)
             .collect();
+
+        let uses_local0_string_builder = compiled
+            .bytecode
+            .contains(&(OpCode::AppendConstStringToLoc0 as u8));
 
         // Convert compiler's CaptureInfo to runtime's CaptureInfo
         let captures = compiled
@@ -200,6 +204,7 @@ impl Context {
             local_count: compiled.local_count as u16,
             stack_size: 64, // Default stack size
             has_arguments: false,
+            uses_local0_string_builder,
             bytecode: compiled.bytecode,
             constants: compiled.constants,
             string_constants: compiled.string_constants,
@@ -241,7 +246,7 @@ impl Context {
 
     /// Run the garbage collector
     pub fn gc(&mut self) {
-        self.heap.collect();
+        self.interpreter.gc_collect();
     }
 
     /// Get memory usage statistics
