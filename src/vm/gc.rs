@@ -17,6 +17,7 @@
 //! - Handles cycles naturally (mark-sweep traversal)
 //! - No stop-the-world cost beyond the mark+sweep passes
 //! - Incremental: each GC cycle only scans live + newly dead slots
+//! - Iterative marking via heap-allocated worklist (no call-stack overflow)
 
 use crate::value::Value;
 use crate::vm::types::{ForInIterator, ForOfIterator};
@@ -27,8 +28,7 @@ pub const SLOT_FREE: u32 = u32::MAX;
 
 /// GC bookkeeping state (phase, trigger, stats).
 ///
-/// The generation arrays themselves live directly in `Interpreter` to avoid
-/// borrow checker conflicts with recursive mark traversal.
+/// The generation arrays themselves live directly in `Interpreter`.
 #[derive(Default)]
 pub struct GcState {
     /// Current GC phase. Incremented on every collection.
@@ -36,11 +36,9 @@ pub struct GcState {
     pub phase: u32,
 
     /// Number of allocations since last GC.
-    /// Triggers GC when reaching `gc_trigger`.
     pub alloc_count: u32,
 
     /// Allocation count threshold that triggers a GC cycle.
-    /// Adaptive: grows after high-survival runs, shrinks after many deaths.
     pub gc_trigger: u32,
 
     /// Number of live slots found in last sweep (per container).
@@ -87,7 +85,6 @@ impl GcState {
     }
 
     /// Increment phase and reset for a new GC cycle.
-    /// Also resets alloc_count.
     #[inline]
     pub fn start_cycle(&mut self) {
         if self.phase == u32::MAX - 1 {
@@ -139,9 +136,6 @@ impl GcState {
 
     /// Find a free slot in the generation array, or push a new one.
     /// Returns `(slot_index, is_new)`.
-    /// If `is_new` is true, caller should push to the container.
-    /// If `is_new` is false, caller should overwrite the existing entry
-    /// (and clear any Vec fields to release old allocations).
     #[allow(clippy::ptr_arg)]
     pub fn alloc_slot(&mut self, gen: &mut Vec<u32>) -> (usize, bool) {
         for (i, g) in gen.iter().enumerate() {
@@ -170,193 +164,170 @@ impl GcState {
     }
 }
 
-/// Mark a Value and all its transitive references.
+// ── Iterative Mark (no recursion, no stack overflow) ───────────────
+
+/// Check if a gen slot is already marked live in the current phase.
+#[inline]
+fn is_marked(gen: &[u32], idx: usize, phase: u32) -> bool {
+    idx < gen.len() && gen[idx] == phase
+}
+
+/// Mark a gen slot live and return true if it was newly marked.
+#[inline]
+fn mark_slot(gen: &mut [u32], idx: usize, phase: u32) -> bool {
+    if idx < gen.len() && gen[idx] != phase {
+        gen[idx] = phase;
+        true
+    } else {
+        false
+    }
+}
+
+/// Iteratively mark all values reachable from the given root set.
 ///
-/// `phase` is the current GC phase — slots are marked live by setting
-/// `gen[idx] = phase`.
+/// Uses a `Vec<Value>` worklist allocated on the heap — no call-stack overflow,
+/// safe for embedded targets with small stacks (8KB or less).
 ///
-/// Each gen array is passed as a separate `&mut [_]` to avoid borrow
-/// checker conflicts.
-#[inline(always)]
+/// All gen arrays are passed as immutable references; slots are written via
+/// `mark_slot()` only when unvisited (read phase, write new phase).
 #[allow(clippy::too_many_arguments)]
-pub fn gc_mark_value(
-    val: Value,
+pub fn gc_mark_roots_iterative(
+    roots: &[Value],
     phase: u32,
     closures: &[crate::vm::types::ClosureData],
-    gen_closures: &mut Vec<u32>,
+    gen_closures: &mut [u32],
     var_cells: &[Value],
-    gen_var_cells: &mut Vec<u32>,
+    gen_var_cells: &mut [u32],
     arrays: &[Vec<Value>],
-    gen_arrays: &mut Vec<u32>,
+    gen_arrays: &mut [u32],
     objects: &[crate::vm::types::ObjectInstance],
-    gen_objects: &mut Vec<u32>,
+    gen_objects: &mut [u32],
     for_in_iterators: &[ForInIterator],
-    gen_for_in_iterators: &mut Vec<u32>,
+    gen_for_in_iterators: &mut [u32],
     for_of_iterators: &[ForOfIterator],
-    gen_for_of_iterators: &mut Vec<u32>,
+    gen_for_of_iterators: &mut [u32],
 ) {
-    // --- Array ---
-    if let Some(idx) = val.to_array_idx() {
-        let idx = idx as usize;
-        if idx < gen_arrays.len() {
-            gen_arrays[idx] = phase;
-        }
-        if idx < arrays.len() {
-            for elem in &arrays[idx] {
-                gc_mark_value(
-                    *elem, phase,
-                    closures, gen_closures,
-                    var_cells, gen_var_cells,
-                    arrays, gen_arrays,
-                    objects, gen_objects,
-                    for_in_iterators, gen_for_in_iterators,
-                    for_of_iterators, gen_for_of_iterators,
-                );
-            }
-        }
-        return;
+    // Worklist: heap-allocated Vec, grows as needed, never overflows the call stack
+    let mut worklist: Vec<Value> = Vec::with_capacity(64);
+
+    // Seed: push all roots onto worklist
+    for &root in roots {
+        worklist.push(root);
     }
 
-    // --- Object ---
-    if let Some(idx) = val.to_object_idx() {
-        let idx = idx as usize;
-        if idx < gen_objects.len() {
-            gen_objects[idx] = phase;
-        }
-        if idx < objects.len() {
-            for (_k, v) in &objects[idx].properties {
-                gc_mark_value(
-                    *v, phase,
-                    closures, gen_closures,
-                    var_cells, gen_var_cells,
-                    arrays, gen_arrays,
-                    objects, gen_objects,
-                    for_in_iterators, gen_for_in_iterators,
-                    for_of_iterators, gen_for_of_iterators,
-                );
-            }
-            if let Some(constructor) = objects[idx].constructor {
-                gc_mark_value(
-                    constructor, phase,
-                    closures, gen_closures,
-                    var_cells, gen_var_cells,
-                    arrays, gen_arrays,
-                    objects, gen_objects,
-                    for_in_iterators, gen_for_in_iterators,
-                    for_of_iterators, gen_for_of_iterators,
-                );
-            }
-        }
-        return;
-    }
-
-    // --- Closure ---
-    if let Some(idx) = val.to_closure_idx() {
-        let idx = idx as usize;
-        if idx < gen_closures.len() {
-            gen_closures[idx] = phase;
-        }
-        if idx < closures.len() {
-            for &cell_idx in &closures[idx].cell_indices {
-                let cell_idx = cell_idx as usize;
-                if cell_idx < gen_var_cells.len() {
-                    gen_var_cells[cell_idx] = phase;
-                }
-                if cell_idx < var_cells.len() {
-                    gc_mark_value(
-                        var_cells[cell_idx], phase,
-                        closures, gen_closures,
-                        var_cells, gen_var_cells,
-                        arrays, gen_arrays,
-                        objects, gen_objects,
-                        for_in_iterators, gen_for_in_iterators,
-                        for_of_iterators, gen_for_of_iterators,
-                    );
-                }
-            }
-        }
-        return;
-    }
-
-    // --- For-in Iterator ---
-    if val.is_iterator() {
-        if let Some(idx) = val.to_iterator_idx() {
+    // Iterative DFS: pop value → mark it → push children
+    while let Some(val) = worklist.pop() {
+        // --- Array ---
+        if let Some(idx) = val.to_array_idx() {
             let idx = idx as usize;
-            if idx < gen_for_in_iterators.len() {
-                gen_for_in_iterators[idx] = phase;
+            if mark_slot_array(idx, phase, gen_arrays) && idx < arrays.len() {
+                for elem in &arrays[idx] {
+                    worklist.push(*elem);
+                }
             }
-            if idx < for_in_iterators.len() {
-                match &for_in_iterators[idx] {
-                    ForInIterator::Object { obj_idx, .. } => {
+            continue;
+        }
+
+        // --- Object ---
+        if let Some(idx) = val.to_object_idx() {
+            let idx = idx as usize;
+            if mark_slot_object(idx, phase, gen_objects) && idx < objects.len() {
+                for (_k, v) in &objects[idx].properties {
+                    worklist.push(*v);
+                }
+                if let Some(constructor) = objects[idx].constructor {
+                    worklist.push(constructor);
+                }
+            }
+            continue;
+        }
+
+        // --- Closure ---
+        if let Some(idx) = val.to_closure_idx() {
+            let idx = idx as usize;
+            if mark_slot_closure(idx, phase, gen_closures) && idx < closures.len() {
+                for &cell_idx in &closures[idx].cell_indices {
+                    let cell_idx = cell_idx as usize;
+                    if mark_slot_var_cell(cell_idx, phase, gen_var_cells) && cell_idx < var_cells.len() {
+                        worklist.push(var_cells[cell_idx]);
+                    }
+                }
+            }
+            continue;
+        }
+
+        // --- For-in Iterator ---
+        if val.is_iterator() {
+            if let Some(idx) = val.to_iterator_idx() {
+                let idx = idx as usize;
+                if mark_slot_for_in(idx, phase, gen_for_in_iterators) && idx < for_in_iterators.len() {
+                    if let ForInIterator::Object { obj_idx, .. } = &for_in_iterators[idx] {
                         let obj_idx = *obj_idx as usize;
-                        if obj_idx < gen_objects.len() {
-                            gen_objects[obj_idx] = phase;
-                        }
-                        if obj_idx < objects.len() {
+                        if mark_slot_object(obj_idx, phase, gen_objects) && obj_idx < objects.len() {
                             for (_k, v) in &objects[obj_idx].properties {
-                                gc_mark_value(
-                                    *v, phase,
-                                    closures, gen_closures,
-                                    var_cells, gen_var_cells,
-                                    arrays, gen_arrays,
-                                    objects, gen_objects,
-                                    for_in_iterators, gen_for_in_iterators,
-                                    for_of_iterators, gen_for_of_iterators,
-                                );
+                                worklist.push(*v);
                             }
                         }
                     }
-                    ForInIterator::Array { .. } => {}
-                    ForInIterator::Empty => {}
                 }
             }
+            continue;
         }
-        return;
-    }
 
-    // --- For-of Iterator ---
-    if val.is_for_of_iterator() {
-        if let Some(idx) = val.to_for_of_iterator_idx() {
-            let idx = idx as usize;
-            if idx < gen_for_of_iterators.len() {
-                gen_for_of_iterators[idx] = phase;
-            }
-            if idx < for_of_iterators.len() {
-                match &for_of_iterators[idx] {
-                    ForOfIterator::Array { arr_idx, .. } => {
-                        let arr_idx = *arr_idx as usize;
-                        if arr_idx < gen_arrays.len() {
-                            gen_arrays[arr_idx] = phase;
-                        }
-                        if arr_idx < arrays.len() {
-                            for elem in &arrays[arr_idx] {
-                                gc_mark_value(
-                                    *elem, phase,
-                                    closures, gen_closures,
-                                    var_cells, gen_var_cells,
-                                    arrays, gen_arrays,
-                                    objects, gen_objects,
-                                    for_in_iterators, gen_for_in_iterators,
-                                    for_of_iterators, gen_for_of_iterators,
-                                );
+        // --- For-of Iterator ---
+        if val.is_for_of_iterator() {
+            if let Some(idx) = val.to_for_of_iterator_idx() {
+                let idx = idx as usize;
+                if mark_slot_for_of(idx, phase, gen_for_of_iterators) && idx < for_of_iterators.len() {
+                    match &for_of_iterators[idx] {
+                        ForOfIterator::Array { arr_idx, .. } => {
+                            let arr_idx = *arr_idx as usize;
+                            if mark_slot_array(arr_idx, phase, gen_arrays) && arr_idx < arrays.len() {
+                                for elem in &arrays[arr_idx] {
+                                    worklist.push(*elem);
+                                }
                             }
                         }
-                    }
-                    ForOfIterator::Values { values, .. } => {
-                        for v in values {
-                            gc_mark_value(
-                                *v, phase,
-                                closures, gen_closures,
-                                var_cells, gen_var_cells,
-                                arrays, gen_arrays,
-                                objects, gen_objects,
-                                for_in_iterators, gen_for_in_iterators,
-                                for_of_iterators, gen_for_of_iterators,
-                            );
+                        ForOfIterator::Values { values, .. } => {
+                            for v in values {
+                                worklist.push(*v);
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+// Per-type mark helpers (reads phase, writes only if unvisited)
+
+#[inline]
+fn mark_slot_array(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
+    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
+}
+
+#[inline]
+fn mark_slot_object(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
+    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
+}
+
+#[inline]
+fn mark_slot_closure(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
+    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
+}
+
+#[inline]
+fn mark_slot_var_cell(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
+    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
+}
+
+#[inline]
+fn mark_slot_for_in(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
+    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
+}
+
+#[inline]
+fn mark_slot_for_of(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
+    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
 }

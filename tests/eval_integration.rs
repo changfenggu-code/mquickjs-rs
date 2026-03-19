@@ -3,6 +3,13 @@
 //! Tests the full pipeline: source -> lexer -> compiler -> bytecode -> VM -> result.
 
 use mquickjs::Context;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static HOST_TIME_MILLIS: AtomicU64 = AtomicU64::new(0);
+
+fn host_time_provider() -> u64 {
+    HOST_TIME_MILLIS.load(Ordering::Relaxed)
+}
 
 #[test]
 fn test_create_context() {
@@ -3959,6 +3966,20 @@ fn test_date_now_exceeds_i32_range() {
     assert_eq!(result.to_i32(), Some(1));
 }
 
+#[test]
+fn test_host_time_provider_drives_date_now_and_performance_now() {
+    let mut ctx = Context::new(64 * 1024);
+    HOST_TIME_MILLIS.store(1_700_000_000_000, Ordering::Relaxed);
+    ctx.set_time_provider(host_time_provider);
+
+    let result = ctx.eval("return Date.now();").unwrap();
+    assert_eq!(result.to_number_f32(), Some(1_700_000_000_000.0));
+
+    HOST_TIME_MILLIS.store(1_700_000_000_250, Ordering::Relaxed);
+    let result = ctx.eval("return performance.now();").unwrap();
+    assert_eq!(result.to_number_f32(), Some(250.0));
+}
+
 // ========================================
 // RegExp Tests
 // ========================================
@@ -5769,8 +5790,10 @@ fn test_json_stringify_undefined_returns_undefined() {
 #[test]
 fn test_string_repeat_negative_throws() {
     let mut ctx = Context::new(64 * 1024);
-    let result = ctx.eval("return 'x'.repeat(-1);");
-    assert!(result.is_err());
+    let result = ctx
+        .eval("try { 'x'.repeat(-1); return 'no'; } catch (e) { return e.name; }")
+        .unwrap();
+    assert_eq!(ctx.string_value(result).as_deref(), Some("RangeError"));
 }
 
 #[test]

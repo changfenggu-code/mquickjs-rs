@@ -304,6 +304,15 @@ impl Context {
         self.interpreter.register_native(name, func, arity)
     }
 
+    /// Install a host-provided wall-clock time source in milliseconds.
+    ///
+    /// This is primarily used by `Date.now()` / `performance.now()` in `no_std`
+    /// environments, but it can also override timing in `std` builds for tests
+    /// or embedded hosts that want deterministic time.
+    pub fn set_time_provider(&mut self, provider: fn() -> u64) {
+        self.interpreter.set_time_provider(provider);
+    }
+
     #[cfg(feature = "dump")]
     pub fn reset_opcode_counts(&mut self) {
         self.interpreter.reset_opcode_counts();

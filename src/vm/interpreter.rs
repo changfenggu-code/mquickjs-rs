@@ -51,6 +51,8 @@ impl Interpreter {
             nested_call_target_depth: None,
             timers: Vec::new(),
             next_timer_id: 1,
+            time_provider: None,
+            time_origin_millis: 0,
             gc_count: 0,
             gc: super::gc::GcState::new(),
             gen_closures: Vec::new(),
@@ -70,6 +72,7 @@ impl Interpreter {
             #[cfg(feature = "dump")]
             opcode_counts: [0; 256],
         };
+        interp.time_origin_millis = interp.current_time_millis().unwrap_or(0);
         interp.register_builtins();
         interp
     }
@@ -102,6 +105,8 @@ impl Interpreter {
             nested_call_target_depth: None,
             timers: Vec::new(),
             next_timer_id: 1,
+            time_provider: None,
+            time_origin_millis: 0,
             gc_count: 0,
             gc: super::gc::GcState::new(),
             gen_closures: Vec::new(),
@@ -121,8 +126,35 @@ impl Interpreter {
             #[cfg(feature = "dump")]
             opcode_counts: [0; 256],
         };
+        interp.time_origin_millis = interp.current_time_millis().unwrap_or(0);
         interp.register_builtins();
         interp
+    }
+
+    #[inline]
+    pub(crate) fn current_time_millis(&self) -> Option<u64> {
+        if let Some(provider) = self.time_provider {
+            Some(provider())
+        } else {
+            #[cfg(feature = "std")]
+            {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as u64)
+            }
+            #[cfg(not(feature = "std"))]
+            {
+                None
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_time_provider(&mut self, provider: fn() -> u64) {
+        self.time_provider = Some(provider);
+        self.time_origin_millis = self.current_time_millis().unwrap_or(0);
     }
 
     // ---------------------------------------------------------------------------
@@ -154,13 +186,42 @@ impl Interpreter {
         self.gc_count += 1;
     }
 
-    /// Mark all objects reachable from GC roots.
+    /// Mark all objects reachable from GC roots using iterative traversal.
+    ///
+    /// Collects all root values into a Vec, then calls the heap-allocated
+    /// worklist-based marker — no recursion, no call-stack overflow.
     fn gc_mark_roots(&mut self) {
-        use crate::vm::gc::gc_mark_value;
+        use crate::vm::gc::gc_mark_roots_iterative;
 
         let phase = self.gc.phase;
 
-        // Extract gen arrays — they are separate fields of self, no borrow conflict
+        // Collect all roots into a Vec (heap allocation, not call stack)
+        let cap = self.call_stack.len() * 2
+            + self.global_vars.len()
+            + self.timers.iter().filter(|t| !t.cancelled).count();
+        let mut roots: Vec<Value> = Vec::with_capacity(cap.max(16));
+
+        for frame in &self.call_stack {
+            roots.push(frame.this_val);
+            roots.push(frame.this_func);
+        }
+        for (_name, val) in &self.global_vars {
+            roots.push(*val);
+        }
+        for timer in &self.timers {
+            if !timer.cancelled {
+                roots.push(timer.callback);
+            }
+        }
+
+        // Mark timer slots inline (need index-based access)
+        for (i, timer) in self.timers.iter().enumerate() {
+            if !timer.cancelled && i < self.gen_timers.len() {
+                self.gen_timers[i] = phase;
+            }
+        }
+
+        // Mutable refs to gen arrays (different fields → simultaneous &mut allowed)
         let gen_closures = &mut self.gen_closures;
         let gen_var_cells = &mut self.gen_var_cells;
         let gen_arrays = &mut self.gen_arrays;
@@ -168,59 +229,30 @@ impl Interpreter {
         let gen_for_in_iterators = &mut self.gen_for_in_iterators;
         let gen_for_of_iterators = &mut self.gen_for_of_iterators;
 
-        // Mark values on the value stack (active call frames)
-        for frame in &self.call_stack {
-            gc_mark_value(
-                frame.this_val, phase,
-                &self.closures, gen_closures,
-                &self.var_cells, gen_var_cells,
-                &self.arrays, gen_arrays,
-                &self.objects, gen_objects,
-                &self.for_in_iterators, gen_for_in_iterators,
-                &self.for_of_iterators, gen_for_of_iterators,
-            );
-            gc_mark_value(
-                frame.this_func, phase,
-                &self.closures, gen_closures,
-                &self.var_cells, gen_var_cells,
-                &self.arrays, gen_arrays,
-                &self.objects, gen_objects,
-                &self.for_in_iterators, gen_for_in_iterators,
-                &self.for_of_iterators, gen_for_of_iterators,
-            );
-        }
+        // Immutable refs to data containers
+        let closures = &self.closures;
+        let var_cells = &self.var_cells;
+        let arrays = &self.arrays;
+        let objects = &self.objects;
+        let for_in_iterators = &self.for_in_iterators;
+        let for_of_iterators = &self.for_of_iterators;
 
-        // Mark global variables
-        for (_name, val) in &self.global_vars {
-            gc_mark_value(
-                *val, phase,
-                &self.closures, gen_closures,
-                &self.var_cells, gen_var_cells,
-                &self.arrays, gen_arrays,
-                &self.objects, gen_objects,
-                &self.for_in_iterators, gen_for_in_iterators,
-                &self.for_of_iterators, gen_for_of_iterators,
-            );
-        }
-
-        // Mark timer callbacks
-        for (i, timer) in self.timers.iter().enumerate() {
-            if !timer.cancelled {
-                // Mark timer slot itself
-                if i < self.gen_timers.len() {
-                    self.gen_timers[i] = phase;
-                }
-                gc_mark_value(
-                    timer.callback, phase,
-                    &self.closures, gen_closures,
-                    &self.var_cells, gen_var_cells,
-                    &self.arrays, gen_arrays,
-                    &self.objects, gen_objects,
-                    &self.for_in_iterators, gen_for_in_iterators,
-                    &self.for_of_iterators, gen_for_of_iterators,
-                );
-            }
-        }
+        gc_mark_roots_iterative(
+            &roots,
+            phase,
+            closures,
+            gen_closures,
+            var_cells,
+            gen_var_cells,
+            arrays,
+            gen_arrays,
+            objects,
+            gen_objects,
+            for_in_iterators,
+            gen_for_in_iterators,
+            for_of_iterators,
+            gen_for_of_iterators,
+        );
     }
 
     /// Sweep all containers, marking dead slots as free.
@@ -1570,6 +1602,7 @@ impl Interpreter {
         let (name, message) = match &err {
             InterpreterError::TypeError(msg) => ("TypeError".to_string(), msg.clone()),
             InterpreterError::ReferenceError(msg) => ("ReferenceError".to_string(), msg.clone()),
+            InterpreterError::RangeError(msg) => ("RangeError".to_string(), msg.clone()),
             InterpreterError::InternalError(msg) => ("InternalError".to_string(), msg.clone()),
             InterpreterError::DivisionByZero => {
                 ("RangeError".to_string(), "division by zero".to_string())
@@ -4488,16 +4521,20 @@ impl Interpreter {
                     }
 
                     // Get property name from string constants
-                    let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
-                        InterpreterError::InternalError(format!(
-                            "invalid string index: {}",
-                            str_idx
-                        ))
-                    })?;
+                      let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
+                          InterpreterError::InternalError(format!(
+                              "invalid string index: {}",
+                              str_idx
+                          ))
+                      })?;
 
-                    let val = self.get_field_value(obj, prop_name);
-                    self.stack.push(val);
-                }
+                      let val = if let Some(obj_idx) = obj.to_object_idx() {
+                          self.object_get_property(obj_idx, prop_name)
+                      } else {
+                          self.get_field_value(obj, prop_name)
+                      };
+                      self.stack.push(val);
+                  }
 
                 // GetField2 - get object property but keep object: obj -> obj value
                 // Used for method calls where we need the object as 'this'
@@ -4527,14 +4564,18 @@ impl Interpreter {
                     }
 
                     // Get property name from string constants
-                    let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
-                        InterpreterError::InternalError(format!(
-                            "invalid string index: {}",
-                            str_idx
-                        ))
-                    })?;
+                      let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
+                          InterpreterError::InternalError(format!(
+                              "invalid string index: {}",
+                              str_idx
+                          ))
+                      })?;
 
-                    let val = self.get_field_value(obj, prop_name);
+                      let val = if let Some(obj_idx) = obj.to_object_idx() {
+                          self.object_get_property(obj_idx, prop_name)
+                      } else {
+                          self.get_field_value(obj, prop_name)
+                      };
 
                     // Push the property value (object is still on stack below it)
                     self.stack.push(val);

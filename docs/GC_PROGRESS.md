@@ -52,7 +52,8 @@ Roots:
 
 - [x] `src/vm/gc.rs` added
 - [x] `GcState` with phase, trigger, allocation count, and sweep stats
-- [x] `gc_mark_value()` recursive traversal for engine `Value` graphs
+- [x] `gc_mark_roots_iterative()` iterative traversal using heap-allocated worklist (no call-stack overflow)
+- [x] `mark_slot_*()` per-type helpers with deduplication check (`gen[idx] != phase` before write)
 - [x] `alloc_slot()` free-slot reuse
 - [x] `sweep_container()` dead-slot reclamation
 - [x] adaptive trigger adjustment
@@ -96,12 +97,13 @@ Roots:
 ### Phase 5: Benchmarking
 
 - [x] Compare memory usage before and after GC
-- [ ] Measure runtime overhead / trigger behavior
-- [ ] Decide whether mark-compact is still needed
+- [x] Measure runtime overhead / trigger behavior
+- [x] Decide whether mark-compact is still needed
 
 Current probe:
 
 - `src/bin/gc_memory_probe.rs`
+- `src/bin/gc_overhead_probe.rs`
 
 Current `cargo run --bin gc_memory_probe` snapshot:
 
@@ -124,6 +126,76 @@ Interpretation:
 - Freed array/object slots disappear from public `memory_stats()` after collection.
 - Automatic GC now also triggers during pure JS function-call workloads instead of only through manual `gc()`.
 - The remaining open GC work is no longer “does reclamation happen at all?”, but “what is the runtime overhead / trigger behavior under benchmark workloads?”.
+
+Current `cargo run --bin gc_overhead_probe` snapshot:
+
+- `manual_gc_object_cycles`
+  - `eval_ms`: `0.979`
+  - `gc_ms`: `0.017`
+  - `gc_count`: `0 -> 0 -> 1`
+- `auto_gc_object_cycles`
+  - `eval_ms`: `6.934`
+  - `gc_ms`: `0.006`
+  - `gc_count`: `0 -> 1 -> 2`
+- `auto_gc_transient_arrays`
+  - `eval_ms`: `12.324`
+  - `gc_ms`: `0.006`
+  - `gc_count`: `0 -> 4 -> 5`
+
+Interpretation update:
+
+- GC trigger behavior is now observable and repeatable from local probes.
+- Automatic GC is active during internal JS call workloads, not only during top-level entrypoints.
+- Manual `gc()` itself is currently very cheap on these small synthetic workloads.
+- The remaining open question is no longer “is trigger behavior measurable?”, but whether current trigger heuristics are already good enough for real workloads or need tuning.
+
+### Phase 6: Future Full GC (Plan C) Reference
+
+The `src/gc/` directory is preserved as the starting point for a future full
+mark-compact GC implementation (Plan C). The current active GC is Plan B
+(generation-based mark-sweep) in `src/vm/gc.rs`.
+
+#### What `src/gc/` provides today
+
+| File | Status | Purpose |
+|------|--------|---------|
+| `allocator.rs` | **In use** | Raw arena memory layout (`Heap`, `BlockHeader`, `MemoryTag`). Used by `Context` for memory statistics (`heap_used`, `total_size`, `free_space`). Plan C arena reuses this. |
+| `collector.rs` | **Stub only** | `collect()` always calls `mark_all()` (conservative). `mark_object()` and pointer-update logic are TODO. |
+| `GcRef` | **Never instantiated** | Designed for forwarding-pointer updates after compaction, but never used. |
+| `mod.rs` | **Partially correct** | Module-level `Heap::collect()` wraps `collector::collect()` but nothing calls it. |
+
+#### What Plan C would need to implement
+
+Plan C's goal is to replace Vec-index storage with pointer-based allocation,
+enabling true compaction and eliminating fragmentation. The `src/gc/` files
+provide a foundation, but the majority of work is outside `src/gc/`:
+
+1. **`Value` re-encoding** (~20 files, ~1850 lines affected)
+   - Change from `u32` index to `*mut T` pointer across `Value` type
+   - All `.to_object_idx()`, `.to_array_idx()`, `.to_closure_idx()` calls become pointer dereferences
+   - Files: `value.rs`, `interpreter.rs`, `natives.rs`, `property.rs`, `types.rs`, `stack.rs`, `builtins/`, etc.
+
+2. **Pointer update logic**
+   - `GcRef` / forwarding table maps old address → new address after compaction
+   - Every `Value` pointing into the heap must be updated post-compaction
+   - This is the hardest part of any compacting GC
+
+3. **Complete `mark_object()`** (`collector.rs:94-134`)
+   - Currently all branches are TODO except `MemoryTag::ValueArray`
+   - Needs: object properties, closures, prototypes, constant pools, function bytecode
+
+4. **Arena allocator integration**
+   - `allocator.rs` layout is ready; needs `alloc()` / `free()` methods that integrate with Plan B's existing `alloc_slot()` pattern
+   - `Heap` used by `Context` for stats; plan to reuse for Plan C's object allocation
+
+#### Phase 6 tasks
+
+- [ ] Update `src/gc/mod.rs` module doc to reflect Plan B active + Plan C reference status
+- [ ] Mark `Heap::collect()` and `collector::collect()` with `#[deprecated]` or `#[cfg(plan_c)]` so they are clearly inactive
+- [ ] Document the `Value` re-encoding scope before attempting Plan C (see `docs/PLAN_C_VALUE_REENCODING.md`)
+- [ ] Consider moving `src/gc/allocator.rs` to `src/memory/` if it becomes purely a stats tool, or keep under `gc/` if it is the Plan C arena foundation
+
+  The `Heap` is still used by `Context` for memory statistics (`heap.heap_used()`, `heap.total_size()`, `heap.free_space()`, `heap.stack_used()`), but it is separate from the Plan B Vec-index GC. If the `Heap` allocator is still useful for future Plan C experiments, keep it. If not, move it under a different module.
 
 ## Notes
 

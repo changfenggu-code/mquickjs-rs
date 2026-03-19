@@ -839,3 +839,17 @@
 - GC 不再依赖保守的 `mark_all`
 - 内存减少工作基于测量的主导类别，而非猜测
 - 文档仅反映有效的 benchmark 结论
+## 9.1 主线补充说明
+
+- 2026-03-20：`deep_property` / 普通对象属性链已经重新成为当前主线。
+- 已完成：
+  - 在 `GetField` / `GetField2` 上补了一层更窄的普通对象直达快路径
+  - 普通对象链读取现在会直接走 `object_get_property()`，不再先穿过完整的 `get_field_value()` 类型分发链
+- 当前执行期重跑结果：
+  - `deep_property 200k`：`18.706–20.128 ms`
+  - `method_chain 5k`：`1.106–1.214 ms`
+  - `runtime_string_pressure 4k`：`1.118–1.205 ms`
+- 当前解读：
+  - 这是当前最干净的一轮 deep-property 跟进，因为它直接命中了 `root.a.b.c.d` 这种连续普通对象链读取
+  - dense-array 读侧那条微优化线当前已经进入“高回归风险、低信号”的区域，暂时收住
+  - 后续如果没有新的 profiling 证据，不再重启 dense-array 读侧的微优化小刀

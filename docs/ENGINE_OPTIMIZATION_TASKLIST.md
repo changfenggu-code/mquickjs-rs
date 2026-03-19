@@ -254,6 +254,13 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - Regression coverage added for deep property chain access.
 - Benchmark result: `deep_property 200k` improved from roughly `28–29 ms` to `15.7–17.0 ms` in Criterion.
 - Important interpretation: this completed work primarily improves regular object property access, not the still-open dense-array-specific read/write fast-path work.
+- 2026-03-20: reopened the deep-property/object-access line with a narrower `GetField` / `GetField2` fast path for ordinary objects, letting those opcodes jump straight to `object_get_property()` instead of routing through the full generic `get_field_value()` type-dispatch ladder first.
+- Re-ran targeted deep-property regression coverage successfully.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `deep_property 200k`: `18.706–20.128 ms`
+  - `method_chain 5k`: `1.106–1.214 ms`
+  - `runtime_string_pressure 4k`: `1.118–1.205 ms`
+- Current interpretation: this is the cleanest current follow-up on the original deep-property win because it directly targets repeated plain-object chain access (`root.a.b.c.d`) while also helping nearby object-heavy workloads instead of only improving a synthetic microbenchmark.
 - 2026-03-17: added a `PutArrayEl + Drop` peephole fast path so statement-position array assignments no longer materialize an unused result value on the stack.
 - Re-ran array assignment statement and assignment-expression regression coverage successfully.
 - Selected execution-focused Criterion reruns on the current worktree:
@@ -345,6 +352,7 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `dense array read only hot local1`: `52.082–52.993 ms`
   - `sieve 10k`: `1.3022–1.3268 ms`
 - Current interpretation: this is another narrow but durable `GetArrayElDiscard` win, aimed squarely at the pure-read diagnostic path rather than the broader branch-heavy `GetArrayEl` workload.
+- Status update: the current dense-array read-side micro-optimization round is now effectively closed. Later `GetArrayEl` / `GetArrayElDiscard` work should reopen only if fresh profiling shows a materially different hotspot shape, because the current line has entered a high-regression, low-signal zone.
 - 2026-03-18: added a dedicated `IncLoc*Drop` family for statement-form `local = local + 1` updates whose result is immediately discarded, and rewrote those hottest tails in loop increments and dense-array read counters into the new opcodes.
 - Added compiler coverage confirming `var i = 0; i = i + 1;` now lowers to the dedicated local-update opcode family, and added an eval regression locking that `var x = 'a'; x = x + 1;` still preserves string-concatenation semantics.
 - `dump_bytecode` now shows the dense-array read diagnostics compiling to compact `IncLoc{1,2,3,4}Drop` tails instead of repeated `Push1; Add; Dup; PutLocX; Drop` skeletons around `GetArrayEl`.
@@ -610,6 +618,32 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `typed_arrays`
   - `array_buffers`
 - Separate hot live data from long-lived metadata where useful.
+
+**Completed so far**
+
+- 2026-03-19: completed the current mark-sweep integration pass:
+  - root-based marking replaced the old conservative placeholder behavior
+  - free-slot reuse is active across GC-managed containers
+  - manual `Context::gc()` and native `gc()` both trigger real collection
+  - automatic GC now also triggers during internal JS `Call` / `CallMethod` / `CallConstructor` workloads
+- Added regression coverage for:
+  - unrooted self-referential object collection
+  - freed object slot reuse
+  - native `gc()` triggering a real collection
+  - public `Context::gc()` + `memory_stats()` reclamation
+  - automatic GC triggering during a pure JS function-call workload
+- `Interpreter::get_stats()` / `memory_stats()` now count only live GC-managed slots, so post-GC stats visibly drop instead of reporting raw backing `Vec` lengths.
+- Local GC probes now show:
+  - manual collection reclaims cycles and transient arrays back to zero live objects/arrays
+  - automatic GC increments `gc_count` during JS workloads
+  - manual `gc()` cost is low on the current synthetic probes
+
+**Current status**
+
+- The current mark-sweep GC phase is functionally complete and measurable.
+- `mark-compact` is explicitly **not started** and remains deferred.
+- If pursued later, `mark-compact` should be treated as a new project, not as hidden unfinished work inside the current pass.
+- trigger tuning
 
 ## 9.3 Reduce Memory Usage
 

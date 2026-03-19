@@ -363,6 +363,8 @@ pub enum InterpreterError {
     TypeError(String),
     /// Reference error
     ReferenceError(String),
+    /// Range error
+    RangeError(String),
     /// Internal error
     InternalError(String),
     /// Uncaught JS exception (formatted message from Error object or primitive)
@@ -378,6 +380,7 @@ impl core::fmt::Display for InterpreterError {
             Self::DivisionByZero => write!(f, "division by zero"),
             Self::TypeError(msg) => write!(f, "TypeError: {}", msg),
             Self::ReferenceError(msg) => write!(f, "ReferenceError: {}", msg),
+            Self::RangeError(msg) => write!(f, "RangeError: {}", msg),
             Self::InternalError(msg) => write!(f, "InternalError: {}", msg),
             Self::UncaughtException(msg) => write!(f, "{}", msg),
         }
@@ -512,6 +515,11 @@ pub struct Interpreter {
     pub(crate) timers: Vec<Timer>,
     /// Next timer ID
     pub(crate) next_timer_id: u32,
+    /// Host-provided wall-clock time source in milliseconds.
+    /// Used by `Date.now()` in `no_std` builds and can override std timing too.
+    pub(crate) time_provider: Option<fn() -> u64>,
+    /// Origin for `performance.now()` in milliseconds.
+    pub(crate) time_origin_millis: u64,
     /// GC stats
     pub(crate) gc_count: u32,
     /// Mark-sweep GC state (phase, trigger, stats)

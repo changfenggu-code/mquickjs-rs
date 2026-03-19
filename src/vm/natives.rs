@@ -2071,7 +2071,7 @@ pub(crate) fn native_string_repeat(
 
     let count = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
     if count < 0 {
-        return Err("Invalid count value".to_string());
+        return Err("RangeError: Invalid count value".to_string());
     }
 
     let result = s.repeat(count as usize);
@@ -3283,59 +3283,24 @@ impl<'a> JsonParser<'a> {
 // ===========================================
 
 /// Date.now - returns current timestamp in milliseconds
-#[cfg(feature = "std")]
 pub(crate) fn native_date_now(
-    _interp: &mut Interpreter,
+    interp: &mut Interpreter,
     _this: Value,
     _args: &[Value],
 ) -> Result<Value, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("Time error: {}", e))?;
-
-    let millis = now.as_millis() as Float;
+    let millis = interp.current_time_millis().unwrap_or(0) as Float;
     Ok(Value::float(millis))
 }
 
-/// Date.now - stub for no_std (returns 0)
-#[cfg(not(feature = "std"))]
-pub(crate) fn native_date_now(
-    _interp: &mut Interpreter,
-    _this: Value,
-    _args: &[Value],
-) -> Result<Value, String> {
-    Ok(Value::int(0))
-}
-
 /// performance.now - high-resolution time in milliseconds
-#[cfg(feature = "std")]
 pub(crate) fn native_performance_now(
-    _interp: &mut Interpreter,
+    interp: &mut Interpreter,
     _this: Value,
     _args: &[Value],
 ) -> Result<Value, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("Time error: {}", e))?;
-
-    let millis = now.as_millis() as i64;
-    let max_val = 1 << 30;
-
-    Ok(Value::int((millis % max_val) as i32))
-}
-
-/// performance.now - stub for no_std (returns 0)
-#[cfg(not(feature = "std"))]
-pub(crate) fn native_performance_now(
-    _interp: &mut Interpreter,
-    _this: Value,
-    _args: &[Value],
-) -> Result<Value, String> {
-    Ok(Value::int(0))
+    let now = interp.current_time_millis().unwrap_or(interp.time_origin_millis);
+    let elapsed = now.saturating_sub(interp.time_origin_millis) as Float;
+    Ok(Value::float(elapsed))
 }
 
 // ===========================================
@@ -3376,6 +3341,16 @@ pub(crate) fn native_regexp_test(
     };
 
     Ok(Value::bool(re.regex.is_match(&test_str)))
+}
+
+/// RegExp.prototype.test - stub for no_std
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_regexp_test(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Err("RegExp.prototype.test not available in no_std".to_string())
 }
 
 /// RegExp.prototype.exec - executes the regex and returns match result
@@ -3444,6 +3419,16 @@ pub(crate) fn native_regexp_exec(
     } else {
         Ok(Value::null())
     }
+}
+
+/// RegExp.prototype.exec - stub for no_std
+#[cfg(not(feature = "std"))]
+pub(crate) fn native_regexp_exec(
+    _interp: &mut Interpreter,
+    _this: Value,
+    _args: &[Value],
+) -> Result<Value, String> {
+    Err("RegExp.prototype.exec not available in no_std".to_string())
 }
 
 // ===========================================
@@ -4175,6 +4160,20 @@ pub(crate) fn native_clear_timeout(
 // =============================================================================
 
 impl Interpreter {
+    fn classify_native_error(message: String) -> InterpreterError {
+        if let Some(msg) = message.strip_prefix("RangeError: ") {
+            InterpreterError::RangeError(msg.to_string())
+        } else if let Some(msg) = message.strip_prefix("ReferenceError: ") {
+            InterpreterError::ReferenceError(msg.to_string())
+        } else if let Some(msg) = message.strip_prefix("InternalError: ") {
+            InterpreterError::InternalError(msg.to_string())
+        } else if let Some(msg) = message.strip_prefix("TypeError: ") {
+            InterpreterError::TypeError(msg.to_string())
+        } else {
+            InterpreterError::TypeError(message)
+        }
+    }
+
     /// Call a native function by index
     pub(crate) fn call_native_func(
         &mut self,
@@ -4190,7 +4189,7 @@ impl Interpreter {
             })?
             .clone();
 
-        (func.func)(self, this, args).map_err(InterpreterError::TypeError)
+        (func.func)(self, this, args).map_err(Self::classify_native_error)
     }
 
     /// Call a builtin object as a function (e.g., Boolean(value), Number(value))

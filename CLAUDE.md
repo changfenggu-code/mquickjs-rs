@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MQuickJS-RS is a **Research Project** — a pure safe Rust port of Fabrice Bellard's [MQuickJS](https://github.com/bellard/mquickjs) minimalist JavaScript engine. It implements an ES5 subset with a tracing mark-compact GC, stack-based bytecode VM, and no `unsafe` code.
+MQuickJS-RS is a **Research Project** — a pure safe Rust port of Fabrice Bellard's [MQuickJS](https://github.com/bellard/mquickjs) minimalist JavaScript engine. It implements an ES5 subset with a generation-based mark-sweep GC (Plan B), stack-based bytecode VM, and no `unsafe` code. A full mark-compact GC (Plan C) is planned as a future phase — see `docs/GC_PROGRESS.md`.
 
 **Critical for ESP32/Bare Metal Development**: This project is designed to run on ESP32 bare metal with `no_std`. When adding features or modifying code, always verify `no_std` compatibility.
 
@@ -18,7 +18,7 @@ cargo build --release
 # Build for ESP32 bare metal (no_std)
 cargo build --release --no-default-features
 
-# Run tests (458 tests)
+# Run tests (585 tests)
 cargo test
 
 # Run a single test by name
@@ -73,7 +73,7 @@ The execution pipeline is: **Source JS → Lexer → Parser/Compiler → Bytecod
 
 - **[src/vm/stack.rs](src/vm/stack.rs)** — Value stack with call frames.
 
-- **[src/gc/](src/gc/)** — Arena allocator (`allocator.rs`) and mark-compact collector (`collector.rs`). The GC is mostly a stub; actual object lifetime is managed via the `Vec`-of-objects pattern in the interpreter.
+- **[src/gc/](src/gc/)** — Arena allocator (`allocator.rs`) for memory layout and stats, plus a Plan C reference stub (`collector.rs`). The active GC is Plan B in `src/vm/gc.rs` — generation-based mark-sweep using heap-allocated worklist (no recursion, no stack overflow). See `docs/GC_PROGRESS.md`.
 
 - **[src/runtime/](src/runtime/)** — Object, string, array, function, and property table types used by the interpreter.
 
@@ -95,7 +95,7 @@ Object property/method access goes through `get_*_property()` helpers in the int
 
 ### Tests
 
-Tests live inline in each source file (`#[cfg(test)]` modules). The 458 tests cover the full language feature set and all built-in methods.
+Tests live inline in each source file (`#[cfg(test)]` modules). The 585 tests cover the full language feature set, all built-in methods, and GC correctness.
 
 ## Workspace Structure
 
@@ -114,5 +114,4 @@ This is a Cargo workspace with two members:
 - New built-in methods go in `src/builtins/<object>.rs`, wired up via `get_*_property()` in the interpreter.
 - **`no_std` is required for ESP32** — The project must compile without `std`. When adding dependencies, verify they have `no_std` support or add `default-features = ["std"]` to `Cargo.toml` and use `#[cfg(feature = "std")]` gates.
 - **Memory-constrained design** — ESP32 has limited RAM (typically 320-520KB). Prefer inline allocation, avoid dynamic allocation in hot paths, and use tagged values for integers to minimize heap usage.
-- **Cross-compilation target** — For ESP32, use target: `riscv32imac-unknown-none-elf`. Run `rustup target add riscv32imac-unknown-none-elf` if not already installed.
 - **no_std tests** — Run `cargo test --no-default-features` to verify. Test modules must import `use alloc::vec;` for `vec![]` macro. Regex/Date tests may fail in no_std (expected - regex crate is std-only).
