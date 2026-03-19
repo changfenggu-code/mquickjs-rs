@@ -138,18 +138,21 @@ impl GcState {
     }
 
     /// Find a free slot in the generation array, or push a new one.
-    /// Returns the slot index. The caller must set the actual container slot.
+    /// Returns `(slot_index, is_new)`.
+    /// If `is_new` is true, caller should push to the container.
+    /// If `is_new` is false, caller should overwrite the existing entry
+    /// (and clear any Vec fields to release old allocations).
     #[allow(clippy::ptr_arg)]
-    pub fn alloc_slot(&mut self, gen: &mut Vec<u32>) -> usize {
+    pub fn alloc_slot(&mut self, gen: &mut Vec<u32>) -> (usize, bool) {
         for (i, g) in gen.iter().enumerate() {
             if *g == SLOT_FREE {
                 gen[i] = self.phase;
-                return i;
+                return (i, false);
             }
         }
         let idx = gen.len();
         gen.push(self.phase);
-        idx
+        (idx, true)
     }
 
     /// Sweep a container: mark all dead slots as SLOT_FREE.

@@ -304,60 +304,58 @@ impl Interpreter {
 
     /// Allocate a closure slot, reusing a free slot if available.
     /// Returns the slot index. Caller must push the ClosureData.
-    pub fn gc_alloc_closure(&mut self) -> usize {
+    pub fn gc_alloc_closure(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_closures)
     }
 
     /// Allocate a var_cells slot, reusing a free slot if available.
-    /// Returns the slot index. Caller must push the Value.
-    pub fn gc_alloc_var_cell(&mut self) -> usize {
+    /// Returns (slot_index, is_new). Caller should push if is_new, else overwrite.
+    pub fn gc_alloc_var_cell(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_var_cells)
     }
 
     /// Allocate an array slot, reusing a free slot if available.
-    /// Returns the slot index. Caller must push the Vec<Value>.
-    pub fn gc_alloc_array(&mut self) -> usize {
+    pub fn gc_alloc_array(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_arrays)
     }
 
     /// Allocate an object slot, reusing a free slot if available.
-    /// Returns the slot index. Caller must push the ObjectInstance.
-    pub fn gc_alloc_object(&mut self) -> usize {
+    pub fn gc_alloc_object(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_objects)
     }
 
     /// Allocate a for-in iterator slot, reusing a free slot if available.
-    pub fn gc_alloc_for_in_iterator(&mut self) -> usize {
+    pub fn gc_alloc_for_in_iterator(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_for_in_iterators)
     }
 
     /// Allocate a for-of iterator slot, reusing a free slot if available.
-    pub fn gc_alloc_for_of_iterator(&mut self) -> usize {
+    pub fn gc_alloc_for_of_iterator(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_for_of_iterators)
     }
 
     /// Allocate an error object slot, reusing a free slot if available.
-    pub fn gc_alloc_error_object(&mut self) -> usize {
+    pub fn gc_alloc_error_object(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_error_objects)
     }
 
     /// Allocate a regex object slot, reusing a free slot if available.
-    pub fn gc_alloc_regex_object(&mut self) -> usize {
+    pub fn gc_alloc_regex_object(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_regex_objects)
     }
 
     /// Allocate a typed array slot, reusing a free slot if available.
-    pub fn gc_alloc_typed_array(&mut self) -> usize {
+    pub fn gc_alloc_typed_array(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_typed_arrays)
     }
 
     /// Allocate an array buffer slot, reusing a free slot if available.
-    pub fn gc_alloc_array_buffer(&mut self) -> usize {
+    pub fn gc_alloc_array_buffer(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_array_buffers)
     }
 
     /// Allocate a timer slot, reusing a free slot if available.
-    pub fn gc_alloc_timer(&mut self) -> usize {
+    pub fn gc_alloc_timer(&mut self) -> (usize, bool) {
         self.gc.alloc_slot(&mut self.gen_timers)
     }
 
@@ -793,17 +791,24 @@ impl Interpreter {
         bytecode: *const FunctionBytecode,
         cell_indices: Vec<u32>,
     ) -> Value {
-        let idx = self.closures.len();
-        self.closures.push(ClosureData::new(bytecode, cell_indices));
-        // Use high bit to mark as closure index
+        let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_closures);
+        if is_new {
+            self.closures.push(ClosureData::new(bytecode, cell_indices));
+        } else {
+            self.closures[idx] = ClosureData::new(bytecode, cell_indices);
+        }
         Value::closure_idx(idx as u32)
     }
 
     /// Allocate a new variable cell with the given initial value, return its index.
     fn alloc_var_cell(&mut self, value: Value) -> u32 {
-        let idx = self.var_cells.len() as u32;
-        self.var_cells.push(value);
-        idx
+        let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_var_cells);
+        if is_new {
+            self.var_cells.push(value);
+        } else {
+            self.var_cells[idx] = value;
+        }
+        idx as u32
     }
 
     /// Read raw bytes of a TypedArray value.
@@ -824,8 +829,12 @@ impl Interpreter {
 
     /// Create an array and return a Value that references it
     fn create_array(&mut self, elements: Vec<Value>) -> Value {
-        let idx = self.arrays.len();
-        self.arrays.push(elements);
+        let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_arrays);
+        if is_new {
+            self.arrays.push(elements);
+        } else {
+            self.arrays[idx] = elements; // old Vec dropped automatically
+        }
         Value::array_idx(idx as u32)
     }
 
@@ -913,16 +922,23 @@ impl Interpreter {
 
     /// Create a new object and return its value
     fn create_object(&mut self) -> Value {
-        let idx = self.objects.len();
-        self.objects.push(ObjectInstance::new());
+        let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_objects);
+        if is_new {
+            self.objects.push(ObjectInstance::new());
+        } else {
+            self.objects[idx] = ObjectInstance::new();
+        }
         Value::object_idx(idx as u32)
     }
 
     /// Create a new object with a constructor reference and return its value
     fn create_object_with_constructor(&mut self, constructor: Value) -> Value {
-        let idx = self.objects.len();
-        self.objects
-            .push(ObjectInstance::with_constructor(constructor));
+        let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_objects);
+        if is_new {
+            self.objects.push(ObjectInstance::with_constructor(constructor));
+        } else {
+            self.objects[idx] = ObjectInstance::with_constructor(constructor);
+        }
         Value::object_idx(idx as u32)
     }
 
@@ -1498,9 +1514,13 @@ impl Interpreter {
         };
 
         let err_obj = ErrorObject { name, message };
-        let err_idx = self.error_objects.len() as u32;
-        self.error_objects.push(err_obj);
-        let exception = Value::error_object(err_idx);
+        let (err_idx, is_new) = self.gc.alloc_slot(&mut self.gen_error_objects);
+        if is_new {
+            self.error_objects.push(err_obj);
+        } else {
+            self.error_objects[err_idx] = err_obj;
+        }
+        let exception = Value::error_object(err_idx as u32);
 
         self.route_exception_to_handler(exception)
     }
@@ -3267,14 +3287,19 @@ impl Interpreter {
                             };
 
                             // Create and store the error object
-                            let error_idx = self.error_objects.len() as u32;
-                            self.error_objects.push(ErrorObject {
+                            let (error_idx, is_new) = self.gc.alloc_slot(&mut self.gen_error_objects);
+                            let obj = ErrorObject {
                                 name: error_name.to_string(),
                                 message,
-                            });
+                            };
+                            if is_new {
+                                self.error_objects.push(obj);
+                            } else {
+                                self.error_objects[error_idx] = obj;
+                            }
 
                             // Push the error object value
-                            self.stack.push(Value::error_object(error_idx));
+                            self.stack.push(Value::error_object(error_idx as u32));
                             continue;
                         }
 
@@ -3329,16 +3354,21 @@ impl Interpreter {
                             // Compile the regex
                             match regex::Regex::new(&regex_pattern) {
                                 Ok(regex) => {
-                                    let regex_idx = self.regex_objects.len() as u32;
-                                    self.regex_objects.push(RegExpObject {
+                                    let (regex_idx, is_new) = self.gc.alloc_slot(&mut self.gen_regex_objects);
+                                    let obj = RegExpObject {
                                         regex,
                                         pattern,
                                         flags,
                                         global,
                                         ignore_case,
                                         multiline,
-                                    });
-                                    self.stack.push(Value::regexp_object(regex_idx));
+                                    };
+                                    if is_new {
+                                        self.regex_objects.push(obj);
+                                    } else {
+                                        self.regex_objects[regex_idx] = obj;
+                                    }
+                                    self.stack.push(Value::regexp_object(regex_idx as u32));
                                 }
                                 Err(e) => {
                                     // Invalid regex - return a SyntaxError
@@ -3404,9 +3434,13 @@ impl Interpreter {
                                 }
                             }
 
-                            let typed_idx = self.typed_arrays.len() as u32;
-                            self.typed_arrays.push(typed_arr);
-                            self.stack.push(Value::typed_array_object(typed_idx));
+                            let (typed_idx, is_new) = self.gc.alloc_slot(&mut self.gen_typed_arrays);
+                            if is_new {
+                                self.typed_arrays.push(typed_arr);
+                            } else {
+                                self.typed_arrays[typed_idx] = typed_arr;
+                            }
+                            self.stack.push(Value::typed_array_object(typed_idx as u32));
                             continue;
                         }
 
@@ -3420,9 +3454,13 @@ impl Interpreter {
                             } else {
                                 Vec::new()
                             };
-                            let arr_idx = self.arrays.len() as u32;
-                            self.arrays.push(arr);
-                            self.stack.push(Value::array_idx(arr_idx));
+                            let (arr_idx, is_new) = self.gc.alloc_slot(&mut self.gen_arrays);
+                            if is_new {
+                                self.arrays.push(arr);
+                            } else {
+                                self.arrays[arr_idx] = arr;
+                            }
+                            self.stack.push(Value::array_idx(arr_idx as u32));
                             continue;
                         }
 
@@ -3435,9 +3473,13 @@ impl Interpreter {
                                 .unwrap_or(0);
 
                             let ab = ArrayBufferObject::new(byte_length);
-                            let ab_idx = self.array_buffers.len() as u32;
-                            self.array_buffers.push(ab);
-                            self.stack.push(Value::array_buffer_object(ab_idx));
+                            let (ab_idx, is_new) = self.gc.alloc_slot(&mut self.gen_array_buffers);
+                            if is_new {
+                                self.array_buffers.push(ab);
+                            } else {
+                                self.array_buffers[ab_idx] = ab;
+                            }
+                            self.stack.push(Value::array_buffer_object(ab_idx as u32));
                             continue;
                         }
                     }
@@ -4695,8 +4737,12 @@ impl Interpreter {
                     };
 
                     // Store iterator and push reference
-                    let iter_idx = self.for_in_iterators.len();
-                    self.for_in_iterators.push(iter);
+                    let (iter_idx, is_new) = self.gc.alloc_slot(&mut self.gen_for_in_iterators);
+                    if is_new {
+                        self.for_in_iterators.push(iter);
+                    } else {
+                        self.for_in_iterators[iter_idx] = iter;
+                    }
                     self.stack.push(Value::iterator_idx(iter_idx as u32));
                 }
 
@@ -4751,8 +4797,12 @@ impl Interpreter {
                     };
 
                     // Store iterator and push reference
-                    let iter_idx = self.for_of_iterators.len();
-                    self.for_of_iterators.push(iter);
+                    let (iter_idx, is_new) = self.gc.alloc_slot(&mut self.gen_for_of_iterators);
+                    if is_new {
+                        self.for_of_iterators.push(iter);
+                    } else {
+                        self.for_of_iterators[iter_idx] = iter;
+                    }
                     self.stack.push(Value::for_of_iterator_idx(iter_idx as u32));
                 }
 
