@@ -95,6 +95,10 @@ pub const TYPED_ARRAY_MARKER: i32 = 1 << 18;
 /// When bit 17 is set, it's an ArrayBuffer object index
 pub const ARRAY_BUFFER_MARKER: i32 = 1 << 17;
 
+/// Maximum safe payload index for CatchOffset-tagged special values.
+/// Higher indices would overlap with marker bits used to distinguish runtime kinds.
+pub const MAX_CATCHOFFSET_INDEX: u32 = ARRAY_BUFFER_MARKER as u32;
+
 /// Raw value representation - always 64-bit for consistent encoding across platforms
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -326,6 +330,7 @@ impl Value {
     /// Create a closure value (index into interpreter's closures array)
     #[inline]
     pub const fn closure_idx(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             idx as i32,
@@ -336,6 +341,7 @@ impl Value {
     /// Uses bit 26 marker to distinguish from closures
     #[inline]
     pub const fn array_idx(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | ARRAY_INDEX_MARKER,
@@ -346,6 +352,7 @@ impl Value {
     /// Uses bit 25 marker to distinguish from closures and arrays
     #[inline]
     pub const fn object_idx(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | OBJECT_INDEX_MARKER,
@@ -356,6 +363,7 @@ impl Value {
     /// Uses bit 24 marker to distinguish from closures, arrays, and objects
     #[inline]
     pub const fn iterator_idx(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | ITERATOR_INDEX_MARKER,
@@ -366,6 +374,7 @@ impl Value {
     /// Uses bit 23 marker to distinguish from other types
     #[inline]
     pub const fn for_of_iterator_idx(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | FOR_OF_ITERATOR_INDEX_MARKER,
@@ -376,6 +385,7 @@ impl Value {
     /// Uses bit 22 marker to distinguish from other types
     #[inline]
     pub const fn native_func(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | NATIVE_FUNC_MARKER,
@@ -384,6 +394,7 @@ impl Value {
 
     /// Create a builtin object value (Math=0, JSON=1, etc.)
     pub const fn builtin_object(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | BUILTIN_OBJECT_MARKER,
@@ -715,6 +726,7 @@ impl Value {
     /// Create an error object Value from an index
     #[inline]
     pub const fn error_object(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | ERROR_OBJECT_MARKER,
@@ -741,6 +753,7 @@ impl Value {
     /// Create a RegExp object Value from an index
     #[inline]
     pub const fn regexp_object(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | REGEXP_OBJECT_MARKER,
@@ -768,6 +781,7 @@ impl Value {
     /// Create a TypedArray object value
     #[inline]
     pub const fn typed_array_object(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | TYPED_ARRAY_MARKER,
@@ -796,6 +810,7 @@ impl Value {
     /// Create an ArrayBuffer object value
     #[inline]
     pub const fn array_buffer_object(idx: u32) -> Self {
+        assert!(idx < MAX_CATCHOFFSET_INDEX, "special index overflow");
         Value(RawValue::make_special(
             SpecialTag::CatchOffset as u8,
             (idx as i32) | ARRAY_BUFFER_MARKER,
@@ -907,13 +922,16 @@ pub fn format_float(val: Float) -> String {
 pub fn float_to_value(f: Float) -> Value {
     if f.is_nan() || f.is_infinite() {
         Value::float(f)
-    } else if (f - libm::truncf(f)) == 0.0
-        && f >= (i32::MIN as Float)
-        && f <= (i32::MAX as Float)
-        && !(f == 0.0 && f.is_sign_negative())
-    {
-        Value::int(f as i32)
     } else {
+        let truncated = libm::truncf(f);
+        if (f - truncated) == 0.0
+            && !(f == 0.0 && f.is_sign_negative())
+            && f >= i32::MIN as Float
+            && f < 2147483648.0
+        {
+            let candidate = truncated as i32;
+            return Value::int(candidate);
+        }
         Value::float(f)
     }
 }

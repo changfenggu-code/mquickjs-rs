@@ -3,6 +3,7 @@
 //! All functions follow the signature: fn(interp, this, args) -> Result<Value, String>
 
 use super::interpreter::*;
+use crate::util::dtoa::u64_to_str_radix;
 use crate::util::unicode::{utf16_len, utf16_to_utf8_index, utf8_to_utf16_index};
 use crate::value::{float_to_value, format_float, Float, Value};
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
@@ -1128,17 +1129,43 @@ pub(crate) fn native_number_to_string(
     args: &[Value],
 ) -> Result<Value, String> {
     let radix = args.first().and_then(|v| v.to_i32()).unwrap_or(10);
+    if !(2..=36).contains(&radix) {
+        return Err("RangeError: toString radix must be between 2 and 36".to_string());
+    }
 
     if let Some(n) = this.to_i32() {
-        let s = match radix {
-            2 => format!("{:b}", n),
-            8 => format!("{:o}", n),
-            16 => format!("{:x}", n),
-            _ => n.to_string(),
+        let s = if radix == 10 {
+            n.to_string()
+        } else {
+            let magnitude = (n as i64).unsigned_abs();
+            let mut buf = [0u8; 65];
+            let len = u64_to_str_radix(&mut buf, magnitude, radix as u32);
+            let digits = core::str::from_utf8(&buf[..len]).unwrap_or("");
+            if n < 0 {
+                format!("-{}", digits)
+            } else {
+                digits.to_string()
+            }
         };
         Ok(interp.create_runtime_string(s))
     } else if let Some(f) = this.to_f32() {
-        Ok(interp.create_runtime_string(format_float(f)))
+        if radix == 10 {
+            Ok(interp.create_runtime_string(format_float(f)))
+        } else if f.is_finite() && (f - libm::truncf(f)) == 0.0 {
+            let n = libm::truncf(f) as i64;
+            let magnitude = n.unsigned_abs();
+            let mut buf = [0u8; 65];
+            let len = u64_to_str_radix(&mut buf, magnitude, radix as u32);
+            let digits = core::str::from_utf8(&buf[..len]).unwrap_or("");
+            let s = if n < 0 {
+                format!("-{}", digits)
+            } else {
+                digits.to_string()
+            };
+            Ok(interp.create_runtime_string(s))
+        } else {
+            Ok(interp.create_runtime_string(format_float(f)))
+        }
     } else {
         Err("toString called on non-number".to_string())
     }
@@ -2936,22 +2963,31 @@ pub(crate) fn native_json_parse(
     let val = args[0];
 
     // Get the string to parse
-    let json_str = if let Some(str_idx) = val.to_string_idx() {
-        if let Some(s) = interp.get_string_by_idx(str_idx) {
-            s.to_string()
+    if let Some(str_idx) = val.to_string_idx() {
+        let json_str = if let Some(s) = interp.get_string_by_idx(str_idx) {
+            s
         } else {
             return Err("Invalid string argument".to_string());
+        };
+
+        if str_idx < Interpreter::RUNTIME_STRING_OFFSET {
+            // SAFETY: built-in and compile-time strings do not live inside
+            // `interp.runtime_strings`, so parsing while mutating interpreter
+            // allocation state will not invalidate this source slice.
+            let json_ptr = json_str as *const str;
+            let mut parser = JsonParser::new(unsafe { &*json_ptr });
+            parser.parse_value(interp)
+        } else {
+            let json_owned = json_str.to_string();
+            let mut parser = JsonParser::new(&json_owned);
+            parser.parse_value(interp)
         }
     } else if let Some(n) = val.to_i32() {
         // Numbers can be parsed as JSON
-        return Ok(Value::int(n));
+        Ok(Value::int(n))
     } else {
-        return Err("JSON.parse requires a string argument".to_string());
-    };
-
-    // Parse the JSON string
-    let mut parser = JsonParser::new(&json_str);
-    parser.parse_value(interp)
+        Err("JSON.parse requires a string argument".to_string())
+    }
 }
 
 /// Simple JSON parser
@@ -3009,7 +3045,7 @@ impl<'a> JsonParser<'a> {
 
     fn parse_string(&mut self, interp: &mut Interpreter) -> Result<Value, String> {
         self.next_char(); // consume opening quote
-        let mut result = String::new();
+        let mut result = String::with_capacity(16);
 
         loop {
             if self.pos >= self.input.len() {
@@ -3032,22 +3068,22 @@ impl<'a> JsonParser<'a> {
                         'f' => result.push('\x0C'),
                         'u' => {
                             // Parse unicode escape \uXXXX
-                            let hex: String = (0..4)
-                                .filter_map(|_| {
-                                    let c = self.next_char();
-                                    if c.is_ascii_hexdigit() {
-                                        Some(c)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if hex.len() == 4 {
-                                if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                                    if let Some(c) = char::from_u32(code) {
-                                        result.push(c);
-                                    }
+                            let mut hex = String::with_capacity(4);
+                            for _ in 0..4 {
+                                let c = self.next_char();
+                                if !c.is_ascii_hexdigit() {
+                                    return Err("Invalid unicode escape in JSON string".to_string());
                                 }
+                                hex.push(c);
+                            }
+                            if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                                if let Some(c) = char::from_u32(code) {
+                                    result.push(c);
+                                } else {
+                                    return Err("Invalid unicode scalar in JSON string".to_string());
+                                }
+                            } else {
+                                return Err("Invalid unicode escape in JSON string".to_string());
                             }
                         }
                         _ => result.push(escaped),
@@ -3056,7 +3092,6 @@ impl<'a> JsonParser<'a> {
                 _ => result.push(c),
             }
         }
-
         Ok(interp.create_runtime_string(result))
     }
 
@@ -3129,7 +3164,7 @@ impl<'a> JsonParser<'a> {
         self.next_char(); // consume '['
         self.skip_whitespace();
 
-        let mut items: Vec<Value> = Vec::new();
+        let mut items: Vec<Value> = Vec::with_capacity(4);
 
         // Empty array
         if self.peek_char() == ']' {
@@ -3172,7 +3207,7 @@ impl<'a> JsonParser<'a> {
         self.next_char(); // consume '{'
         self.skip_whitespace();
 
-        let mut props: Vec<(String, Value)> = Vec::new();
+        let mut props: Vec<(String, Value)> = Vec::with_capacity(4);
 
         // Empty object
         if self.peek_char() == '}' {
@@ -3181,6 +3216,7 @@ impl<'a> JsonParser<'a> {
             let obj = ObjectInstance {
                 constructor: None,
                 properties: props,
+                accessors: Vec::new(),
             };
             if is_new {
                 interp.objects.push(obj);
@@ -3200,7 +3236,7 @@ impl<'a> JsonParser<'a> {
 
             // Parse the key string directly
             self.next_char(); // consume opening quote
-            let mut key = String::new();
+            let mut key = String::with_capacity(16);
             loop {
                 if self.pos >= self.input.len() {
                     return Err("Unterminated string key in JSON".to_string());
@@ -3268,6 +3304,7 @@ impl<'a> JsonParser<'a> {
         let obj = ObjectInstance {
             constructor: None,
             properties: props,
+            accessors: Vec::new(),
         };
         if is_new {
             interp.objects.push(obj);
@@ -3406,11 +3443,13 @@ pub(crate) fn native_regexp_exec(
             interp.objects.push(crate::vm::interpreter::ObjectInstance {
                 constructor: None,
                 properties: vec![("index".to_string(), Value::int(m.start() as i32))],
+                accessors: Vec::new(),
             });
         } else {
             interp.objects[_result_obj_idx] = crate::vm::interpreter::ObjectInstance {
                 constructor: None,
                 properties: vec![("index".to_string(), Value::int(m.start() as i32))],
+                accessors: Vec::new(),
             };
         }
 
@@ -3615,11 +3654,9 @@ pub(crate) fn native_object_has_own_property(
     // Check if 'this' is an object and has the property
     if let Some(obj_idx) = this.to_object_idx() {
         if let Some(obj) = interp.get_object(obj_idx) {
-            for (k, _) in obj.properties.iter() {
-                if k == &prop_name {
-                    return Ok(Value::bool(true));
-                }
-            }
+            let exists = obj.properties.iter().any(|(k, _)| k == &prop_name)
+                || obj.accessors.iter().any(|a| a.key == prop_name);
+            return Ok(Value::bool(exists));
         }
         return Ok(Value::bool(false));
     }
@@ -3696,11 +3733,13 @@ pub(crate) fn native_object_create(
         interp.objects.push(ObjectInstance {
             constructor: None,
             properties: Vec::new(),
+            accessors: Vec::new(),
         });
     } else {
         interp.objects[obj_idx] = ObjectInstance {
             constructor: None,
             properties: Vec::new(),
+            accessors: Vec::new(),
         };
     }
 
@@ -3729,26 +3768,45 @@ pub(crate) fn native_object_define_property(
         None => return Ok(obj),
     };
 
-    // Get value from descriptor
-    let value = if let Some(desc_idx) = descriptor.to_object_idx() {
-        // Look for 'value' property in descriptor
-        if let Some(desc_obj) = interp.objects.get(desc_idx as usize) {
-            desc_obj
-                .properties
-                .iter()
-                .find(|(k, _)| k == "value")
-                .map(|(_, v)| *v)
-                .unwrap_or_default()
-        } else {
-            Value::undefined()
-        }
-    } else {
-        Value::undefined()
-    };
-
-    // Set the property on the object
     if let Some(obj_idx) = obj.to_object_idx() {
-        interp.object_set_property(obj_idx, prop_name, value);
+        if let Some(desc_idx) = descriptor.to_object_idx() {
+            let (value, getter, setter) = if let Some(desc_obj) = interp.objects.get(desc_idx as usize)
+            {
+                let value = desc_obj
+                    .properties
+                    .iter()
+                    .find(|(k, _)| k == "value")
+                    .map(|(_, v)| *v)
+                    .unwrap_or(Value::undefined());
+                let getter = desc_obj
+                    .properties
+                    .iter()
+                    .find(|(k, _)| k == "get")
+                    .map(|(_, v)| *v)
+                    .unwrap_or(Value::undefined());
+                let setter = desc_obj
+                    .properties
+                    .iter()
+                    .find(|(k, _)| k == "set")
+                    .map(|(_, v)| *v)
+                    .unwrap_or(Value::undefined());
+                (value, getter, setter)
+            } else {
+                (Value::undefined(), Value::undefined(), Value::undefined())
+            };
+
+            if !getter.is_undefined() || !setter.is_undefined() {
+                interp.object_define_accessor(obj_idx, prop_name, getter, setter);
+            } else {
+                interp
+                    .object_set_property(obj_idx, prop_name, value)
+                    .map_err(|e| e.to_string())?;
+            }
+        } else {
+            interp
+                .object_set_property(obj_idx, prop_name, Value::undefined())
+                .map_err(|e| e.to_string())?;
+        }
     }
 
     Ok(obj)
@@ -4160,7 +4218,7 @@ pub(crate) fn native_clear_timeout(
 // =============================================================================
 
 impl Interpreter {
-    fn classify_native_error(message: String) -> InterpreterError {
+    pub(crate) fn classify_native_error(message: String) -> InterpreterError {
         if let Some(msg) = message.strip_prefix("RangeError: ") {
             InterpreterError::RangeError(msg.to_string())
         } else if let Some(msg) = message.strip_prefix("ReferenceError: ") {
@@ -4365,7 +4423,7 @@ impl Interpreter {
 
         // JSON methods
         self.register_native("JSON.stringify", native_json_stringify, 1);
-        self.register_native("JSON.parse", native_json_parse, 1);
+        self.native_json_parse_idx = Some(self.register_native("JSON.parse", native_json_parse, 1));
 
         // Date methods
         self.register_native("Date.now", native_date_now, 0);

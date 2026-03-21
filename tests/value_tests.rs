@@ -6,7 +6,8 @@ use mquickjs::runtime::string::{
     is_array_index, is_ascii_string, is_ident_continue, is_ident_start, JSString, StringTable,
 };
 use mquickjs::value::{
-    float_to_value, format_float, Float, RawValue, Value, SHORT_INT_MAX, SHORT_INT_MIN,
+    float_to_value, format_float, Float, RawValue, Value, MAX_CATCHOFFSET_INDEX, SHORT_INT_MAX,
+    SHORT_INT_MIN,
 };
 
 // ---------------------------------------------------------------------------
@@ -196,6 +197,13 @@ fn test_negative_zero_preserved_in_float_to_value() {
     assert!(f.is_sign_negative(), "-0.0 should preserve negative sign");
 }
 
+#[test]
+fn test_float_to_value_does_not_round_2147483648_to_i32_max() {
+    let v = float_to_value(2147483648.0);
+    assert!(v.is_float());
+    assert_eq!(v.to_number_f32(), Some(2147483648.0));
+}
+
 // ---------------------------------------------------------------------------
 // Value::is_closure — no false positives for typed values
 // ---------------------------------------------------------------------------
@@ -225,6 +233,18 @@ fn test_is_closure_no_false_positive_for_array_buffer() {
         !v.is_closure(),
         "array buffer must not be identified as closure"
     );
+}
+
+#[test]
+#[should_panic(expected = "special index overflow")]
+fn test_special_index_overflow_panics_for_closure_payloads() {
+    let _ = Value::closure_idx(MAX_CATCHOFFSET_INDEX);
+}
+
+#[test]
+#[should_panic(expected = "special index overflow")]
+fn test_special_index_overflow_panics_for_array_payloads() {
+    let _ = Value::array_idx(MAX_CATCHOFFSET_INDEX);
 }
 
 // ---------------------------------------------------------------------------

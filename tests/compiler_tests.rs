@@ -282,6 +282,31 @@ fn test_compile_get_array_push2_specialization() {
 }
 
 #[test]
+fn test_compile_deep_property_chain_uses_getfield_chain4() {
+    let source = "var root = { a: { b: { c: { d: 1 } } } }; return root.a.b.c.d;";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::GetFieldChain4 as u8)));
+}
+
+#[test]
+fn test_compile_json_parse_uses_standard_method_call_shape() {
+    let source = "var data = '{}'; return JSON.parse(data);";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::GetField2 as u8)));
+    assert!(func.bytecode.contains(&(OpCode::CallMethod as u8)));
+}
+
+#[test]
+fn test_compile_switch_integer_cases_use_switch_case_i8() {
+    let source =
+        "var x = 0; var y = 0; switch (x) { case 1: y = 10; break; case 2: y = 20; break; default: y = 0; }";
+    let func = Compiler::new(source).compile().unwrap();
+    assert!(func.bytecode.contains(&(OpCode::SwitchCaseI8 as u8)));
+    assert!(!func.bytecode.contains(&(OpCode::StrictEq as u8)));
+}
+
+
+#[test]
 fn test_compile_adjacent_string_concat_folds_to_const() {
     let func = compile_expr("'a' + 'b'").unwrap();
     assert!(!func.bytecode.contains(&(OpCode::Add as u8)));

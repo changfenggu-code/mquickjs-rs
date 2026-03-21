@@ -1,4 +1,4 @@
-//! Integration tests for Context::eval()
+﻿//! Integration tests for Context::eval()
 //
 //! Tests the full pipeline: source -> lexer -> compiler -> bytecode -> VM -> result.
 
@@ -216,12 +216,32 @@ fn test_eval_literal() {
     assert_eq!(result.to_i32(), Some(42));
 }
 #[test]
-fn test_for_in_runtime_string_overflow_becomes_error() {
+fn test_for_in_runtime_string_reuse_avoids_overflow() {
     let mut ctx = Context::new(256 * 1024);
-    let result = ctx.eval("var obj = { a:1,b:2,c:3,d:4,e:5,f:6,g:7,h:8,i:9,j:10,k:11,l:12,m:13,n:14,o:15,p:16,q:17,r:18,s:19,t:20 }; for (var round = 0; round < 5000; round = round + 1) { for (var k in obj) { } } return 0;");
-    assert!(result.is_err());
-    let msg = format!("{}", result.unwrap_err());
-    assert!(msg.contains("runtime string table exhausted"));
+    let result = ctx
+        .eval("var obj = { a:1,b:2,c:3,d:4,e:5,f:6,g:7,h:8,i:9,j:10,k:11,l:12,m:13,n:14,o:15,p:16,q:17,r:18,s:19,t:20 }; for (var round = 0; round < 5000; round = round + 1) { for (var k in obj) { } } return 0;")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(0));
+}
+
+#[test]
+fn test_for_in_reuses_key_strings_across_rounds() {
+    let mut ctx = Context::new(128 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var obj = { a:1, b:2, c:3 };
+        var sum = 0;
+        for (var round = 0; round < 2000; round = round + 1) {
+            for (var k in obj) {
+                sum = sum + k.length;
+            }
+        }
+        return sum;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(6000));
 }
 
 #[test]
@@ -866,6 +886,54 @@ fn test_later_closure_sees_reassigned_captured_local() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(2));
+}
+
+#[test]
+fn test_statement_local_add_store_updates_captured_target() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        function outer() {
+            var a = 1;
+            var b = 2;
+            var c = 0;
+            function readC() {
+                return c;
+            }
+            c = a + b;
+            return readC();
+        }
+        return outer();
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(3));
+}
+
+#[test]
+fn test_statement_local_mul_store_updates_captured_target() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        function outer() {
+            var a = 3;
+            var b = 4;
+            var c = 0;
+            function readC() {
+                return c;
+            }
+            c = a * b;
+            return readC();
+        }
+        return outer();
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(12));
 }
 
 #[test]
@@ -3830,6 +3898,37 @@ fn test_json_parse_number() {
 }
 
 #[test]
+fn test_json_parse_negative_number() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var s = '-123';
+        return JSON.parse(s);
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(-123));
+}
+
+#[test]
+fn test_json_parse_decimal_number() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var s = '3.5';
+        return JSON.parse(s);
+    ",
+        )
+        .unwrap();
+    let n = result.to_number_f32().unwrap();
+    assert!((n - 3.5).abs() < 0.001);
+}
+
+#[test]
 fn test_json_parse_boolean() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -3905,6 +4004,28 @@ fn test_json_parse_nested() {
         )
         .unwrap();
     assert_eq!(result.to_i32(), Some(1));
+}
+
+#[test]
+fn test_json_parse_unicode_string_value() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            r#"
+        var obj = JSON.parse('{"msg":"h\u00E9llo","snowman":"\u2603"}');
+        return obj.msg + ":" + obj.snowman;
+    "#,
+        )
+        .unwrap();
+    assert_eq!(ctx.string_value(result).as_deref(), Some("héllo:\u{2603}"));
+}
+
+#[test]
+fn test_json_parse_invalid_unicode_escape_errors() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval(r#"return JSON.parse('"\u00GH"');"#);
+    assert!(result.is_err());
 }
 
 // ========================================
@@ -4605,6 +4726,49 @@ fn test_object_define_property() {
 }
 
 #[test]
+fn test_object_define_property_accessor_getter_and_setter() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var hidden = 1;
+        var obj = {};
+        Object.defineProperty(obj, 'value', {
+            get: function () { return hidden; },
+            set: function (v) { hidden = v; }
+        });
+        obj.value = 7;
+        return hidden * 10 + obj.value;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(77));
+}
+
+#[test]
+fn test_object_define_property_accessor_has_own_property_and_delete() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var obj = {};
+        Object.defineProperty(obj, 'value', {
+            get: function () { return 1; },
+            set: function (v) {}
+        });
+        var before = obj.hasOwnProperty('value');
+        delete obj.value;
+        var after = obj.hasOwnProperty('value');
+        return before && !after;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
 fn test_math_constants() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -4717,6 +4881,22 @@ fn test_number_to_string() {
     // (42).toString() returns "42"
     let result = ctx.eval("return (42).toString();").unwrap();
     assert!(result.is_string());
+}
+
+#[test]
+fn test_number_to_string_supports_full_radix_range() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx.eval("return (255).toString(16);").unwrap();
+    assert_eq!(ctx.string_value(result).as_deref(), Some("ff"));
+
+    let result = ctx.eval("return (35).toString(36);").unwrap();
+    assert_eq!(ctx.string_value(result).as_deref(), Some("z"));
+
+    let result = ctx
+        .eval("try { return (10).toString(1); } catch (e) { return e.name; }")
+        .unwrap();
+    assert_eq!(ctx.string_value(result).as_deref(), Some("RangeError"));
 }
 
 #[test]
@@ -5749,6 +5929,13 @@ fn test_error_stack_property() {
 }
 
 #[test]
+fn test_error_stack_format_matches_error_to_string_spacing() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx.eval("var e = new Error('test'); return e.stack;").unwrap();
+    assert_eq!(ctx.string_value(result).as_deref(), Some("Error: test"));
+}
+
+#[test]
 fn test_error_to_string() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -6171,7 +6358,7 @@ fn test_null_plus_number() {
 #[test]
 fn test_undefined_plus_number() {
     let mut ctx = Context::new(64 * 1024);
-    // undefined 閳?NaN, NaN + 1 = NaN
+    // undefined 闁?NaN, NaN + 1 = NaN
     assert!(ctx.eval("return undefined + 1;").unwrap().is_nan_value());
 }
 
@@ -6263,7 +6450,7 @@ fn test_null_not_equals_false() {
 #[test]
 fn test_bool_coercion_in_eq() {
     let mut ctx = Context::new(64 * 1024);
-    // true閳?, false閳?
+    // true闁?, false闁?
     assert_eq!(ctx.eval("return true == 1;").unwrap().to_bool(), Some(true));
     assert_eq!(
         ctx.eval("return false == 0;").unwrap().to_bool(),
@@ -6398,7 +6585,7 @@ fn test_string_concat_with_undefined() {
 #[test]
 fn test_number_plus_string_coercion() {
     let mut ctx = Context::new(64 * 1024);
-    // When one side is a string, + does concatenation (number閳姱tring)
+    // When one side is a string, + does concatenation (number闁愁偅濮眛ring)
     let result = ctx.eval("return 123 + 'abc';").unwrap();
     assert!(result.is_string());
 }
@@ -6555,6 +6742,48 @@ fn test_switch_break_in_loop() {
     );
 }
 
+#[test]
+fn test_switch_continue_inside_loop_discards_switch_value() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var sum = 0;
+        for (var i = 0; i < 4; i = i + 1) {
+            switch (i) {
+                case 1:
+                    continue;
+                default:
+                    sum = sum + i;
+            }
+        }
+        return sum;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(5));
+}
+
+#[test]
+fn test_switch_case_ternary_expression_parses_correctly() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval(
+            "
+        var a = false;
+        var x = 2;
+        switch (x) {
+            case a ? 1 : 2:
+                return 7;
+            default:
+                return 9;
+        }
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(7));
+}
+
 // --- Math additional methods ---
 
 #[test]
@@ -6612,7 +6841,7 @@ fn test_string_substring() {
             .to_i32(),
         Some(104)
     );
-    // No end parameter 閳?to end of string
+    // No end parameter 闁?to end of string
     assert_eq!(
         ctx.eval("return 'hello world'.substring(6).length;")
             .unwrap()
@@ -6778,7 +7007,7 @@ fn test_json_stringify_nested_circular() {
 #[test]
 fn test_modulo_overflow_negative_zero() {
     let mut ctx = Context::new(64 * 1024);
-    // Mathematically 0, but dividend is negative 鈫?-0.0 per JS spec
+    // Mathematically 0, but dividend is negative 閳?-0.0 per JS spec
     let result = ctx.eval("return 1 / ((-2147483648) % (-1));").unwrap();
     let f = result.to_f32().unwrap();
     assert!(
@@ -7019,3 +7248,4 @@ fn test_error_instanceof() {
         Some(true)
     );
 }
+

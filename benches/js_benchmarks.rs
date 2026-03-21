@@ -148,6 +148,34 @@ fn bench_json_parse(c: &mut Criterion) {
     bench_compiled(c, "json parse 1k", 256 * 1024, code);
 }
 
+fn bench_json_parse_only(c: &mut Criterion) {
+    let code = r#"
+        var data = '{"name": "test", "value": 42, "items": [1, 2, 3]}';
+        var count = 0;
+        for (var i = 0; i < 1000; i = i + 1) {
+            JSON.parse(data);
+            count = count + 1;
+        }
+        return count;
+    "#;
+
+    bench_compiled(c, "json parse only 1k", 256 * 1024, code);
+}
+
+fn bench_json_parse_property_read(c: &mut Criterion) {
+    let code = r#"
+        var data = '{"name": "test", "value": 42, "items": [1, 2, 3]}';
+        var sum = 0;
+        for (var i = 0; i < 1000; i = i + 1) {
+            var obj = JSON.parse(data);
+            sum = sum + obj.value;
+        }
+        return sum;
+    "#;
+
+    bench_compiled(c, "json parse property read 1k", 256 * 1024, code);
+}
+
 fn bench_sieve(c: &mut Criterion) {
     let code = r#"
         function sieve(n) {
@@ -430,6 +458,8 @@ criterion_group!(
     bench_string_concat_local_update_only,
     bench_string_concat_ephemeral,
     bench_json_parse,
+    bench_json_parse_only,
+    bench_json_parse_property_read,
     bench_sieve,
     bench_dense_array_bool_read_branch,
     bench_dense_array_false_write_only,

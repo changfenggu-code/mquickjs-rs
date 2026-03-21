@@ -107,6 +107,8 @@ fn dump_function(label: &str, bytecode: &FunctionBytecode, depth: usize) {
 
 fn load_source(name: &str) -> Result<String, String> {
     match name {
+        "fib_iter" => Ok(include_str!("../../benches/scripts/fib_iter.js").to_string()),
+        "switch_case" => Ok(include_str!("../../benches/scripts/switch_case.js").to_string()),
         "sieve" => Ok(include_str!("../../benches/scripts/sieve.js").to_string()),
         "dense_array_bool_read_branch" => {
             Ok(include_str!("../../benches/scripts/dense_array_bool_read_branch.js").to_string())
@@ -132,7 +134,7 @@ fn main() {
     let mut args = env::args().skip(1);
     let Some(name) = args.next() else {
         eprintln!(
-            "usage: cargo run --bin dump_bytecode -- <case-name|path>\nknown cases: sieve, dense_array_bool_read_branch, dense_array_false_write_only, dense_array_bool_read_hot, dense_array_false_write_then_read_hot"
+            "usage: cargo run --bin dump_bytecode -- <case-name|path>\nknown cases: fib_iter, switch_case, sieve, dense_array_bool_read_branch, dense_array_false_write_only, dense_array_bool_read_hot, dense_array_false_write_then_read_hot"
         );
         std::process::exit(2);
     };

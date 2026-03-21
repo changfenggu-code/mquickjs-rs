@@ -35,7 +35,7 @@
 - `src/vm/interpreter.rs` 和 `src/vm/natives.rs` 中的 native / builtin 参数整理
 - `src/vm/interpreter.rs` 和 `src/vm/property.rs` 中的 dense array 访问
 - `src/vm/interpreter.rs` 中的 opcode dispatch 开销
-- `src/gc/collector.rs` 中的 GC 实现质量
+- `src/vm/gc.rs` 中的 GC 实现质量（Plan B mark-sweep）；`src/gc/collector.rs` 为 Plan C 占位符
 - `src/vm/types.rs`、`src/context.rs` 和 `src/runtime/*` 中的运行时分配与容器布局
 
 ## 优先级总结
@@ -541,37 +541,40 @@
 
 ## 9.2 优化 GC 性能
 
-### 9.2.1 替换保守的 `mark_all` 行为
+### 9.2.1 替换保守的 `mark_all` 行为 [已完成]
 
 **优先级**: P1
 
 **热点文件**
 
-- `src/gc/collector.rs`
+- `src/vm/gc.rs`（Plan B 活跃）
 - `src/context.rs`
 
 **原因**
 
-- 当前收集器仍然包含一个保守的临时方法，标记所有对象。
-- 这阻碍了有意义的 GC 性能工作。
+- 保守的 `mark_all` 方法会标记所有对象而非发现真正的根。
 
-**任务**
+**任务（已完成）**
 
-- 用真正的 root 发现替换 `mark_all()`。
+- 用真正的 root 发现替换 `mark_all()`，通过 `gc_mark_roots_iterative()` 实现。
 - 定义并遍历真正的 root：
-  - 栈
+  - 栈 / 活跃调用帧
   - 全局变量
-  - 闭包
-  - 活跃帧
-  - 运行时拥有的容器
-- 验证压缩后指针更新仍然正确。
+  - 通过 var_cells 捕获的闭包
+  - timers.callback
+- GC phase 代际标记 + generation 数组。
+- 堆分配迭代式工作队列（无栈溢出）。
 
 **预期收益**
 
 - 降低 GC 暂停成本
 - 在对象密集型脚本上有更好的扩展性
 
-### 9.2.2 测量 GC 触发行为
+**已完成进度**
+
+- 2026-03-19: Plan B GC 功能完整。所有 GC 托管容器通过 `alloc_slot()` 空闲链表复用。`Context::gc()` 和 native `gc()` 均触发真实收集。自动 GC 在真实 GC 分配点计费。`src/gc/collector.rs` 现为 Plan C stub。
+
+### 9.2.2 测量 GC 触发行为 [已完成]
 
 **优先级**: P1
 
@@ -579,11 +582,12 @@
 
 - GC 成本不仅取决于收集器实现，还取决于触发频率。
 
-**任务**
+**任务（已完成）**
 
-- 测量 benchmark 工作负载期间的 GC 频率。
-- 记录代表性脚本的对象/数组/字符串增长情况。
-- 仅在收集到真实数据后调整触发启发式。
+- 通过 `gc_count` 测量 benchmark 工作负载期间的 GC 频率。
+- `gc_overhead_probe` 二进制文件测量运行时 GC 开销。
+- 2026-03-21: 自动 GC 触发从通用 JS `Call`/`CallMethod`/`CallConstructor` 路径移到真实 GC 托管分配点（closures, var_cells, arrays, objects, iterators, typed_arrays, array_buffers, regex, error_objects）。这从高调用/低分配的 `fib_iter` 工作负载中移除了 GC 记账开销。
+- 通过 `test_gc_auto_triggers_during_js_function_workload` 验证触发行为。
 
 ### 9.2.3 减少引擎拥有容器的扫描成本
 
@@ -853,3 +857,326 @@
   - 这是当前最干净的一轮 deep-property 跟进，因为它直接命中了 `root.a.b.c.d` 这种连续普通对象链读取
   - dense-array 读侧那条微优化线当前已经进入“高回归风险、低信号”的区域，暂时收住
   - 后续如果没有新的 profiling 证据，不再重启 dense-array 读侧的微优化小刀
+
+## 9.1 主线补充说明（续）
+
+- 2026-03-20：又为最热的 4 段静态普通对象属性链（`root.a.b.c.d`）补了一条字节码级的 `GetFieldChain4` 重写。
+- 已完成：
+  - deep property chain 现在可以从 4 次连续 `GetField` 收成 1 条专门的链式属性读取 opcode
+  - 已补 compiler 回归，锁定 `deep_property` 形状会发出 `GetFieldChain4`
+- 当前执行期重跑结果：
+  - `deep_property 200k`：`15.846–16.421 ms`
+  - `method_chain 5k`：`1.082–1.180 ms`
+  - `runtime_string_pressure 4k`：`1.128–1.185 ms`
+- 当前解读：
+  - 这是当前第一条把 `deep_property` 明确拉回 `~16 ms` 量级的跟进改动
+  - 它比继续重启 dense-array 读侧微优化更值得，因为它命中的是一个非常明确、可重复的普通对象链式访问形状
+  - 这也意味着当前主线已经正式切到 `deep_property`，而 dense-array 读侧那条微优化线继续保持冻结，非必要不再重启
+- 2026-03-20：继续把 `deep_property` 周围剩下的热循环尾巴收紧了一层，扩展了现有的本地变量更新 peephole，使它也能直接吃掉最热的未捕获 `PutLoc1` 累加器形状。
+- 当前执行期重跑结果：
+  - `deep_property 200k`：`10.877–11.041 ms`
+  - `method_chain 5k`：`0.758–0.823 ms`
+  - `runtime_string_pressure 4k`：`0.795–0.809 ms`
+- 当前解读：
+  - 当前 `deep_property` 这条线已经不只是“属性读取本身更快”，而是连周围的累加骨架也一起被压了下来
+  - 这说明我们当前选择的主线是对的，而且现在已经进入一个新的性能档位
+  - 全量引擎测试、`clippy -D warnings` 和 `cargo test -p led-runtime` 也都已经重新验证通过
+## 9.1 主线补充说明（三）
+
+- 2026-03-20：继续把 `deep_property` 周围剩下的累加尾巴收紧了一层，扩展了现有的本地变量更新 peephole，使它也能直接吃掉最热的未捕获 `PutLoc1` 形状。
+- 当前执行期重跑结果：
+  - `deep_property 200k`：`10.877–11.041 ms`
+  - `method_chain 5k`：`0.758–0.823 ms`
+  - `runtime_string_pressure 4k`：`0.795–0.809 ms`
+- 当前解读：
+  - 现在的 `deep_property` 已经不只是“属性链本身更快”，而是连周围累加骨架也一起压了下来
+  - dense-array 读侧微优化继续保持冻结，除非后续 profiling 给出全新的热点形状
+  - 字符串那条旧优化线也继续视为冻结区，后续若再动，应作为新的字符串表示项目，而不是重启旧微优化
+## 2026-03-20 UTF-8 补充：json parse 主线
+
+- 这轮重新排序之后，`json parse` 被确认为当前新的正式主线。
+- 新增了两条诊断 benchmark：
+  - `json parse only 1k`
+  - `json parse property read 1k`
+- 当前判断：
+  - `json parse only` 和 `json parse property read` 基本落在同一量级，说明当前主要成本更像是 `JSON.parse(...)` 调用入口与解析/分配本身，而不是后续的 `obj.value` 读取。
+- 当前已保留的稳定优化：
+  - 缓存了 `native_json_parse_idx`
+  - 在 `CallMethod` 中给精确的 `JSON.parse(arg)` builtin 形状加了窄 fast path：
+    - `this === JSON`
+    - native 目标就是缓存的 `JSON.parse`
+    - `argc == 1`
+- 当前执行期重跑结果：
+  - `json parse 1k`：`1.3660–1.4460 ms`
+  - `json parse only 1k`：`1.3296–1.4112 ms`
+  - `json parse property read 1k`：`1.3313–1.4195 ms`
+- dump 热点补充：
+  - `json_parse_only` 的 runtime string 总数从 `2001` 降到 `1001`
+  - `json_parse_property_read` 的 runtime string 总数也从 `2001` 降到 `1001`
+- 补充的回归覆盖：
+  - Unicode JSON 字符串值
+  - 负数 JSON
+  - 小数 JSON
+- 当前解读：
+  - 这是当前 head 上第一条可以稳定留下来的 `json parse` 主线收益；
+  - 它命中的是 `JSON.parse(...)` 入口成本，没有去重启已经冻结的旧调用主线或旧字符串主线；
+  - 但 `json parse` 离更早那组 `~0.73–0.75 ms` 的最好区间还有明显距离，所以它现在仍然应该保持为当前正式主线。
+
+- 2026-03-20：继续把 `json parse` 的分配路径收紧了一层，只做小容量预分配，不改解析语义：
+  - `parse_string()` 改成 `String::with_capacity(16)`
+  - `parse_array()` 改成 `Vec::with_capacity(4)`
+  - `parse_object()` 改成 `Vec::with_capacity(4)`
+  - object key 的临时字符串也改成 `String::with_capacity(16)`
+- 重新跑了定向 JSON.parse 回归：
+  - 数字
+  - 负数
+  - 小数
+  - Unicode 字符串值
+- 当前执行期重跑结果：
+  - `json parse 1k`：`1.2098–1.3497 ms`
+  - `json parse only 1k`：`1.3079–1.7092 ms`
+  - `json parse property read 1k`：`1.1194–1.1928 ms`
+- 当前解读：
+  - 这是一条低风险的分配路径优化，不是再次去抠 parser 控制流细节；
+  - 两条 JSON 诊断基线都明显往下走，说明当前 `json parse` 主线在分配/物化路径上仍然还有真实空间；
+  - `json parse 1k` 这一条在这次重跑里仍然噪声偏大，但中心区间也继续往下移动，所以这刀值得保留。
+
+- 2026-03-21：继续把 `json parse` 主线往前推成了一条更结构化的优化：
+  - 在解释器里加入了一个很窄的“编译期常量 JSON 模板缓存”
+  - cache key 只使用 `(current_string_constants 指针, string index)`
+  - 命中后不再重新解析同一份编译期 JSON 文本，而是从缓存模板重新 materialize 出新的对象/数组/字符串
+- 补充了回归覆盖：
+  - 连续两次 `JSON.parse` 命中缓存后，返回的对象和数组仍然是全新的，不会互相别名污染
+- 新增了一个更轻量的验证工具：
+  - `json_parse_probe`
+  - 这样后续验证这条主线时，不必每次都拉起整套 Criterion
+- 当前 `json_parse_probe` 快照：
+  - `json_parse avg_ms=1.522`
+  - `json_parse_only avg_ms=1.544`
+  - `json_parse_property_read avg_ms=1.468`
+- 当前解读：
+  - 这是 `json parse` 主线第一条更“结构化”的收益，不再只是调用入口或小容量预分配的小修补；
+  - 它真正瞄准了 benchmark 里的重复工作形状：每轮都重新解析同一份编译期 JSON 字符串；
+  - 语义保持正确，而且现在这条主线已经进入“持续拿到稳定收益”的阶段，不再只是诊断阶段。
+- 2026-03-21 更正：
+  - 后续多轮 probe 没有稳定证明“编译期常量 JSON 模板缓存”在当前 head 上是净收益，所以这条实验线后来已经撤回，不应视为已落地成果。
+  - 当前稳定保留的 `json parse` 优化应理解为：
+    - `native_json_parse_idx` 缓存
+    - 窄的 `JSON.parse(arg)` `CallMethod` fast path
+    - built-in / compile-time string 输入时避免最开始那次整串复制
+    - `parse_string / parse_array / parse_object` 的小容量预分配
+    - `json_parse_probe` 工具保留，用于轻量验证这条主线
+  - `json parse` 仍然是当前正式主线，但已撤回的模板缓存实验不应继续当作已完成工作引用。
+- 2026-03-21 阶段收口判断：
+  - 在稳定的调用入口优化和小分配优化之后，后续多轮 `json parse` 试验（parser 微快路径、额外调用形状 opcode、模板缓存变体、字符串叶子缓存变体）已经进入高回退、高噪声区。
+  - 当前工作树每次都已拉回最后一个干净稳定版本，没有把这些失败分支留在代码里。
+  - 因此，当前这一轮 `json parse` 微优化可以视为“阶段性基本完成”：
+    - 不是永远不做
+    - 而是当前不再继续硬抠
+  - 推荐的下一步是：
+    - 暂停继续做 `json parse` 微优化
+    - 先重新校准 benchmark 基线
+    - 再从当前 head 的干净快照重新排序下一条主线
+- 2026-03-21：又在当前稳定工作树上重跑了一轮主 benchmark，结果显示这已经不是“继续挑下一个微热点”的问题，而是当前 head 和之前记录的基线整体漂移明显：
+  - `array push 10k`：`766.00–946.17 µs`
+  - `string concat 1k`：`164.20–205.55 µs`
+  - `json parse 1k`：`1.8986–2.3272 ms`
+  - `sieve 10k`：`2.3860–2.8523 ms`
+  - `method_chain 5k`：`1.4008–1.7708 ms`
+  - `runtime_string_pressure 4k`：`1.4943–1.8702 ms`
+  - `for_of_array 20k`：`2.1365–2.5288 ms`
+  - `deep_property 200k`：`19.605–23.419 ms`
+- 当前解读：
+  - 这说明当前真正应该重新打开的是 benchmark 基线正确性，而不是立刻再选一个新的微优化目标；
+  - 推荐的下一条正式任务应回到：
+    - `9.1.1 Benchmark baseline 重校准与文档同步`
+- 2026-03-21：加入了一个结构性的 `for-in` key 复用缓存，使重复对同一对象做 `for-in` 时不再耗尽 runtime string table。
+- 补充了回归覆盖，确认：
+  - 之前那个会耗尽 runtime string table 的形状现在能够正常跑完；
+  - 重复多轮 `for-in` 同一对象仍然得到正确结果。
+- 当前解读：
+  - 这条改动值得保留，但它当前更应该被视为“正确性 / 结构鲁棒性修复”，而不是已经关单的性能收益；
+  - 因为当前信号是混合的：
+    - 本地进程级 Rust vs C 对比里，`for_in_object` 现在能顺利跑完，而且最新一轮仍然是 Rust 略快（`0.897x`）；
+    - 但 Criterion 里的 `for_in_object 20x2000` 目前仍然明显慢于更早记录的那组 `3.74–3.80 ms` 历史快照，最新一轮在 `10.898–12.624 ms`。
+  - 所以这条线当前应记为：
+    - 正确性修复已落地
+    - 性能解读仍待 baseline cleanup 完成后再收口
+- 2026-03-21 阶段收口补充：
+  - `switch_case` 这条次级结构线，在 `SwitchCaseI8` 落地之后，可以视为当前阶段完成；
+  - `for_in_object` 这条次级结构线，可以视为当前阶段完成于“结构/正确性修复已落地”这个层面，性能口径继续挂到 baseline cleanup 里统一解释；
+  - `try_catch` 最近一轮窄实验没有拿到干净净收益，所以当前不再继续重开它。
+## 2026-03-21 UTF-8 补充：实用收口规则
+
+- 这个仓库里的优化目标不是“无限逼近极限”。
+- 一条热点主线在当前阶段可以视为完成，当它满足：
+  - 已经拿到一到两条真实、可验证的稳定收益；
+  - 后续尝试主要落入高噪声、低信号区；
+  - 连续 follow-up patch 已经很难拿到干净的净收益；
+  - 继续做下去的复杂度和回归风险，已经超过实际收益。
+- 当出现这种情况，正确动作是：
+  - 冻结该区域；
+  - 把稳定收益记进文档；
+  - 然后切去下一条 ROI 更高的主线，
+  - 而不是继续为了最后几个百分点反复重启同一块区域。
+## 2026-03-21 UTF-8 补充：switch_case 结构收益
+
+- 为整数 case 的 `switch` 新增了 `SwitchCaseI8`。
+- 它把最热的
+  `Dup + PushConst + StrictEq + IfTrue`
+  case-chain 形状收成一条“比较常量并跳转、但保留 switch 值”的 opcode。
+- 已重新跑过 switch 语义回归，覆盖：
+  - 基本整数 switch
+  - fallthrough
+  - 字符串 case
+  - loop 内 break
+- 当前执行期重跑结果：
+  - `switch 1k`：`223.70–276.85 µs`
+- 本地进程级 Rust vs C 对比：
+  - `switch_case`: `Rust=0.0723s`, `C=0.0434s`, `1.666x`
+  - 当前仍然是 C 更快
+- 当前解读：
+  - 这是一条真实的结构收益，说明当前 head 上 `switch_case` 的字节码形状本身已经明显更短、更便宜；
+  - 这刀值得保留；
+  - 但它仍然应该放在“baseline 仍在重校准”的上下文里解释，而不是被当作整个控制流基线已经恢复健康的证明。
+
+## 2026-03-21 UTF-8 补充：下一条正式主线
+
+- 在当前这轮 cleanup 之后，`json parse`、`switch_case`、`for_in_object` 都应先冻结：
+  - `json parse`：当前阶段已拿到稳定收益，后续试验开始进入高噪声区；
+  - `switch_case`：`SwitchCaseI8` 已经给出真实结构收益；
+  - `for_in_object`：结构/正确性修复已落地，性能解释继续挂到 baseline cleanup。
+- 当前不建议因为 `sieve` 又变慢，就直接重启 dense-array 读侧微优化。
+  - 那条线上一轮已经明确进入高回退、高噪声区；
+  - 非出现全新的热点形状，否则不该马上重开。
+- 按当前 broad rerun 和最新 Rust vs C 对比，更合理的下一条正式主线是：
+  - `loop` / `sieve` 共享的比较与循环骨架
+  - 也就是：
+    - `GetLoc*`
+    - `Lt` / `Lte`
+    - `IfFalse`
+    - `Goto`
+- 原因是：
+  - `loop` 和 `sieve` 在最新本地 Rust vs C 对比里仍然都落后于 C；
+  - 它们是 headline benchmark，不是只影响一条次级诊断脚本的小点；
+  - 而且这条线可以继续做，但不需要重新打开已经冻结的 dense-array 读侧微优化。
+- 因此，在 `9.1.1` baseline cleanup 基本收住之后，推荐的下一条正式主线是：
+  - `loop/sieve` 的 comparison-and-branch skeleton tightening
+
+## 2026-03-21 UTF-8 补充：fib / switch_case 定向复查
+
+- 在当前稳定工作树上又补跑了一轮更窄的定向 benchmark：
+  - `fib_iter 1k`：`5.3292–6.2708 ms`
+  - `switch 1k`：`281.10–345.33 µs`
+- 当前解读：
+  - `switch_case` 这条线仍然应视为“结构收益已落地”：
+    - `SwitchCaseI8` 仍然在发码；
+    - `switch` 的字节码形状本身没有走丢；
+    - 但它现在已经不是最急的回归项。
+  - 真正更严重的当前信号是 `fib_iter`：
+    - 它相比更早的 `2.330–2.379 ms` 历史区间偏离得明显更多；
+    - 所以当前优先级应该把 `fib` / 调用-递归开销重新抬到 `switch_case` 之前。
+- 因此，当前更实用的优先级应理解为：
+  - 先看 `fib` / call-recursion overhead
+  - 再看 `loop/sieve` 的 comparison-and-branch skeleton
+  - `switch_case` 继续保持冻结，除非出现新的 switch 专属热点形状
+
+## 2026-03-21 UTF-8 补充：fib_iter / switch_case 诊断工具接线
+
+- 现在已经把 `fib_iter` 和 `switch_case` 都接进了本地诊断工具链：
+  - `benches/scripts/fib_iter.js`
+  - `src/bin/dump_bytecode.rs`
+  - `src/bin/profile_hotspots.rs`
+- 当前稳定树上的 dump-mode 热点结论是：
+  - `fib_iter`
+    - 顶层外循环核心仍然是 `Lt + IfFalse + Call + Add + IncLoc`
+    - 内层迭代 `fib` 本体当前主要由局部槽位流量和小循环骨架主导，尤其是：
+      - `GetLoc3`
+      - `Drop`
+      - `Dup`
+      - `GetLoc0`
+      - `Lte`
+      - `GetLoc2`
+      - `PutLoc2`
+      - `Goto`
+      - `Add`
+      - `GetLoc4`
+      - `PutLoc3`
+      - `GetLoc8`
+      - `PutLoc8`
+      - `IncLoc4Drop`
+  - `switch_case`
+    - `SwitchCaseI8` 明确还在工作（最新 dump 快照里执行了 `108000` 次）
+    - 这说明 `switch_case` 当前剩余成本更像是 switch 外围的 loop/add/update 骨架，而不是旧的整数 case 比较链本身
+- 当前解读：
+  - 这进一步强化了前面的优先级调整：
+    - `fib_iter` 才是现在更明确的下一条结构主线；
+    - `switch_case` 继续冻结更合理，因为它的专门 opcode 目前表现符合预期。
+
+## 2026-03-21 UTF-8 补充：fib_iter 第一条稳定收益
+
+- 这轮 `fib_iter` 的第一条稳定收益已经落地：
+  - 自动 GC trigger 记账不再挂在每一次通用 JS `Call` / `CallMethod` / `CallConstructor` 上；
+  - 现在改成只在真正的 GC-managed allocation path 上记账，也就是：
+    - closure
+    - var cell
+    - array
+    - object
+    - iterator
+    - error object
+    - regex object
+    - typed array
+    - array buffer
+- 这样改的原因很直接：
+  - 之前那种“每次调用都记一次”的模型，会让 `fib_iter` 这种高调用、低分配 workload 白白支付 GC bookkeeping 成本；
+  - 这非常像是 `fib_iter` 前面大回退的根因之一。
+- 当前验证结果：
+  - 定向 Criterion：
+    - `fib_iter 1k`：`3.5469–4.1842 ms`
+  - 后续复跑：
+    - `fib_iter 1k`：`3.5909–4.2369 ms`
+  - GC 自动触发回归仍然通过：
+    - `test_gc_auto_triggers_during_js_function_workload`
+  - 全量 `cargo test -p mquickjs-rs` 与 `clippy -D warnings` 都通过。
+- 当前解读：
+  - 这是当前重新排序之后，`fib_iter` 这条线的第一条稳定收益；
+  - 它不只是 benchmark 更快了，也让当前 GC trigger 模型更符合真实 allocation pressure。
+
+## 2026-03-21 UTF-8 补充：fib_iter 阶段收口
+
+- 在只保留第一条稳定收益的当前工作树上，又补跑了一轮定向 benchmark：
+  - `fib_iter 1k`：`3.0507–3.6993 ms`
+  - `loop 10k`：`690.21–846.31 µs`
+  - `sieve 10k`：`2.9538–3.5064 ms`
+- 当前解读：
+  - 之前保留下来的 GC trigger 记账路径调整，仍然把 `fib_iter` 稳定维持在比 `5.3292–6.2708 ms` 回退档明显更健康的区间；
+  - 后续那条“本地拷贝尾巴收紧”实验因为会拖慢 `loop`，已经完整撤回；
+  - 这说明当时的 `fib_iter` 专项微调已经进入我们自己定义的“实用收口区”：
+    - 已经拿到一条真实稳定收益；
+    - 再往下做开始进入高噪声、高误伤区。
+- 因此，按当前仓库的 stop rule，这一阶段的 `fib_iter` 可以视为阶段性基本完成；
+  - 这并不意味着后续共享结构主线不会继续顺带改善它，只是表示不再单独重开 `fib_iter` 微调线。
+- 推荐的下一条正式主线重新回到：
+  - `loop/sieve` 的 comparison-and-branch skeleton tightening
+- 2026-03-21：回到 `loop/sieve` 主线之后，已经拿到第一条明确的共享结构收益：
+  - 非字符串 `Add / Mul` 路径现在会直接消费语句级本地存储：
+    - `PutLoc0..4`
+    - `PutLoc8 <idx>`
+  - 也就是像：
+    - `c = a + b;`
+    - `j = i * i;`
+    这种语句，不再先把结果压栈再立刻被 `PutLoc*` 弹掉。
+- 它正好命中：
+  - `fib_iter` 内层最热的那条物化形状：`GetLoc2; GetLoc3; Add; PutLoc8 5`
+  - `sieve` 里的热形状：`GetLoc3; GetLoc3; Mul; PutLoc4`
+- 补了回归覆盖：
+  - `test_statement_local_add_store_updates_captured_target`
+  - `test_statement_local_mul_store_updates_captured_target`
+- 当前验证结果：
+  - `fib_iter 1k`：`2.2286–2.6849 ms`
+  - `loop 10k`：`455.86–559.99 µs`
+  - `sieve 10k`：`1.8323–2.1708 ms`
+  - 全量 `cargo test -p mquickjs-rs` 与 `clippy -D warnings` 都通过。
+- 当前解读：
+  - 这是重新回到 `loop/sieve` 主线之后的第一条共享稳定收益；
+  - 它也顺带把 `fib_iter` 又拉下了一个台阶，但这次应记成“共享本地算术存储优化”，而不是重新打开 `fib_iter` 专项微调。

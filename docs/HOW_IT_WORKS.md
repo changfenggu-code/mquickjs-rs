@@ -453,75 +453,62 @@ struct JSObject {
 
 ## 垃圾回收
 
-JavaScript 自动管理内存。MQuickJS 使用**标记-压缩**收集。
+JavaScript 自动管理内存。MQuickJS-RS 使用**代际式标记-清除**（generation-based mark-sweep）收集器。
 
-### 为什么使用标记-压缩？
+### 为什么使用代际式标记-清除？
 
 | 方法 | 优点 | 缺点 |
 |------|------|------|
 | 引用计数 | 立即清理 | 循环泄漏，每次写入有开销 |
-| 标记-清除 | 处理循环 | 碎片化 |
-| **标记-压缩** | 无碎片化，处理循环 | 暂停时间 |
+| 标记-清除 | 处理循环 | 碎片化（空闲槽位不连续） |
+| **代际式标记-清除** | 处理循环，槽位可复用 | 暂停时间，但有自适应触发 |
 
-### 工作原理
+### 当前实现：Plan B（`src/vm/gc.rs`）
 
-```
-1. 标记阶段：找到所有可达对象
-   - 从"根"开始（栈、全局变量）
-   - 递归标记所有可达内容
-
-2. 压缩阶段：将存活对象移到一起
-   - 滑动对象以消除间隙
-   - 更新所有指针
-```
-
-### 示例
+引擎使用 generation-based mark-sweep，所有堆对象存储在 `Vec` 中，通过索引引用而非指针：
 
 ```
-GC 前：
-[A][垃圾][B][垃圾][C][垃圾]
-
-标记后：A, B, C 存活
-
-压缩后：
-[A][B][C][空闲空间...]
+设计核心：
+- gen[i] == gc_phase       → 槽位 i 是活跃的
+- gen[i] == u32::MAX       → 槽位 i 是空闲的
+- gc_phase 每次 GC 时递增
 ```
 
-### 算法（`src/gc/collector.rs`）
+**工作原理：**
 
-```rust
-fn collect(heap: &mut Heap) {
-    // 标记阶段
-    for root in get_roots() {
-        mark(root);
-    }
-
-    // 压缩阶段
-    let mut write_ptr = heap.start;
-    for obj in heap.objects() {
-        if obj.is_marked() {
-            // 移动对象到 write_ptr
-            if write_ptr != obj.address() {
-                copy(obj, write_ptr);
-                update_references(obj.address(), write_ptr);
-            }
-            write_ptr += obj.size();
-            obj.unmark();
-        }
-    }
-    heap.free_ptr = write_ptr;
-}
-
-fn mark(obj: &Object) {
-    if obj.is_marked() { return; }  // 已访问
-    obj.set_marked();
-
-    // 递归标记子对象
-    for child in obj.references() {
-        mark(child);
-    }
-}
 ```
+1. 标记阶段：从根集合（栈、全局变量、闭包捕获的 var_cells 等）出发
+   - 使用堆分配的工作队列（避免递归栈溢出）
+   - 对每个可达的槽位设置 gen[idx] = gc_phase（去重检查避免重复入队）
+
+2. 清除阶段：遍历所有 GC 管理的容器
+   - gen[idx] != gc_phase → 回收槽位，加入空闲链表
+   - gen[idx] == gc_phase → 保留，gen[idx] 重置为 0（代际下移）
+
+3. 分配时：优先从空闲链表复用槽位（alloc_slot）
+```
+
+**GC 管理的容器：**
+
+- `closures` / `var_cells` — 闭包和变量单元
+- `arrays` / `objects` — JS 数组和对象
+- `for_in_iterators` / `for_of_iterators` — 迭代器
+- `error_objects` / `regex_objects` — 错误和正则
+- `typed_arrays` / `array_buffers` — 类型化数组
+- `timers` — 定时器
+
+**自适应触发：**
+
+- `maybe_gc()` 在每次 GC 托管分配时调用
+- 当分配计数超过触发阈值时执行 GC
+- 阈值根据 GC 后存活量动态调整
+
+### Plan C 展望（标记压缩）
+
+`src/gc/` 目录保留了 Plan C（完整标记-压缩 GC）的预备代码。
+Plan C 的目标是淘汰 Vec-index 存储，改为真正的指针式分配，从而支持压缩和消除碎片。
+但这是一个大规模重构（约 1850 行受影响），当前阶段仍以 Plan B 为主。
+详见 `docs/GC_PROGRESS.md`。
 
 ---
 

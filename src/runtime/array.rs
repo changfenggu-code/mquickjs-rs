@@ -47,8 +47,9 @@ impl JSArray {
     }
 
     /// Create an array from a vector of values
-    pub fn from_values(values: Vec<Value>) -> Self {
+    pub fn from_values(mut values: Vec<Value>) -> Self {
         let len = values.len().min(MAX_ARRAY_LENGTH as usize) as u32;
+        values.truncate(len as usize);
         JSArray {
             elements: values,
             len,
@@ -205,6 +206,12 @@ impl JSArray {
 
         if length > self.len {
             self.elements.resize(length as usize, Value::undefined());
+        } else if length < self.len {
+            for idx in length as usize..self.len as usize {
+                if idx < self.elements.len() {
+                    self.elements[idx] = Value::undefined();
+                }
+            }
         }
         // Note: we don't shrink the vector, just update the logical length
 

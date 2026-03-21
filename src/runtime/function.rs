@@ -176,6 +176,10 @@ impl FunctionBytecode {
 
     /// Add a constant to the constant pool
     pub fn add_constant(&mut self, value: Value) -> u16 {
+        assert!(
+            self.constants.len() < u16::MAX as usize,
+            "constant pool overflow"
+        );
         let idx = self.constants.len() as u16;
         self.constants.push(value);
         idx
@@ -188,6 +192,10 @@ impl FunctionBytecode {
 
     /// Add a string to the string constant pool
     pub fn add_string(&mut self, s: String) -> u16 {
+        assert!(
+            self.string_constants.len() < u16::MAX as usize,
+            "string constant pool overflow"
+        );
         let idx = self.string_constants.len() as u16;
         self.string_constants.push(s);
         idx

@@ -347,27 +347,12 @@ impl Context {
 
     /// Store or replace a user-defined global variable.
     pub fn set_global(&mut self, name: &str, value: Value) {
-        if let Some((_, slot)) = self
-            .interpreter
-            .global_vars
-            .iter_mut()
-            .rev()
-            .find(|(n, _)| n == name)
-        {
-            *slot = value;
-        } else {
-            self.interpreter.global_vars.push((name.to_string(), value));
-        }
+        self.interpreter.global_vars.insert(name.to_string(), value);
     }
 
     /// Get a user-defined global variable if present.
     pub fn get_global(&self, name: &str) -> Option<Value> {
-        self.interpreter
-            .global_vars
-            .iter()
-            .rev()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| *v)
+        self.interpreter.global_vars.get(name).copied()
     }
 
     /// Reset user-defined state (global vars, closures, bytecodes) while keeping
@@ -379,6 +364,7 @@ impl Context {
         self.interpreter.arrays.clear();
         self.interpreter.objects.clear();
         self.interpreter.runtime_strings.clear();
+        self.interpreter.for_in_key_cache.clear();
         self.interpreter.error_objects.clear();
         self.interpreter.regex_objects.clear();
         self.interpreter.typed_arrays.clear();

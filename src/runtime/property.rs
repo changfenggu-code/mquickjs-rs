@@ -135,7 +135,7 @@ impl PropertyTable {
         }
 
         // Check if we need to resize
-        let load = (self.properties.len() + 1) as f64 / (self.hash_mask + 1) as f64;
+        let load = (self.prop_count as usize + 1) as f64 / (self.hash_mask + 1) as f64;
         if load > Self::MAX_LOAD_FACTOR {
             self.resize();
         }
@@ -249,17 +249,37 @@ impl PropertyTable {
 
     /// Define a property with getter/setter
     pub fn define_accessor(&mut self, key: Value, getter: Value, setter: Value) -> bool {
-        // For getter/setter, value is an array [getter, setter]
-        // This is a simplified version - full implementation would allocate array
-        let _ = (getter, setter);
         if let Some(idx) = self.find(key) {
+            self.properties[idx].value = Value::undefined();
+            self.properties[idx].getter = getter;
+            self.properties[idx].setter = setter;
             self.properties[idx].set_prop_type(PropertyType::GetSet);
             return false;
         }
 
-        let mut prop = Property::new(key, Value::null());
-        prop.set_prop_type(PropertyType::GetSet);
-        self.properties.push(prop);
+        let load = (self.prop_count as usize + 1) as f64 / (self.hash_mask + 1) as f64;
+        if load > Self::MAX_LOAD_FACTOR {
+            self.resize();
+        }
+
+        let hash = Self::hash_key(key);
+        let bucket = (hash & self.hash_mask) as usize;
+
+        let mut prop = Property::accessor(key, getter, setter);
+        prop.set_hash_next(self.hash_table[bucket]);
+
+        let prop_idx = if self.first_free != 0 {
+            let idx = (self.first_free - 1) as usize;
+            self.first_free = self.properties[idx].hash_next();
+            self.properties[idx] = prop;
+            idx
+        } else {
+            let idx = self.properties.len();
+            self.properties.push(prop);
+            idx
+        };
+
+        self.hash_table[bucket] = (prop_idx + 1) as u32;
         self.prop_count += 1;
         true
     }

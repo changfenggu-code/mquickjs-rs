@@ -188,11 +188,11 @@ provide a foundation, but the majority of work is outside `src/gc/`:
    - `allocator.rs` layout is ready; needs `alloc()` / `free()` methods that integrate with Plan B's existing `alloc_slot()` pattern
    - `Heap` used by `Context` for stats; plan to reuse for Plan C's object allocation
 
-#### Phase 6 tasks
+#### Phase 6 tasks (deferred — Plan B is the active GC)
 
 - [ ] Update `src/gc/mod.rs` module doc to reflect Plan B active + Plan C reference status
 - [ ] Mark `Heap::collect()` and `collector::collect()` with `#[deprecated]` or `#[cfg(plan_c)]` so they are clearly inactive
-- [ ] Document the `Value` re-encoding scope before attempting Plan C (see `docs/PLAN_C_VALUE_REENCODING.md`)
+- [ ] Document the `Value` re-encoding scope before attempting Plan C (`docs/PLAN_C_VALUE_REENCODING.md` to be created)
 - [ ] Consider moving `src/gc/allocator.rs` to `src/memory/` if it becomes purely a stats tool, or keep under `gc/` if it is the Plan C arena foundation
 
   The `Heap` is still used by `Context` for memory statistics (`heap.heap_used()`, `heap.total_size()`, `heap.free_space()`, `heap.stack_used()`), but it is separate from the Plan B Vec-index GC. If the `Heap` allocator is still useful for future Plan C experiments, keep it. If not, move it under a different module.
@@ -210,3 +210,39 @@ The GC is intentionally single-threaded. This matches the current JS engine exec
 ### no_std Compatibility
 
 The GC implementation uses `alloc` only and remains compatible with the engine's `no_std` default.
+
+## 2026-03-21 Trigger Follow-up
+
+- Automatic GC trigger accounting no longer runs on every generic JS `Call` / `CallMethod` / `CallConstructor`.
+- Instead, `maybe_gc()` is now charged at real GC-managed allocation sites:
+  - closures
+  - var cells
+  - arrays
+  - objects
+  - iterators
+  - error objects
+  - regex objects
+  - typed arrays
+  - array buffers
+- Why:
+  - the old call-site model was materially distorting high-call / low-allocation workloads such as `fib_iter`, where GC bookkeeping was being paid even without corresponding GC-managed allocation pressure.
+- Validation:
+  - `test_gc_auto_triggers_during_js_function_workload` still passes
+  - `fib_iter 1k` improved from the regressed `5.3292–6.2708 ms` range to `3.5469–4.1842 ms`, with a follow-up rerun at `3.5909–4.2369 ms`
+- Current interpretation:
+  - trigger behavior is still active and testable;
+  - but it is now tied more honestly to actual GC-managed allocation pressure instead of generic JS call frequency.
+
+## 2026-03-21 For-In Key Follow-up
+
+- The `for-in` key path is now safer than before:
+  - repeated object keys / array index keys are reused through a small cache;
+  - debug-only overflow panic behavior was replaced by the controlled engine error
+    `runtime string table exhausted`.
+- But this is still not a complete fix:
+  - `runtime_strings` are not yet GC-managed;
+  - `for_in_key_cache` is append-only;
+  - workloads with many unique keys can still exhaust the runtime string table.
+- Current status:
+  - **mitigated and made safe**
+  - **not yet fully eliminated**

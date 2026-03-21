@@ -398,11 +398,15 @@ pub enum OpCode {
     GetGlobalOrUndefined,
     /// Set global variable by name (16-bit constant index), pops value
     SetGlobal,
+    /// Get four chained plain properties: obj -> val
+    GetFieldChain4,
+    /// Compare top value against an inline i8 case and branch if strictly equal
+    SwitchCaseI8,
 }
 
 impl OpCode {
     /// Total number of opcodes
-    pub const COUNT: usize = OpCode::SetGlobal as usize + 1;
+    pub const COUNT: usize = OpCode::SwitchCaseI8 as usize + 1;
 }
 
 /// Opcode metadata
@@ -735,6 +739,10 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(3, 0, 1, OpFormat::Const16),
     // SetGlobal - 3 bytes (opcode + 16-bit constant index), pops 1, pushes 0
     OpCodeInfo::new(3, 1, 0, OpFormat::Const16),
+    // GetFieldChain4
+    OpCodeInfo::new(9, 1, 1, OpFormat::None),
+    // SwitchCaseI8
+    OpCodeInfo::new(6, 0, 0, OpFormat::None),
 ];
 
 // Tests moved to tests/stack_opcode_tests.rs.

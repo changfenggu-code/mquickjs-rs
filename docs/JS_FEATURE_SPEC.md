@@ -352,6 +352,20 @@
 - `Object.defineProperty` 不保证完整标准 descriptor 行为
 - 不保证完整标准原型链与反射语义
 
+当前 accessor 支持范围：
+
+- `Object.defineProperty(obj, key, { value })` 可用
+- `Object.defineProperty(obj, key, { get, set })` 提供最小可用 accessor 语义：
+  - 读取 `obj[key]` 会调用 getter
+  - 写入 `obj[key] = v` 会调用 setter
+  - `hasOwnProperty` / `delete` 能识别这类 accessor
+- 当前 **不**承诺完整标准 descriptor flags：
+  - `enumerable`
+  - `configurable`
+  - `writable`
+- 当前 accessor 默认按非枚举属性理解；`Object.keys` / `Object.values` / `Object.entries` /
+  `for-in` 不保证完整标准 accessor 枚举行为
+
 ## 5.3 Array
 
 已实现：
@@ -619,4 +633,3 @@
 - `led-runtime/docs/LED_PROFILE.md`
 - `led-runtime/docs/PRODUCT_ROADMAP.md`
 - 本文件 `docs/JS_FEATURE_SPEC.md`
-

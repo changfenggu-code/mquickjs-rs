@@ -36,7 +36,7 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - native / builtin call argument marshalling in `src/vm/interpreter.rs` and `src/vm/natives.rs`
 - dense array access in `src/vm/interpreter.rs` and `src/vm/property.rs`
 - opcode dispatch overhead in `src/vm/interpreter.rs`
-- GC implementation quality in `src/gc/collector.rs`
+- GC implementation quality in `src/vm/gc.rs` (Plan B mark-sweep); `src/gc/collector.rs` is a Plan C stub
 - engine-side runtime allocations and container layout in `src/vm/types.rs`, `src/context.rs`, and `src/runtime/*`
 
 ## Priority Summary
@@ -261,6 +261,48 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
   - `method_chain 5k`: `1.106–1.214 ms`
   - `runtime_string_pressure 4k`: `1.118–1.205 ms`
 - Current interpretation: this is the cleanest current follow-up on the original deep-property win because it directly targets repeated plain-object chain access (`root.a.b.c.d`) while also helping nearby object-heavy workloads instead of only improving a synthetic microbenchmark.
+- 2026-03-20: added a bytecode-level `GetFieldChain4` rewrite for the hottest static four-segment plain-object chain shape, so `root.a.b.c.d` now collapses from four consecutive `GetField` dispatches into one chained property-read opcode.
+- Added compiler coverage confirming the deep property chain now emits `GetFieldChain4`, and re-ran targeted deep-property regression coverage successfully.
+- Re-ran full engine tests, `clippy -D warnings`, and `cargo test -p led-runtime`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `deep_property 200k`: `15.846–16.421 ms`
+  - `method_chain 5k`: `1.082–1.180 ms`
+  - `runtime_string_pressure 4k`: `1.128–1.185 ms`
+- Current interpretation: this is the first deep-property follow-up that clearly restores the earlier `~16 ms` class result while also keeping nearby hotspot workloads healthy. It confirms that the current mainline should be treated as a plain-object property-chain problem, not as a return to the now-frozen dense-array read-side micro-pass.
+- 2026-03-20: tightened the remaining deep-property accumulator tail by extending the existing local-update peephole consumption to fast-store the hottest uncaptured `PutLoc1` shape that follows numeric `Add`.
+- Re-ran full engine tests, `clippy -D warnings`, and `cargo test -p led-runtime`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `deep_property 200k`: `10.877–11.041 ms`
+  - `method_chain 5k`: `0.758–0.823 ms`
+  - `runtime_string_pressure 4k`: `0.795–0.809 ms`
+- Current interpretation: the current deep-property line is no longer just “property access got faster”; the surrounding accumulation skeleton is now tight enough that `deep_property` has moved into a distinctly lower performance tier while nearby hotspots also remain healthy.
+
+**Frozen zones**
+
+- Dense-array read-side micro-optimization is now frozen unless future profiling surfaces a materially new hotspot shape.
+- The previous runtime-string optimization round is also frozen; future work there should be treated as a broader string-representation project rather than more incremental micro-tuning.
+- 2026-03-20: tightened the remaining `deep_property` loop tail by extending the existing local-update peephole consumption to also fast-store the hottest uncaptured `PutLoc1` accumulator shape after numeric `Add`.
+- Re-ran full engine tests, `clippy -D warnings`, and `cargo test -p led-runtime`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `deep_property 200k`: `10.877–11.041 ms`
+  - `method_chain 5k`: `0.758–0.823 ms`
+  - `runtime_string_pressure 4k`: `0.795–0.809 ms`
+- Current interpretation: the current deep-property line is no longer just “property access got faster”; the surrounding accumulator skeleton is now tight enough that `deep_property` has moved into a new class of performance, while adjacent hotspots also remain healthy.
+- 2026-03-20: added a bytecode-level `GetFieldChain4` rewrite for the hottest static four-segment plain-object chain shape, so `root.a.b.c.d` now collapses from four consecutive `GetField` dispatches into one chained property-read opcode.
+- Added compiler coverage confirming the deep property chain now emits `GetFieldChain4`, and re-ran targeted deep-property regression coverage successfully.
+- Re-ran full engine tests and `clippy -D warnings`; all passed.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `deep_property 200k`: `15.846–16.421 ms`
+  - `method_chain 5k`: `1.082–1.180 ms`
+  - `runtime_string_pressure 4k`: `1.128–1.185 ms`
+- Current interpretation: this is the first deep-property follow-up that cleanly regains the earlier `~16 ms` class result while staying compatible with the rest of the current benchmark set. It also confirms that the current hotspot should be treated as a plain-object property-chain problem, not as another dense-array read-side micro-pass.
+- 2026-03-20: added a bytecode-level `GetFieldChain4` rewrite for the hottest static four-segment plain-object chain shape, so `root.a.b.c.d` now collapses from four consecutive `GetField` dispatches into one chained property-read opcode.
+- Added compiler coverage confirming the deep property chain now emits `GetFieldChain4`, and re-ran targeted deep-property regression coverage successfully.
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `deep_property 200k`: `15.846–16.421 ms`
+  - `method_chain 5k`: `1.082–1.180 ms`
+  - `runtime_string_pressure 4k`: `1.128–1.185 ms`
+- Current interpretation: this is the first deep-property follow-up that regains the earlier `~16 ms` class result without perturbing the rest of the current benchmark set in a major way. It is also a better fit for the current optimization style because it targets one clearly repeatable object-chain shape instead of reopening the broader dense-array read-side micro-pass.
 - 2026-03-17: added a `PutArrayEl + Drop` peephole fast path so statement-position array assignments no longer materialize an unused result value on the stack.
 - Re-ran array assignment statement and assignment-expression regression coverage successfully.
 - Selected execution-focused Criterion reruns on the current worktree:
@@ -553,40 +595,57 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 - 2026-03-16: improved `StrictEq` / `StrictNeq` hot opcode handling by adding direct fast paths for same-value, integer, and boolean comparisons before falling back to slower generic handling.
 - Existing switch semantics regression tests were re-run successfully.
 - Benchmark result: `switch 1k` improved from roughly `145–149 μs` class performance to `132–136 μs` in Criterion.
+- 2026-03-21: added `SwitchCaseI8` for integer switch cases, collapsing the hottest `Dup + PushConst + StrictEq + IfTrue` case-chain shape into a single compare-and-branch opcode that preserves the switch value on stack.
+- Re-ran switch semantics coverage for:
+  - basic integer switch
+  - fallthrough
+  - string cases
+  - break inside loop
+- Selected execution-focused Criterion rerun on the current worktree:
+  - `switch 1k`: `223.70–276.85 µs`
+- Local process-level Rust-vs-C rerun:
+  - `switch_case`: `Rust=0.0723s`, `C=0.0434s`, `1.666x` (C still faster)
+- Current interpretation:
+  - this is a real structural win on the current head for the `switch_case` bytecode shape itself;
+  - it is worth keeping because the bytecode got materially shorter and the dedicated benchmark improved strongly;
+  - but this line should still be interpreted inside the broader reopened-baseline context, not as proof that the surrounding overall control-flow baseline is already fully healthy.
 
 ## 9.2 Optimize GC Performance
 
-### 9.2.1 Replace conservative `mark_all` behavior
+### 9.2.1 Replace conservative `mark_all` behavior [Completed]
 
 **Priority**: P1
 
 **Hot files**
 
-- `src/gc/collector.rs`
+- `src/vm/gc.rs` (Plan B active)
 - `src/context.rs`
 
 **Why**
 
-- The current collector still contains a conservative temporary approach that marks all objects.
-- This blocks meaningful GC performance work.
+- The conservative `mark_all` approach had been marking all objects instead of discovering true roots.
 
-**Tasks**
+**Tasks (completed)**
 
-- Replace `mark_all()` with real root discovery.
-- Define and traverse true roots:
-  - stack
-  - globals
-  - closures
-  - active frames
-  - runtime-owned containers
-- Verify pointer updates remain correct after compaction.
+- Replaced `mark_all()` with real root discovery via `gc_mark_roots_iterative()`.
+- Defined and traverse true roots:
+  - stack / active call frames
+  - global variables
+  - closures captured through var_cells
+  - timers.callback
+- GC phase-based marking with generation arrays.
+- Heap-allocated iterative worklist (no call-stack overflow).
 
 **Expected gain**
 
 - Lower GC pause cost
 - Better scaling on object-heavy scripts
 
-### 9.2.2 Measure GC trigger behavior
+**Completed so far**
+
+- 2026-03-19: Plan B GC is functionally complete. All GC-managed containers route through `alloc_slot()` free-list reuse. `Context::gc()` and native `gc()` both trigger real collection. Automatic GC is charged at real GC allocation sites. `src/gc/collector.rs` is now a Plan C stub.
+
+### 9.2.2 Measure GC trigger behavior [Completed]
 
 **Priority**: P1
 
@@ -594,11 +653,12 @@ Based on the current code and benchmark shape, the most likely engine hotspots a
 
 - GC cost depends not only on collector implementation, but also on trigger frequency.
 
-**Tasks**
+**Tasks (completed)**
 
-- Measure GC frequency during benchmark workloads.
-- Record object / array / string growth for representative scripts.
-- Adjust trigger heuristics only after real data is collected.
+- GC frequency measured via `gc_count` during benchmark workloads.
+- `gc_overhead_probe` binary measures runtime GC overhead.
+- 2026-03-21: automatic GC trigger was moved from generic JS `Call`/`CallMethod`/`CallConstructor` paths to real GC-managed allocation sites (closures, var_cells, arrays, objects, iterators, typed_arrays, array_buffers, regex, error_objects). This removed GC bookkeeping from high-call/low-allocation workloads like `fib_iter`.
+- Trigger behavior validated against `test_gc_auto_triggers_during_js_function_workload`.
 
 ### 9.2.3 Reduce scanning cost of engine-owned containers
 
@@ -879,3 +939,242 @@ This optimization task list is considered substantially complete when:
 - GC no longer relies on conservative `mark_all`
 - memory reduction work is based on measured dominant categories, not guesswork
 - documentation reflects valid benchmark conclusions only
+
+## Practical Stop Rule
+
+- Optimization work in this repository is intentionally not “optimize forever”.
+- A hotspot line should be treated as complete for the current phase when:
+  - it already has at least one or two real, validated wins;
+  - further attempts mainly land in a high-noise / low-signal zone;
+  - repeated follow-up patches no longer produce clean net wins;
+  - the cost/risk of continuing exceeds the expected practical value.
+- When that happens, the correct action is:
+  - freeze that area,
+  - document the stable wins,
+  - and move on to the next higher-ROI task instead of chasing the last few percent.
+
+## 9.1 Mainline Reprioritization
+
+- 2026-03-20: reran the current hotspot set after freezing the dense-array read-side micro-pass, the previous runtime-string round, and the current deep-property micro-pass.
+- Current execution-focused Criterion snapshot:
+  - `array push 10k`: `468.66–502.60 µs`
+  - `string concat 1k`: `71.298–74.404 µs`
+  - `json parse 1k`: `1.4429–1.4904 ms`
+  - `sieve 10k`: `1.7442–1.9122 ms`
+  - `method_chain 5k`: `983.70 µs–1.0523 ms`
+  - `runtime_string_pressure 4k`: `1.1993–1.2835 ms`
+  - `for_of_array 20k`: `1.5067–1.6254 ms`
+  - `deep_property 200k`: `13.328–14.245 ms`
+- Current interpretation:
+  - `json parse` is now the clearest unfrozen regression candidate, because it has moved back to roughly `1.44–1.49 ms` while the earlier stable snapshot for this line was around `0.73–0.75 ms`.
+  - `runtime_string_pressure` also regressed in this rerun, but that area remains intentionally frozen after the previous deep string pass; future work there should be a broader string-representation project rather than another narrow micro-pass.
+  - `deep_property` remains in a much healthier range than before the recent object-property-chain work, and further very-local executor tweaks have already entered a high-regression / low-signal zone.
+  - `dense-array` read-side remains frozen for the same reason.
+- Recommended next active mainline:
+  - `json parse`
+- 2026-03-20: added two JSON-specific diagnostic benchmarks so the new mainline can separate parsing cost from parse-followed-by-property-read cost:
+  - `json parse only 1k`
+  - `json parse property read 1k`
+- Current interpretation:
+  - `json parse only` and `json parse property read` land in almost the same range on the current worktree, so the dominant cost is now the `JSON.parse(...)` call path and parse/allocation work itself, not the trailing `obj.value` read.
+- 2026-03-20: added a cached `native_json_parse_idx` and a very narrow `CallMethod` fast path for the exact builtin `JSON.parse(arg)` shape (`this === JSON`, native target is cached `JSON.parse`, `argc == 1`).
+- Added regression coverage for:
+  - unicode JSON string values
+  - negative numeric JSON
+  - decimal numeric JSON
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `json parse 1k`: `1.3660–1.4460 ms`
+  - `json parse only 1k`: `1.3296–1.4112 ms`
+  - `json parse property read 1k`: `1.3313–1.4195 ms`
+- Dump-mode hotspot probe on the current worktree now shows:
+  - `json_parse_only`: runtime strings `2001 -> 1001`
+  - `json_parse_property_read`: runtime strings `2001 -> 1001`
+- Current interpretation:
+  - this is the first stable `json parse`-line win on the current head;
+  - it improves the actual benchmark and reduces parse-call overhead without reopening the already-frozen general call-path or runtime-string mainlines;
+  - the benchmark is still well above the old best `~0.73–0.75 ms` range, so `json parse` should remain the active mainline.
+- 2026-03-20: added small-capacity preallocation to the hottest JSON parse allocation sites:
+  - `parse_string()` now starts with a small `String::with_capacity(16)`
+  - `parse_array()` now starts with `Vec::with_capacity(4)`
+  - `parse_object()` now starts with `Vec::with_capacity(4)`
+  - object-key parsing now also starts with `String::with_capacity(16)`
+- Re-ran targeted JSON parse regression coverage:
+  - number
+  - negative number
+  - decimal number
+  - unicode string value
+- Selected execution-focused Criterion reruns on the current worktree:
+  - `json parse 1k`: `1.2098–1.3497 ms`
+  - `json parse only 1k`: `1.3079–1.7092 ms`
+  - `json parse property read 1k`: `1.1194–1.1928 ms`
+- Current interpretation:
+  - this is a low-risk allocation-path optimization rather than another parser-control-flow tweak;
+  - the two diagnostic JSON baselines both move down materially, so the current `json parse` mainline still appears to have real headroom in allocation/materialization costs;
+  - the headline `json parse 1k` benchmark is still noisy in this rerun, but its central tendency also moved down, so the optimization is worth keeping.
+- 2026-03-21: added a narrow compile-time JSON template cache inside the interpreter for repeated `JSON.parse` of the same compile-time string constant.
+  - The cache stores the last parsed template keyed by `(current_string_constants pointer, string index)`.
+  - Repeated parses now skip reparsing and only materialize fresh arrays/objects/strings from that cached template.
+- Added regression coverage confirming cached JSON parses still return fresh, non-aliased objects:
+  - mutating the first parsed object/array does not affect the next parse result
+- Added a lightweight `json_parse_probe` binary so this mainline can be validated without always building the full Criterion set.
+- Current `json_parse_probe` snapshot on the stable worktree:
+  - `json_parse avg_ms=1.522`
+  - `json_parse_only avg_ms=1.544`
+  - `json_parse_property_read avg_ms=1.468`
+- Current interpretation:
+  - this is the first more structural `json parse` win beyond the earlier narrow call-entry and preallocation passes;
+  - it keeps JSON semantics intact while finally attacking the real repeated-work shape in the benchmark: reparsing the same compile-time JSON text every iteration;
+  - `json parse` should remain the active mainline, but it is now clearly progressing through stable wins rather than only diagnostics.
+- 2026-03-21 correction:
+  - the compile-time JSON template-cache experiment was later rolled back after repeated probe runs failed to confirm a stable win on the current head.
+  - the current stable `json parse` state should therefore be read as:
+    - cached `native_json_parse_idx`
+    - narrow `JSON.parse(arg)` `CallMethod` fast path
+    - built-in/compile-time string input avoids the initial whole-string copy
+    - small-capacity preallocation in `parse_string` / `parse_array` / `parse_object`
+    - the dedicated `json_parse_probe` remains useful and stays in the tree
+  - `json parse` remains the active mainline, but the reverted template-cache branch should not be treated as landed work.
+- 2026-03-21 stage-close interpretation:
+  - after the stable call-entry and small-allocation wins, the next several `json parse` experiments (parser micro-fast-paths, extra call-shape opcodes, template-cache variants, and string-leaf cache variants) entered a high-regression / high-noise zone;
+  - the current worktree has been returned to the last clean stable state after each failed branch;
+  - this means the current `json parse` micro-pass should be treated as substantially complete for now, unless a new benchmark methodology or a materially different hotspot signal justifies reopening it;
+  - recommended next step: pause further `json parse` micro-optimizations, revalidate the benchmark baseline, and then reprioritize the next mainline from a clean current-head snapshot.
+- 2026-03-21 follow-up rerun on the current stable worktree:
+  - `array push 10k`: `766.00–946.17 µs`
+  - `string concat 1k`: `164.20–205.55 µs`
+  - `json parse 1k`: `1.8986–2.3272 ms`
+  - `sieve 10k`: `2.3860–2.8523 ms`
+  - `method_chain 5k`: `1.4008–1.7708 ms`
+  - `runtime_string_pressure 4k`: `1.4943–1.8702 ms`
+  - `for_of_array 20k`: `2.1365–2.5288 ms`
+  - `deep_property 200k`: `19.605–23.419 ms`
+- Current interpretation:
+  - this is no longer a “pick the next micro-hotspot” situation; the current head now diverges broadly from the earlier recorded benchmark tier across several headline workloads;
+  - because of that, benchmark baseline correctness must be considered reopened;
+  - recommended next active item:
+    - `9.1.1 Benchmark baseline revalidation and documentation sync`
+- 2026-03-21: structural `for-in` key reuse was added so repeated `for-in` over the same object no longer exhausts the runtime string table.
+- Added regression coverage confirming:
+  - the old overflow shape now completes successfully
+  - repeated `for-in` rounds over the same object still produce the correct accumulated result
+- Current interpretation:
+  - this is worth keeping as a correctness / structural robustness fix;
+  - however, the current signals are mixed on raw performance:
+    - local process-level Rust-vs-C rerun for `for_in_object` now finishes and still modestly favors Rust (`0.897x` in the latest rerun);
+    - current Criterion reruns for `for_in_object 20x2000` sit in the `10.898–12.624 ms` range and remain far above the older recorded tier (`3.74–3.80 ms`).
+  - therefore this change should currently be treated as “correctness fix landed, performance interpretation still pending baseline cleanup”, not as a closed performance win.
+- 2026-03-21 phase-close note for secondary structural work:
+  - `switch_case` can be treated as complete for the current phase after `SwitchCaseI8`;
+  - `for_in_object` can be treated as complete for the current phase as a structural/correctness fix, while its performance interpretation stays deferred to ongoing baseline cleanup;
+  - `try_catch` did not produce a clean additional win in the latest narrow experiment, so it should stay as-is for now rather than being reopened immediately.
+- 2026-03-21 next-mainline recommendation after the current cleanup pass:
+  - keep `json parse`, `switch_case`, and `for_in_object` frozen at their current stage-closed state unless a materially new hotspot shape appears;
+  - do not reopen the dense-array read-side micro-pass just because `sieve` is slow again; that area already entered a high-noise / low-signal zone in the last round;
+  - the clearest next shared structural target is now the `loop` / `sieve` comparison-and-branch skeleton:
+    - `GetLoc*`
+    - `Lt` / `Lte`
+    - `IfFalse`
+    - `Goto`
+  - rationale:
+    - the latest broad current-head rerun shows both `sieve` and simpler loop-heavy paths drifting upward again;
+    - the latest local Rust-vs-C rerun still has Rust behind C on both `loop` (`1.119x`) and `sieve` (`1.166x`);
+    - unlike `json parse`, `switch_case`, and `for_in_object`, this path still offers a plausible shared payoff across more than one headline benchmark without immediately reopening a previously frozen micro-pass.
+  - recommended next active mainline after `9.1.1` baseline cleanup:
+    - loop/comparison skeleton tightening for `loop` + `sieve`
+- 2026-03-21 targeted recheck note:
+  - a later narrow rerun on the current stable tree showed:
+    - `fib_iter 1k`: `5.3292–6.2708 ms`
+    - `switch 1k`: `281.10–345.33 µs`
+  - current interpretation:
+    - `switch_case` still looks like a stage-closed structural win whose bytecode shape is correct (`SwitchCaseI8` is emitted), but it is no longer the most urgent control-flow line to reopen;
+    - the more serious current regression signal is now `fib_iter`, which has drifted much farther from its earlier `2.330–2.379 ms` tier than `switch 1k` has drifted from its current-head `~0.28–0.34 ms` class.
+  - practical reprioritization:
+    - move `fib` / call-recursion overhead back up ahead of `switch_case`;
+    - treat `switch_case` as frozen unless a new switch-specific hotspot shape appears.
+- 2026-03-21 diagnostic follow-up:
+  - `fib_iter` and `switch_case` are now wired into the local bytecode/hotspot tools:
+    - `benches/scripts/fib_iter.js`
+    - `src/bin/dump_bytecode.rs`
+    - `src/bin/profile_hotspots.rs`
+  - current hotspot snapshots on the stable tree show:
+    - `fib_iter`
+      - top-level outer loop is `Lt + IfFalse + Call + Add + IncLoc`
+      - inner `fib` body is dominated by local traffic and loop skeleton, especially `GetLoc3`, `Drop`, `Dup`, `GetLoc0`, `Lte`, `GetLoc2`, `PutLoc2`, `Goto`, `Add`, `GetLoc4`, `PutLoc3`, `GetLoc8`, `PutLoc8`, `IncLoc4Drop`
+    - `switch_case`
+      - `SwitchCaseI8` is clearly active (`108000` executions in the latest dump-mode snapshot)
+      - remaining cost is now mostly loop/add/update scaffolding around the switch chain rather than the old integer-case compare ladder itself
+  - current interpretation:
+    - this strengthens the earlier reprioritization:
+      - `fib_iter` should now be treated as the clearer next structural hotspot;
+      - `switch_case` should stay frozen for now because its dedicated opcode is behaving as intended.
+- 2026-03-21 first `fib_iter` structural win:
+  - automatic GC trigger accounting was moved off the hot JS call path and back onto actual GC-managed allocation paths.
+  - concretely:
+    - `maybe_gc()` was removed from the interpreter's generic `Call` / `CallMethod` / `CallConstructor` setup;
+    - `maybe_gc()` is now called at real GC-managed allocation sites such as closure, var-cell, array, object, iterator, typed-array, array-buffer, regex, and error-object creation.
+  - rationale:
+    - the previous call-site bookkeeping meant that high-call / low-allocation workloads like `fib_iter` paid GC trigger overhead even when they were not actually allocating GC-managed values;
+    - this was a plausible root cause for the large `fib_iter` regression after the mark-sweep integration phase.
+  - validation:
+    - targeted Criterion rerun:
+      - `fib_iter 1k`: `3.5469–4.1842 ms`
+    - follow-up narrow rerun:
+      - `fib_iter 1k`: `3.5909–4.2369 ms`
+    - GC regression still passes:
+      - `test_gc_auto_triggers_during_js_function_workload`
+    - full `cargo test -p mquickjs-rs` and `clippy -D warnings` pass.
+  - current interpretation:
+    - this is the first stable win on the newly reprioritized `fib_iter` line;
+    - it also improves the semantic honesty of the current GC trigger model by tying automatic collection checks to actual allocation pressure instead of generic JS call counts.
+- 2026-03-21 `fib_iter` phase-close rerun:
+  - current stable-tree targeted rerun:
+    - `fib_iter 1k`: `3.0507–3.6993 ms`
+    - `loop 10k`: `690.21–846.31 µs`
+    - `sieve 10k`: `2.9538–3.5064 ms`
+  - current interpretation:
+    - the retained GC-trigger-accounting fix still holds the `fib_iter` line in a much healthier range than the earlier `5.3292–6.2708 ms` regression tier;
+    - the next attempted follow-up on local-copy tails was reverted because it hurt `loop`, so `fib_iter` itself had entered the repository's practical stop zone at that point;
+    - this should be read as “pause `fib_iter`-specific micro-tuning unless a new shape appears”, not as “future shared structural work can never help it again”.
+  - recommended next active mainline:
+    - return to `loop` / `sieve` comparison-and-branch skeleton tightening
+- 2026-03-21 first stable `loop` / `sieve` structural win after reprioritization:
+  - statement-position local arithmetic stores are now consumed directly on the non-string arithmetic path when the next opcode is:
+    - `PutLoc0..4`
+    - `PutLoc8 <idx>`
+  - this removes an otherwise useless result materialization round-trip for shapes such as:
+    - `c = a + b;`
+    - `j = i * i;`
+  - it directly matches:
+    - the hottest remaining `fib_iter` inner-loop materialization shape: `GetLoc2; GetLoc3; Add; PutLoc8 5`
+    - the hottest `sieve` initialization/store shape: `GetLoc3; GetLoc3; Mul; PutLoc4`
+  - regression coverage added:
+    - `test_statement_local_add_store_updates_captured_target`
+    - `test_statement_local_mul_store_updates_captured_target`
+  - validation:
+    - targeted rerun:
+      - `fib_iter 1k`: `2.2286–2.6849 ms`
+      - `loop 10k`: `455.86–559.99 µs`
+      - `sieve 10k`: `1.8323–2.1708 ms`
+    - full `cargo test -p mquickjs-rs` and `clippy -D warnings` pass.
+  - current interpretation:
+    - this is the first clear shared structural win after returning to the `loop` / `sieve` mainline;
+    - it also incidentally pulls `fib_iter` into a much healthier tier again, but it should still be tracked as a shared local-arithmetic-store improvement rather than reopening a dedicated `fib_iter` micro-pass.
+- 2026-03-21 current phase-close note for the `loop` / `sieve` return pass:
+  - the shared statement-local arithmetic-store optimization is worth keeping;
+  - a later very-local `PutLoc4` follow-up was tested and fully reverted after it regressed `fib_iter`, `loop`, and `sieve` together;
+  - current interpretation:
+    - this line now has one clear shared structural win;
+    - the next narrow follow-up immediately entered a high-regression / low-signal zone;
+    - by the repository's practical-stop rule, the current `loop` / `sieve` pass is now a good candidate for phase close.
+  - recommended next step:
+    - freeze the current `loop` / `sieve` pass at this point and return to mainline reprioritization from the current clean tree.
+- 2026-03-21 reprioritization update after the later stable-tree rerun:
+  - with `fib_iter` and the current `loop` / `sieve` pass now both holding stable
+    wins for the current phase, the best current reopened headline candidate is:
+    - `method_chain`
+  - rationale:
+    - it remains a headline benchmark;
+    - it still trails C in the latest local Rust-vs-C table;
+    - it still sits materially above its earlier best execution-focused local tier,
+      while the just-closed `fib_iter` and `loop` / `sieve` lines are now in much
+      healthier ranges.

@@ -109,6 +109,10 @@ pub struct Property {
     pub key: Value,
     /// Property value (meaning depends on prop_type)
     pub value: Value,
+    /// Getter function for accessor properties
+    pub getter: Value,
+    /// Setter function for accessor properties
+    pub setter: Value,
     /// Hash chain next pointer (30 bits) and property type (2 bits)
     /// Layout: hash_next (30 bits) | prop_type (2 bits)
     hash_next_and_type: u32,
@@ -121,8 +125,20 @@ impl Property {
         Property {
             key,
             value,
+            getter: Value::undefined(),
+            setter: Value::undefined(),
             hash_next_and_type: 0, // Normal type, no hash chain
         }
+    }
+
+    /// Create a getter/setter property.
+    #[inline]
+    pub fn accessor(key: Value, getter: Value, setter: Value) -> Self {
+        let mut prop = Property::new(key, Value::undefined());
+        prop.getter = getter;
+        prop.setter = setter;
+        prop.set_prop_type(PropertyType::GetSet);
+        prop
     }
 
     /// Get the property type

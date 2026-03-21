@@ -26,6 +26,20 @@ use alloc::vec::Vec;
 /// Sentinel value meaning "slot is free / never allocated"
 pub const SLOT_FREE: u32 = u32::MAX;
 
+/// GC trigger thresholds
+const GC_TRIGGER_DEFAULT: u32 = 1024;
+const GC_TRIGGER_MIN: u32 = 128;
+const GC_TRIGGER_MAX: u32 = 65536;
+/// Growth factor when survival rate > 80%
+const GC_TRIGGER_GROWTH_NUM: u32 = 3;
+const GC_TRIGGER_GROWTH_DEN: u32 = 2;
+/// Shrink factor when survival rate < 50%
+const GC_TRIGGER_SHRINK_NUM: u32 = 2;
+const GC_TRIGGER_SHRINK_DEN: u32 = 3;
+/// Survival rate thresholds
+const GC_SURVIVAL_HIGH: f64 = 0.8;
+const GC_SURVIVAL_LOW: f64 = 0.5;
+
 /// GC bookkeeping state (phase, trigger, stats).
 ///
 /// The generation arrays themselves live directly in `Interpreter`.
@@ -72,7 +86,7 @@ impl GcState {
     /// Create a new GC state with default trigger threshold
     pub fn new() -> Self {
         Self {
-            gc_trigger: 1024,
+            gc_trigger: GC_TRIGGER_DEFAULT,
             ..Default::default()
         }
     }
@@ -87,6 +101,7 @@ impl GcState {
     /// Increment phase and reset for a new GC cycle.
     #[inline]
     pub fn start_cycle(&mut self) {
+        // Reserve u32::MAX as SLOT_FREE sentinel; reset to 0 when approaching overflow
         if self.phase == u32::MAX - 1 {
             self.phase = 0;
         } else {
@@ -127,10 +142,12 @@ impl GcState {
 
         let survival_rate = total_live as f64 / total_slots as f64;
 
-        if survival_rate > 0.8 {
-            self.gc_trigger = (self.gc_trigger * 3 / 2).clamp(1024, 65536);
-        } else if survival_rate < 0.5 {
-            self.gc_trigger = (self.gc_trigger * 2 / 3).max(128);
+        if survival_rate > GC_SURVIVAL_HIGH {
+            self.gc_trigger = (self.gc_trigger * GC_TRIGGER_GROWTH_NUM / GC_TRIGGER_GROWTH_DEN)
+                .clamp(GC_TRIGGER_MIN, GC_TRIGGER_MAX);
+        } else if survival_rate < GC_SURVIVAL_LOW {
+            self.gc_trigger = (self.gc_trigger * GC_TRIGGER_SHRINK_NUM / GC_TRIGGER_SHRINK_DEN)
+                .max(GC_TRIGGER_MIN);
         }
     }
 
@@ -183,29 +200,40 @@ fn mark_slot(gen: &mut [u32], idx: usize, phase: u32) -> bool {
     }
 }
 
+/// Bundles all mutable generation arrays needed for iterative mark.
+/// This avoids passing 6 separate &mut [u32] parameters.
+pub struct GcMarkRoots<'a> {
+    pub gen_closures: &'a mut [u32],
+    pub gen_var_cells: &'a mut [u32],
+    pub gen_arrays: &'a mut [u32],
+    pub gen_objects: &'a mut [u32],
+    pub gen_for_in_iterators: &'a mut [u32],
+    pub gen_for_of_iterators: &'a mut [u32],
+}
+
 /// Iteratively mark all values reachable from the given root set.
 ///
 /// Uses a `Vec<Value>` worklist allocated on the heap — no call-stack overflow,
 /// safe for embedded targets with small stacks (8KB or less).
 ///
-/// All gen arrays are passed as immutable references; slots are written via
-/// `mark_slot()` only when unvisited (read phase, write new phase).
+/// Slots are marked via `mark_slot()` only when unvisited (read phase, write new phase).
+/// Iteratively mark all values reachable from the given root set.
+///
+/// Uses a `Vec<Value>` worklist allocated on the heap — no call-stack overflow,
+/// safe for embedded targets with small stacks (8KB or less).
+///
+/// Slots are marked via `mark_slot()` only when unvisited (read phase, write new phase).
 #[allow(clippy::too_many_arguments)]
 pub fn gc_mark_roots_iterative(
     roots: &[Value],
     phase: u32,
     closures: &[crate::vm::types::ClosureData],
-    gen_closures: &mut [u32],
     var_cells: &[Value],
-    gen_var_cells: &mut [u32],
     arrays: &[Vec<Value>],
-    gen_arrays: &mut [u32],
     objects: &[crate::vm::types::ObjectInstance],
-    gen_objects: &mut [u32],
     for_in_iterators: &[ForInIterator],
-    gen_for_in_iterators: &mut [u32],
     for_of_iterators: &[ForOfIterator],
-    gen_for_of_iterators: &mut [u32],
+    mark: &mut GcMarkRoots<'_>,
 ) {
     // Worklist: heap-allocated Vec, grows as needed, never overflows the call stack
     let mut worklist: Vec<Value> = Vec::with_capacity(64);
@@ -220,7 +248,7 @@ pub fn gc_mark_roots_iterative(
         // --- Array ---
         if let Some(idx) = val.to_array_idx() {
             let idx = idx as usize;
-            if mark_slot_array(idx, phase, gen_arrays) && idx < arrays.len() {
+            if mark_slot(mark.gen_arrays, idx, phase) && idx < arrays.len() {
                 for elem in &arrays[idx] {
                     worklist.push(*elem);
                 }
@@ -231,7 +259,7 @@ pub fn gc_mark_roots_iterative(
         // --- Object ---
         if let Some(idx) = val.to_object_idx() {
             let idx = idx as usize;
-            if mark_slot_object(idx, phase, gen_objects) && idx < objects.len() {
+            if mark_slot(mark.gen_objects, idx, phase) && idx < objects.len() {
                 for (_k, v) in &objects[idx].properties {
                     worklist.push(*v);
                 }
@@ -245,10 +273,10 @@ pub fn gc_mark_roots_iterative(
         // --- Closure ---
         if let Some(idx) = val.to_closure_idx() {
             let idx = idx as usize;
-            if mark_slot_closure(idx, phase, gen_closures) && idx < closures.len() {
+            if mark_slot(mark.gen_closures, idx, phase) && idx < closures.len() {
                 for &cell_idx in &closures[idx].cell_indices {
                     let cell_idx = cell_idx as usize;
-                    if mark_slot_var_cell(cell_idx, phase, gen_var_cells) && cell_idx < var_cells.len() {
+                    if mark_slot(mark.gen_var_cells, cell_idx, phase) && cell_idx < var_cells.len() {
                         worklist.push(var_cells[cell_idx]);
                     }
                 }
@@ -260,14 +288,14 @@ pub fn gc_mark_roots_iterative(
         if val.is_iterator() {
             if let Some(idx) = val.to_iterator_idx() {
                 let idx = idx as usize;
-                if mark_slot_for_in(idx, phase, gen_for_in_iterators) && idx < for_in_iterators.len() {
-                    if let ForInIterator::Object { obj_idx, .. } = &for_in_iterators[idx] {
-                        let obj_idx = *obj_idx as usize;
-                        if mark_slot_object(obj_idx, phase, gen_objects) && obj_idx < objects.len() {
-                            for (_k, v) in &objects[obj_idx].properties {
-                                worklist.push(*v);
+                if mark_slot(mark.gen_for_in_iterators, idx, phase) && idx < for_in_iterators.len() {
+                    match &for_in_iterators[idx] {
+                        ForInIterator::ObjectKeys { keys, .. } => {
+                            for key in keys {
+                                worklist.push(*key);
                             }
                         }
+                        ForInIterator::Array { .. } | ForInIterator::Empty => {}
                     }
                 }
             }
@@ -278,11 +306,11 @@ pub fn gc_mark_roots_iterative(
         if val.is_for_of_iterator() {
             if let Some(idx) = val.to_for_of_iterator_idx() {
                 let idx = idx as usize;
-                if mark_slot_for_of(idx, phase, gen_for_of_iterators) && idx < for_of_iterators.len() {
+                if mark_slot(mark.gen_for_of_iterators, idx, phase) && idx < for_of_iterators.len() {
                     match &for_of_iterators[idx] {
                         ForOfIterator::Array { arr_idx, .. } => {
                             let arr_idx = *arr_idx as usize;
-                            if mark_slot_array(arr_idx, phase, gen_arrays) && arr_idx < arrays.len() {
+                            if mark_slot(mark.gen_arrays, arr_idx, phase) && arr_idx < arrays.len() {
                                 for elem in &arrays[arr_idx] {
                                     worklist.push(*elem);
                                 }
@@ -300,34 +328,3 @@ pub fn gc_mark_roots_iterative(
     }
 }
 
-// Per-type mark helpers (reads phase, writes only if unvisited)
-
-#[inline]
-fn mark_slot_array(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
-    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
-}
-
-#[inline]
-fn mark_slot_object(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
-    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
-}
-
-#[inline]
-fn mark_slot_closure(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
-    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
-}
-
-#[inline]
-fn mark_slot_var_cell(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
-    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
-}
-
-#[inline]
-fn mark_slot_for_in(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
-    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
-}
-
-#[inline]
-fn mark_slot_for_of(idx: usize, phase: u32, gen: &mut [u32]) -> bool {
-    idx < gen.len() && gen[idx] != phase && { gen[idx] = phase; true }
-}

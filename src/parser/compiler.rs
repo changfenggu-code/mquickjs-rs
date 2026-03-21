@@ -484,6 +484,45 @@ impl<'a> Compiler<'a> {
         true
     }
 
+    fn try_rewrite_get_field_chain4(&mut self) -> bool {
+        let len = self.bytecode.len();
+        if len < 12 {
+            return false;
+        }
+
+        let tail = &self.bytecode;
+        let base = len - 12;
+        if tail[base] != OpCode::GetField as u8
+            || tail[base + 3] != OpCode::GetField as u8
+            || tail[base + 6] != OpCode::GetField as u8
+            || tail[base + 9] != OpCode::GetField as u8
+        {
+            return false;
+        }
+
+        let a = u16::from_le_bytes([tail[base + 1], tail[base + 2]]);
+        let b = u16::from_le_bytes([tail[base + 4], tail[base + 5]]);
+        let c = u16::from_le_bytes([tail[base + 7], tail[base + 8]]);
+        let d = u16::from_le_bytes([tail[base + 10], tail[base + 11]]);
+
+        self.bytecode.truncate(base);
+        self.emit_op(OpCode::GetFieldChain4);
+        self.emit_u16(a);
+        self.emit_u16(b);
+        self.emit_u16(c);
+        self.emit_u16(d);
+        true
+    }
+
+    fn bytecode_tail_is_getglobal_name(&self, name: &str) -> bool {
+        let len = self.bytecode.len();
+        if len < 3 || self.bytecode[len - 3] != OpCode::GetGlobal as u8 {
+            return false;
+        }
+        let idx = u16::from_le_bytes([self.bytecode[len - 2], self.bytecode[len - 1]]) as usize;
+        self.string_constants.get(idx).is_some_and(|s| s == name)
+    }
+
     fn try_rewrite_discarded_local_inc_one(&mut self) -> bool {
         let len = self.bytecode.len();
         if len < 5 {
@@ -630,6 +669,14 @@ impl<'a> Compiler<'a> {
     /// Emit a jump instruction and return the patch location
     fn emit_jump(&mut self, op: OpCode) -> JumpPatch {
         self.emit_op(op);
+        let offset = self.bytecode.len();
+        self.emit_u32(0); // Placeholder
+        JumpPatch { offset }
+    }
+
+    fn emit_switch_case_i8_jump(&mut self, val: i8) -> JumpPatch {
+        self.emit_op(OpCode::SwitchCaseI8);
+        self.emit_byte(val as u8);
         let offset = self.bytecode.len();
         self.emit_u32(0); // Placeholder
         JumpPatch { offset }
@@ -1497,6 +1544,14 @@ impl<'a> Compiler<'a> {
         let ctx = &self.loop_stack[idx];
         let continue_target = ctx.continue_target;
         let has_deferred_continue = continue_target == usize::MAX;
+        let switch_depth = self.loop_stack[idx + 1..]
+            .iter()
+            .filter(|ctx| ctx.is_switch)
+            .count();
+
+        for _ in 0..switch_depth {
+            self.emit_op(OpCode::Drop);
+        }
 
         if has_deferred_continue {
             // do...while: continue target not yet known, emit a patch
@@ -1599,10 +1654,23 @@ impl<'a> Compiler<'a> {
             match &self.current_token {
                 Token::Case => {
                     self.advance();
-                    self.emit_op(OpCode::Dup);
-                    self.expression()?;
-                    self.emit_op(OpCode::StrictEq);
-                    case_jumps.push(self.emit_jump(OpCode::IfTrue));
+                    if let Token::Number(n) = self.current_token.clone() {
+                        let int = n as i32;
+                        if n == (int as f64) && int >= i8::MIN as i32 && int <= i8::MAX as i32 {
+                            case_jumps.push(self.emit_switch_case_i8_jump(int as i8));
+                            self.advance();
+                        } else {
+                            self.emit_op(OpCode::Dup);
+                            self.expression()?;
+                            self.emit_op(OpCode::StrictEq);
+                            case_jumps.push(self.emit_jump(OpCode::IfTrue));
+                        }
+                    } else {
+                        self.emit_op(OpCode::Dup);
+                        self.expression()?;
+                        self.emit_op(OpCode::StrictEq);
+                        case_jumps.push(self.emit_jump(OpCode::IfTrue));
+                    }
                     self.expect(Token::Colon)?;
                     self.skip_case_body();
                 }
@@ -1702,9 +1770,18 @@ impl<'a> Compiler<'a> {
     /// Skip tokens until a colon at depth 0 (used in pass 2 to skip case expressions).
     fn skip_to_colon(&mut self) {
         let mut depth = 0u32;
+        let mut ternary_depth = 0u32;
         loop {
             match &self.current_token {
-                Token::Colon if depth == 0 => break,
+                Token::Colon if depth == 0 && ternary_depth == 0 => break,
+                Token::Question if depth == 0 => {
+                    ternary_depth += 1;
+                    self.advance();
+                }
+                Token::Colon if depth == 0 && ternary_depth > 0 => {
+                    ternary_depth -= 1;
+                    self.advance();
+                }
                 Token::LParen | Token::LBracket => {
                     depth += 1;
                     self.advance();
@@ -2414,12 +2491,10 @@ impl<'a> Compiler<'a> {
                         let is_reduce = name == "reduce";
                         self.advance();
 
-                        // Store property name as string constant
-                        let str_idx = self.string_constants.len() as u16;
-                        self.string_constants.push(name);
-
                         // Check for assignment
                         if self.match_token(&Token::Eq) {
+                            let str_idx = self.string_constants.len() as u16;
+                            self.string_constants.push(name);
                             // obj.prop = value
                             self.expression()?;
                             self.emit_op(OpCode::PutField);
@@ -2432,6 +2507,8 @@ impl<'a> Compiler<'a> {
                             if is_push {
                                 self.emit_op(OpCode::GetArrayPush2);
                             } else {
+                                let str_idx = self.string_constants.len() as u16;
+                                self.string_constants.push(name);
                                 self.emit_op(OpCode::GetField2);
                                 self.emit_u16(str_idx);
                             }
@@ -2452,9 +2529,12 @@ impl<'a> Compiler<'a> {
                         } else if is_length {
                             self.emit_op(OpCode::GetLength);
                         } else {
+                            let str_idx = self.string_constants.len() as u16;
+                            self.string_constants.push(name);
                             // obj.prop
                             self.emit_op(OpCode::GetField);
                             self.emit_u16(str_idx);
+                            let _ = self.try_rewrite_get_field_chain4();
                         }
                     } else {
                         return Err(self.syntax_error("Expected property name"));
@@ -2552,6 +2632,7 @@ impl<'a> Compiler<'a> {
                         self.string_constants.push(name);
                         self.emit_op(OpCode::GetField);
                         self.emit_u16(str_idx);
+                        let _ = self.try_rewrite_get_field_chain4();
                     } else {
                         return Err(self.syntax_error("Expected property name"));
                     }

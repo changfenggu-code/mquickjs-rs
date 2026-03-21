@@ -8,7 +8,7 @@ use crate::util::unicode::utf16_len;
 use crate::value::{float_to_value, Float, Value};
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::Stack;
-use alloc::{format, string::String, string::ToString, vec, vec::Vec};
+use alloc::{collections::BTreeMap, format, string::String, string::ToString, vec, vec::Vec};
 
 // Native function implementations and format helpers (defined in natives.rs)
 use super::natives::*;
@@ -38,11 +38,14 @@ impl Interpreter {
             for_in_iterators: Vec::new(),
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
+            native_func_index: BTreeMap::new(),
             native_array_push_idx: None,
             native_array_map_idx: None,
             native_array_filter_idx: None,
             native_array_reduce_idx: None,
-            global_vars: Vec::new(),
+            native_json_parse_idx: None,
+            for_in_key_cache: Vec::new(),
+            global_vars: BTreeMap::new(),
             error_objects: Vec::new(),
             regex_objects: Vec::new(),
             typed_arrays: Vec::new(),
@@ -92,11 +95,14 @@ impl Interpreter {
             for_in_iterators: Vec::new(),
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
+            native_func_index: BTreeMap::new(),
             native_array_push_idx: None,
             native_array_map_idx: None,
             native_array_filter_idx: None,
             native_array_reduce_idx: None,
-            global_vars: Vec::new(),
+            native_json_parse_idx: None,
+            for_in_key_cache: Vec::new(),
+            global_vars: BTreeMap::new(),
             error_objects: Vec::new(),
             regex_objects: Vec::new(),
             typed_arrays: Vec::new(),
@@ -191,7 +197,7 @@ impl Interpreter {
     /// Collects all root values into a Vec, then calls the heap-allocated
     /// worklist-based marker — no recursion, no call-stack overflow.
     fn gc_mark_roots(&mut self) {
-        use crate::vm::gc::gc_mark_roots_iterative;
+        use crate::vm::gc::{gc_mark_roots_iterative, GcMarkRoots};
 
         let phase = self.gc.phase;
 
@@ -205,7 +211,7 @@ impl Interpreter {
             roots.push(frame.this_val);
             roots.push(frame.this_func);
         }
-        for (_name, val) in &self.global_vars {
+        for val in self.global_vars.values() {
             roots.push(*val);
         }
         for timer in &self.timers {
@@ -241,17 +247,19 @@ impl Interpreter {
             &roots,
             phase,
             closures,
-            gen_closures,
             var_cells,
-            gen_var_cells,
             arrays,
-            gen_arrays,
             objects,
-            gen_objects,
             for_in_iterators,
-            gen_for_in_iterators,
             for_of_iterators,
-            gen_for_of_iterators,
+            &mut GcMarkRoots {
+                gen_closures,
+                gen_var_cells,
+                gen_arrays,
+                gen_objects,
+                gen_for_in_iterators,
+                gen_for_of_iterators,
+            },
         );
     }
 
@@ -632,6 +640,10 @@ impl Interpreter {
     /// Create a runtime string on the `for-in` key path while recording source stats.
     #[inline]
     fn create_runtime_string_for_in_key(&mut self, s: &str) -> InterpreterResult<Value> {
+        if let Some((_, value)) = self.for_in_key_cache.iter().find(|(key, _)| key == s) {
+            return Ok(*value);
+        }
+
         self.bump_runtime_string_for_in_key();
         let idx = self.runtime_strings.len();
         let max_runtime_strings = u16::MAX as usize - Self::RUNTIME_STRING_OFFSET as usize;
@@ -640,7 +652,9 @@ impl Interpreter {
                 "runtime string table exhausted".to_string(),
             ));
         }
-        Ok(self.create_runtime_string_raw(s.to_string()))
+        let value = self.create_runtime_string_raw(s.to_string());
+        self.for_in_key_cache.push((s.to_string(), value));
+        Ok(value)
     }
 
     #[inline]
@@ -875,13 +889,7 @@ impl Interpreter {
             _ => self.get_native_func(name),
         };
 
-        val.or_else(|| {
-            self.global_vars
-                .iter()
-                .rev()
-                .find(|(n, _)| n == name)
-                .map(|(_, v)| *v)
-        })
+        val.or_else(|| self.global_vars.get(name).copied())
     }
 
     /// Create a closure and return a Value that references it
@@ -890,6 +898,7 @@ impl Interpreter {
         bytecode: *const FunctionBytecode,
         cell_indices: Vec<u32>,
     ) -> Value {
+        self.maybe_gc();
         let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_closures);
         if is_new {
             self.closures.push(ClosureData::new(bytecode, cell_indices));
@@ -901,6 +910,7 @@ impl Interpreter {
 
     /// Allocate a new variable cell with the given initial value, return its index.
     fn alloc_var_cell(&mut self, value: Value) -> u32 {
+        self.maybe_gc();
         let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_var_cells);
         if is_new {
             self.var_cells.push(value);
@@ -928,6 +938,7 @@ impl Interpreter {
 
     /// Create an array and return a Value that references it
     fn create_array(&mut self, elements: Vec<Value>) -> Value {
+        self.maybe_gc();
         let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_arrays);
         if is_new {
             self.arrays.push(elements);
@@ -1021,6 +1032,7 @@ impl Interpreter {
 
     /// Create a new object and return its value
     fn create_object(&mut self) -> Value {
+        self.maybe_gc();
         let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_objects);
         if is_new {
             self.objects.push(ObjectInstance::new());
@@ -1032,6 +1044,7 @@ impl Interpreter {
 
     /// Create a new object with a constructor reference and return its value
     fn create_object_with_constructor(&mut self, constructor: Value) -> Value {
+        self.maybe_gc();
         let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_objects);
         if is_new {
             self.objects.push(ObjectInstance::with_constructor(constructor));
@@ -1053,33 +1066,41 @@ impl Interpreter {
 
     /// Get a property from an object
     #[inline]
-    fn object_get_property(&self, obj_idx: u32, key: &str) -> Value {
+    fn object_get_property(&mut self, obj_idx: u32, key: &str) -> InterpreterResult<Value> {
         if let Some(obj) = self.get_object(obj_idx) {
             match obj.properties.as_slice() {
                 [(k0, v0)] => {
                     if k0 == key {
-                        return *v0;
+                        return Ok(*v0);
                     }
                 }
                 [(k0, v0), (k1, v1)] => {
                     if k0 == key {
-                        return *v0;
+                        return Ok(*v0);
                     }
                     if k1 == key {
-                        return *v1;
+                        return Ok(*v1);
                     }
                 }
                 _ => {
                     for (k, v) in obj.properties.iter() {
                         if k == key {
-                            return *v;
+                            return Ok(*v);
                         }
                     }
                 }
             }
+
+            if let Some(accessor) = obj.accessors.iter().find(|a| a.key == key).cloned() {
+                if accessor.getter.is_undefined() {
+                    return Ok(Value::undefined());
+                }
+                let this_val = Value::object_idx(obj_idx);
+                return self.call_value(accessor.getter, this_val, &[]);
+            }
         }
         // Fallback to Object.prototype methods
-        match key {
+        Ok(match key {
             "hasOwnProperty" => self
                 .get_native_func("Object.prototype.hasOwnProperty")
                 .unwrap_or_default(),
@@ -1087,7 +1108,7 @@ impl Interpreter {
                 .get_native_func("Object.prototype.toString")
                 .unwrap_or_default(),
             _ => Value::undefined(),
-        }
+        })
     }
 
     #[inline]
@@ -1115,61 +1136,56 @@ impl Interpreter {
     }
 
     #[inline]
-    fn for_in_next_key(&mut self, iter_idx: usize) -> Option<String> {
+    fn for_in_next_key(&mut self, iter_idx: usize) -> Option<Value> {
         let iter = self.for_in_iterators.get_mut(iter_idx)?;
         match iter {
-            ForInIterator::Object {
-                obj_idx,
-                len,
-                index,
-            } => {
-                if *index >= *len {
+            ForInIterator::ObjectKeys { keys, index } => {
+                if *index >= keys.len() {
                     return None;
                 }
-                let key = self
-                    .objects
-                    .get(*obj_idx as usize)
-                    .and_then(|obj| obj.properties.get(*index))
-                    .map(|(k, _)| k.clone());
+                let key = keys.get(*index).copied();
                 *index += 1;
                 key
             }
             ForInIterator::Array { len, index } => {
-                if *index >= *len {
-                    return None;
-                }
-                let key = index.to_string();
-                *index += 1;
-                Some(key)
+                let current = if *index >= *len {
+                    None
+                } else {
+                    let current = *index;
+                    *index += 1;
+                    Some(current)
+                };
+                let _ = iter;
+                current.and_then(|i| self.create_runtime_string_for_in_key(&i.to_string()).ok())
             }
             ForInIterator::Empty => None,
         }
     }
 
     #[inline]
-    fn get_field_value(&mut self, obj: Value, prop_name: &str) -> Value {
+    fn get_field_value(&mut self, obj: Value, prop_name: &str) -> InterpreterResult<Value> {
         if obj.is_array() {
-            self.get_array_property(obj, prop_name)
+            Ok(self.get_array_property(obj, prop_name))
         } else if let Some(obj_idx) = obj.to_object_idx() {
             self.object_get_property(obj_idx, prop_name)
         } else if let Some(builtin_idx) = obj.to_builtin_object_idx() {
-            self.get_builtin_property(builtin_idx, prop_name)
+            Ok(self.get_builtin_property(builtin_idx, prop_name))
         } else if let Some(typed_idx) = obj.to_typed_array_idx() {
-            self.get_typed_array_property(typed_idx, prop_name)
+            Ok(self.get_typed_array_property(typed_idx, prop_name))
         } else if let Some(ab_idx) = obj.to_array_buffer_idx() {
-            self.get_array_buffer_property(ab_idx, prop_name)
+            Ok(self.get_array_buffer_property(ab_idx, prop_name))
         } else if let Some(err_idx) = obj.to_error_object_idx() {
-            self.get_error_property(err_idx, prop_name)
+            Ok(self.get_error_property(err_idx, prop_name))
         } else if let Some(regex_idx) = obj.to_regexp_object_idx() {
-            self.get_regexp_property(regex_idx, prop_name)
+            Ok(self.get_regexp_property(regex_idx, prop_name))
         } else if obj.is_string() {
-            self.get_string_property(obj, prop_name)
+            Ok(self.get_string_property(obj, prop_name))
         } else if obj.is_number() {
-            self.get_number_property(obj, prop_name)
+            Ok(self.get_number_property(obj, prop_name))
         } else if obj.is_closure() || obj.to_func_ptr().is_some() {
-            self.get_function_property(prop_name)
+            Ok(self.get_function_property(prop_name))
         } else {
-            Value::undefined()
+            Ok(Value::undefined())
         }
     }
 
@@ -1202,7 +1218,7 @@ impl Interpreter {
                 })
                 .unwrap_or(Value::int(0))
         } else {
-            self.get_field_value(obj, "length")
+            self.get_field_value(obj, "length").unwrap_or_default()
         }
     }
 
@@ -1397,9 +1413,23 @@ impl Interpreter {
         let pc = frame.pc;
 
         // Hot local-update shapes:
+        //   Add; Dup; PutLoc0; Drop
+        //   Add; Dup; PutLoc1; Drop
         //   Add; Dup; PutLoc3; Drop
         //   Add; Dup; PutLoc8 4; Drop
         let matched = if bc.get(pc).copied() == Some(OpCode::Dup as u8)
+            && bc.get(pc + 1).copied() == Some(OpCode::PutLoc0 as u8)
+            && bc.get(pc + 2).copied() == Some(OpCode::Drop as u8)
+        {
+            frame.pc += 3;
+            Some(0usize)
+        } else if bc.get(pc).copied() == Some(OpCode::Dup as u8)
+            && bc.get(pc + 1).copied() == Some(OpCode::PutLoc1 as u8)
+            && bc.get(pc + 2).copied() == Some(OpCode::Drop as u8)
+        {
+            frame.pc += 3;
+            Some(1usize)
+        } else if bc.get(pc).copied() == Some(OpCode::Dup as u8)
             && bc.get(pc + 1).copied() == Some(OpCode::PutLoc3 as u8)
             && bc.get(pc + 2).copied() == Some(OpCode::Drop as u8)
         {
@@ -1424,18 +1454,105 @@ impl Interpreter {
         }
     }
 
+    #[inline]
+    fn try_consume_statement_local_store(&mut self, val: Value) -> bool {
+        let Some(frame) = self.call_stack.last_mut() else {
+            return false;
+        };
+        let bytecode = unsafe { &*frame.bytecode };
+        let bc = &bytecode.bytecode;
+        let pc = frame.pc;
+
+        let target = match bc.get(pc).copied() {
+            Some(x) if x == OpCode::PutLoc0 as u8 => {
+                frame.pc += 1;
+                Some(0usize)
+            }
+            Some(x) if x == OpCode::PutLoc1 as u8 => {
+                frame.pc += 1;
+                Some(1usize)
+            }
+            Some(x) if x == OpCode::PutLoc2 as u8 => {
+                frame.pc += 1;
+                Some(2usize)
+            }
+            Some(x) if x == OpCode::PutLoc3 as u8 => {
+                frame.pc += 1;
+                Some(3usize)
+            }
+            Some(x) if x == OpCode::PutLoc4 as u8 => {
+                frame.pc += 1;
+                Some(4usize)
+            }
+            Some(x) if x == OpCode::PutLoc8 as u8 => {
+                let idx = bc.get(pc + 1).copied().map(|x| x as usize);
+                if let Some(idx) = idx {
+                    frame.pc += 2;
+                    Some(idx)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(idx) = target {
+            self.store_local_slot(idx, val);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Set a property on an object
-    pub(crate) fn object_set_property(&mut self, obj_idx: u32, key: String, value: Value) {
+    pub(crate) fn object_set_property(
+        &mut self,
+        obj_idx: u32,
+        key: String,
+        value: Value,
+    ) -> InterpreterResult<()> {
         if let Some(obj) = self.get_object_mut(obj_idx) {
             // Check if property already exists
             for (k, v) in obj.properties.iter_mut() {
                 if k == &key {
                     *v = value;
-                    return;
+                    return Ok(());
                 }
             }
-            // Add new property
+
+            if let Some(accessor) = obj.accessors.iter().find(|a| a.key == key).cloned() {
+                if accessor.setter.is_undefined() {
+                    return Ok(());
+                }
+                let this_val = Value::object_idx(obj_idx);
+                let _ = self.call_value(accessor.setter, this_val, &[value])?;
+                return Ok(());
+            }
+
             obj.properties.push((key, value));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn object_define_accessor(
+        &mut self,
+        obj_idx: u32,
+        key: String,
+        getter: Value,
+        setter: Value,
+    ) {
+        if let Some(obj) = self.get_object_mut(obj_idx) {
+            obj.properties.retain(|(k, _)| k != &key);
+            if let Some(existing) = obj.accessors.iter_mut().find(|a| a.key == key) {
+                existing.getter = getter;
+                existing.setter = setter;
+            } else {
+                obj.accessors.push(ObjectAccessor {
+                    key,
+                    getter,
+                    setter,
+                });
+            }
         }
     }
 
@@ -1614,6 +1731,7 @@ impl Interpreter {
         };
 
         let err_obj = ErrorObject { name, message };
+        self.maybe_gc();
         let (err_idx, is_new) = self.gc.alloc_slot(&mut self.gen_error_objects);
         if is_new {
             self.error_objects.push(err_obj);
@@ -1938,7 +2056,12 @@ impl Interpreter {
                     frame.local0_string_builder = Some(out);
                 }
                 op if op == OpCode::GetLoc1 as u8 => {
-                    let val = self.load_local_slot(1);
+                    let frame = self.call_stack.last().unwrap();
+                    let val = if frame.local_cells.is_none() {
+                        unsafe { self.stack.get_local_at_unchecked(frame.frame_ptr, 1) }
+                    } else {
+                        self.load_local_slot(1)
+                    };
                     self.stack.push(val);
                 }
                 op if op == OpCode::GetLoc2 as u8 => {
@@ -2307,7 +2430,9 @@ impl Interpreter {
                     } else {
                         match self.try_op(self.op_add(a, b))? {
                             Some(result) => {
-                                if !self.try_consume_sieve_style_local_update(result) {
+                                if !self.try_consume_statement_local_store(result)
+                                    && !self.try_consume_sieve_style_local_update(result)
+                                {
                                     self.stack.push(result);
                                 }
                             }
@@ -2451,7 +2576,11 @@ impl Interpreter {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (b, a) = unsafe { self.stack.pop2_unchecked() };
                     match self.try_op(self.op_mul(a, b))? {
-                        Some(result) => self.stack.push(result),
+                        Some(result) => {
+                            if !self.try_consume_statement_local_store(result) {
+                                self.stack.push(result);
+                            }
+                        }
                         None => continue,
                     }
                 }
@@ -2490,6 +2619,31 @@ impl Interpreter {
                 op if op == OpCode::Lt as u8 => {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (b, a) = unsafe { self.stack.pop2_unchecked() };
+                    let branch = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let bc = &bytecode.bytecode;
+                        if frame.pc < bc.len() {
+                            let next = bc[frame.pc];
+                            if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
+                                && frame.pc + 4 < bc.len()
+                            {
+                                let offset = i32::from_le_bytes([
+                                    bc[frame.pc + 1],
+                                    bc[frame.pc + 2],
+                                    bc[frame.pc + 3],
+                                    bc[frame.pc + 4],
+                                ]);
+                                frame.pc += 5;
+                                Some((next == OpCode::IfTrue as u8, offset))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
                     // String lexicographic comparison
                     if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
@@ -2502,45 +2656,39 @@ impl Interpreter {
                             .get_string_content(b, bytecode)
                             .unwrap_or_default()
                             .to_string();
-                        self.stack.push(Value::bool(sa < sb));
-                    } else {
-                        let result = match self.try_op(self.op_lt(a, b))? {
-                            Some(result) => result,
-                            None => continue,
-                        };
-
-                        let branch = {
-                            let frame = self.call_stack.last_mut().unwrap();
-                            let bytecode = unsafe { &*frame.bytecode };
-                            let bc = &bytecode.bytecode;
-                            if frame.pc < bc.len() {
-                                let next = bc[frame.pc];
-                                if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
-                                    && frame.pc + 4 < bc.len()
-                                {
-                                    let offset = i32::from_le_bytes([
-                                        bc[frame.pc + 1],
-                                        bc[frame.pc + 2],
-                                        bc[frame.pc + 3],
-                                        bc[frame.pc + 4],
-                                    ]);
-                                    frame.pc += 5;
-                                    Some((next == OpCode::IfTrue as u8, offset))
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        };
-
+                        let result = sa < sb;
                         if let Some((branch_on_true, offset)) = branch {
-                            let is_truthy = Self::value_to_bool(result);
-                            if is_truthy == branch_on_true {
+                            if result == branch_on_true {
                                 let frame = self.call_stack.last_mut().unwrap();
                                 frame.pc = (frame.pc as i32 + offset) as usize;
                             }
                         } else {
+                            self.stack.push(Value::bool(result));
+                        }
+                    } else {
+                        if let Some((branch_on_true, offset)) = branch {
+                            let result = if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
+                                va < vb
+                            } else if let Some((fa, fb)) = crate::vm::ops::to_numeric_pair(self, a, b)
+                            {
+                                !fa.is_nan() && !fb.is_nan() && fa < fb
+                            } else {
+                                let result = match self.try_op(self.op_lt(a, b))? {
+                                    Some(result) => result,
+                                    None => continue,
+                                };
+                                Self::value_to_bool(result)
+                            };
+
+                            if result == branch_on_true {
+                                let frame = self.call_stack.last_mut().unwrap();
+                                frame.pc = (frame.pc as i32 + offset) as usize;
+                            }
+                        } else {
+                            let result = match self.try_op(self.op_lt(a, b))? {
+                                Some(result) => result,
+                                None => continue,
+                            };
                             self.stack.push(result);
                         }
                     }
@@ -2550,6 +2698,31 @@ impl Interpreter {
                 op if op == OpCode::Lte as u8 => {
                     // SAFETY: Stack operations are valid for well-formed bytecode
                     let (b, a) = unsafe { self.stack.pop2_unchecked() };
+                    let branch = {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        let bytecode = unsafe { &*frame.bytecode };
+                        let bc = &bytecode.bytecode;
+                        if frame.pc < bc.len() {
+                            let next = bc[frame.pc];
+                            if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
+                                && frame.pc + 4 < bc.len()
+                            {
+                                let offset = i32::from_le_bytes([
+                                    bc[frame.pc + 1],
+                                    bc[frame.pc + 2],
+                                    bc[frame.pc + 3],
+                                    bc[frame.pc + 4],
+                                ]);
+                                frame.pc += 5;
+                                Some((next == OpCode::IfTrue as u8, offset))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
                     if a.is_string() && b.is_string() {
                         let frame = self.call_stack.last().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
@@ -2561,45 +2734,39 @@ impl Interpreter {
                             .get_string_content(b, bytecode)
                             .unwrap_or_default()
                             .to_string();
-                        self.stack.push(Value::bool(sa <= sb));
-                    } else {
-                        let result = match self.try_op(self.op_lte(a, b))? {
-                            Some(result) => result,
-                            None => continue,
-                        };
-
-                        let branch = {
-                            let frame = self.call_stack.last_mut().unwrap();
-                            let bytecode = unsafe { &*frame.bytecode };
-                            let bc = &bytecode.bytecode;
-                            if frame.pc < bc.len() {
-                                let next = bc[frame.pc];
-                                if (next == OpCode::IfFalse as u8 || next == OpCode::IfTrue as u8)
-                                    && frame.pc + 4 < bc.len()
-                                {
-                                    let offset = i32::from_le_bytes([
-                                        bc[frame.pc + 1],
-                                        bc[frame.pc + 2],
-                                        bc[frame.pc + 3],
-                                        bc[frame.pc + 4],
-                                    ]);
-                                    frame.pc += 5;
-                                    Some((next == OpCode::IfTrue as u8, offset))
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        };
-
+                        let result = sa <= sb;
                         if let Some((branch_on_true, offset)) = branch {
-                            let is_truthy = Self::value_to_bool(result);
-                            if is_truthy == branch_on_true {
+                            if result == branch_on_true {
                                 let frame = self.call_stack.last_mut().unwrap();
                                 frame.pc = (frame.pc as i32 + offset) as usize;
                             }
                         } else {
+                            self.stack.push(Value::bool(result));
+                        }
+                    } else {
+                        if let Some((branch_on_true, offset)) = branch {
+                            let result = if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
+                                va <= vb
+                            } else if let Some((fa, fb)) = crate::vm::ops::to_numeric_pair(self, a, b)
+                            {
+                                !fa.is_nan() && !fb.is_nan() && fa <= fb
+                            } else {
+                                let result = match self.try_op(self.op_lte(a, b))? {
+                                    Some(result) => result,
+                                    None => continue,
+                                };
+                                Self::value_to_bool(result)
+                            };
+
+                            if result == branch_on_true {
+                                let frame = self.call_stack.last_mut().unwrap();
+                                frame.pc = (frame.pc as i32 + offset) as usize;
+                            }
+                        } else {
+                            let result = match self.try_op(self.op_lte(a, b))? {
+                                Some(result) => result,
+                                None => continue,
+                            };
                             self.stack.push(result);
                         }
                     }
@@ -3170,7 +3337,6 @@ impl Interpreter {
                             continue;
                         };
 
-                    self.maybe_gc();
                     // Check recursion limit
                     if self.call_stack.len() >= self.max_recursion {
                         self.try_handle_runtime_error(InterpreterError::InternalError(
@@ -3483,6 +3649,7 @@ impl Interpreter {
                             // Compile the regex
                             match regex::Regex::new(&regex_pattern) {
                                 Ok(regex) => {
+                                    self.maybe_gc();
                                     let (regex_idx, is_new) = self.gc.alloc_slot(&mut self.gen_regex_objects);
                                     let obj = RegExpObject {
                                         regex,
@@ -3563,6 +3730,7 @@ impl Interpreter {
                                 }
                             }
 
+                            self.maybe_gc();
                             let (typed_idx, is_new) = self.gc.alloc_slot(&mut self.gen_typed_arrays);
                             if is_new {
                                 self.typed_arrays.push(typed_arr);
@@ -3583,6 +3751,7 @@ impl Interpreter {
                             } else {
                                 Vec::new()
                             };
+                            self.maybe_gc();
                             let (arr_idx, is_new) = self.gc.alloc_slot(&mut self.gen_arrays);
                             if is_new {
                                 self.arrays.push(arr);
@@ -3602,6 +3771,7 @@ impl Interpreter {
                                 .unwrap_or(0);
 
                             let ab = ArrayBufferObject::new(byte_length);
+                            self.maybe_gc();
                             let (ab_idx, is_new) = self.gc.alloc_slot(&mut self.gen_array_buffers);
                             if is_new {
                                 self.array_buffers.push(ab);
@@ -3643,7 +3813,6 @@ impl Interpreter {
                             ));
                         };
 
-                    self.maybe_gc();
                     // Check recursion limit
                     if self.call_stack.len() >= self.max_recursion {
                         return Err(InterpreterError::InternalError(
@@ -3715,6 +3884,21 @@ impl Interpreter {
 
                     // Check if this is a native function call
                     if let Some(native_idx) = method_val.to_native_func_idx() {
+                        if Some(native_idx) == self.native_json_parse_idx
+                            && argc == 1
+                            && this_val.to_builtin_object_idx() == Some(BUILTIN_JSON)
+                        {
+                            let a0 =
+                                self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                            let args = [a0];
+                            let result = native_json_parse(self, this_val, &args)
+                                .map_err(Interpreter::classify_native_error);
+                            if let Some(result) = self.try_op(result)? {
+                                self.stack.push(result);
+                            }
+                            continue;
+                        }
+
                         if Some(native_idx) == self.native_array_push_idx {
                             if let Some(arr_idx) = this_val.to_array_idx() {
                                 let discard_result = {
@@ -3857,7 +4041,6 @@ impl Interpreter {
                             continue;
                         };
 
-                    self.maybe_gc();
                     // Check recursion limit
                     if self.call_stack.len() >= self.max_recursion {
                         self.try_handle_runtime_error(InterpreterError::InternalError(
@@ -4092,13 +4275,7 @@ impl Interpreter {
                     let val = self.stack.peek().unwrap_or_default();
 
                     // Update or insert into global_vars
-                    let name_owned = String::from(name);
-                    if let Some(entry) = self.global_vars.iter_mut().find(|(n, _)| *n == name_owned)
-                    {
-                        entry.1 = val;
-                    } else {
-                        self.global_vars.push((name_owned, val));
-                    }
+                    self.global_vars.insert(String::from(name), val);
                 }
 
                 // Catch - set up exception handler
@@ -4529,9 +4706,9 @@ impl Interpreter {
                       })?;
 
                       let val = if let Some(obj_idx) = obj.to_object_idx() {
-                          self.object_get_property(obj_idx, prop_name)
+                          self.object_get_property(obj_idx, prop_name)?
                       } else {
-                          self.get_field_value(obj, prop_name)
+                          self.get_field_value(obj, prop_name)?
                       };
                       self.stack.push(val);
                   }
@@ -4572,13 +4749,92 @@ impl Interpreter {
                       })?;
 
                       let val = if let Some(obj_idx) = obj.to_object_idx() {
-                          self.object_get_property(obj_idx, prop_name)
+                          self.object_get_property(obj_idx, prop_name)?
                       } else {
-                          self.get_field_value(obj, prop_name)
+                          self.get_field_value(obj, prop_name)?
                       };
 
                     // Push the property value (object is still on stack below it)
                     self.stack.push(val);
+                }
+
+                op if op == OpCode::GetFieldChain4 as u8 => {
+                    let frame = self.call_stack.last_mut().unwrap();
+                    let bytecode = unsafe { &*frame.bytecode };
+                    let bc = &bytecode.bytecode;
+                    let i0 = u16::from_le_bytes([bc[frame.pc], bc[frame.pc + 1]]) as usize;
+                    let i1 = u16::from_le_bytes([bc[frame.pc + 2], bc[frame.pc + 3]]) as usize;
+                    let i2 = u16::from_le_bytes([bc[frame.pc + 4], bc[frame.pc + 5]]) as usize;
+                    let i3 = u16::from_le_bytes([bc[frame.pc + 6], bc[frame.pc + 7]]) as usize;
+                    frame.pc += 8;
+                    let p0 = bytecode.string_constants.get(i0).ok_or_else(|| {
+                        InterpreterError::InternalError(format!("invalid string index: {}", i0))
+                    })?;
+                    let p1 = bytecode.string_constants.get(i1).ok_or_else(|| {
+                        InterpreterError::InternalError(format!("invalid string index: {}", i1))
+                    })?;
+                    let p2 = bytecode.string_constants.get(i2).ok_or_else(|| {
+                        InterpreterError::InternalError(format!("invalid string index: {}", i2))
+                    })?;
+                    let p3 = bytecode.string_constants.get(i3).ok_or_else(|| {
+                        InterpreterError::InternalError(format!("invalid string index: {}", i3))
+                    })?;
+
+                    let mut current = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+
+                    macro_rules! step {
+                        ($prop:expr) => {{
+                            if current.is_null() || current.is_undefined() {
+                                let type_name = if current.is_null() { "null" } else { "undefined" };
+                                self.try_handle_runtime_error(InterpreterError::TypeError(format!(
+                                    "Cannot read properties of {} (reading '{}')",
+                                    type_name, $prop
+                                )))?;
+                                continue;
+                            }
+
+                            current = if let Some(obj_idx) = current.to_object_idx() {
+                                self.object_get_property(obj_idx, $prop)?
+                            } else {
+                                self.get_field_value(current, $prop)?
+                            };
+                        }};
+                    }
+
+                    step!(p0);
+                    step!(p1);
+                    step!(p2);
+                    step!(p3);
+
+                    self.stack.push(current);
+                }
+
+                op if op == OpCode::SwitchCaseI8 as u8 => {
+                    let frame = self.call_stack.last_mut().unwrap();
+                    let bytecode = unsafe { &*frame.bytecode };
+                    let bc = &bytecode.bytecode;
+                    let case_val = bc[frame.pc] as i8 as i32;
+                    let offset = i32::from_le_bytes([
+                        bc[frame.pc + 1],
+                        bc[frame.pc + 2],
+                        bc[frame.pc + 3],
+                        bc[frame.pc + 4],
+                    ]);
+                    frame.pc += 5;
+
+                    let top = self.stack.peek().ok_or(InterpreterError::StackUnderflow)?;
+                    let is_match = if let Some(i) = top.to_i32() {
+                        i == case_val
+                    } else if let Some(f) = top.to_f32() {
+                        !f.is_nan() && f == case_val as Float
+                    } else {
+                        false
+                    };
+
+                    if is_match {
+                        let frame = self.call_stack.last_mut().unwrap();
+                        frame.pc = (frame.pc as i32 + offset) as usize;
+                    }
                 }
 
                 // GetArrayPush2 - get `.push`, keep object: obj -> obj value
@@ -4597,9 +4853,9 @@ impl Interpreter {
                     let val = if obj.is_array() {
                         self.native_array_push_idx
                             .map(Value::native_func)
-                            .unwrap_or_else(|| self.get_field_value(obj, "push"))
+                            .unwrap_or_else(|| self.get_field_value(obj, "push").unwrap_or_default())
                     } else {
-                        self.get_field_value(obj, "push")
+                        self.get_field_value(obj, "push")?
                     };
                     self.stack.push(val);
                 }
@@ -4633,7 +4889,7 @@ impl Interpreter {
 
                     // Set property on object
                     if let Some(obj_idx) = obj.to_object_idx() {
-                        self.object_set_property(obj_idx, prop_name, val);
+                        self.object_set_property(obj_idx, prop_name, val)?;
                     }
                     // Push the assigned value back (assignment is an expression)
                     self.stack.push(val);
@@ -4690,7 +4946,10 @@ impl Interpreter {
                         if let Some(name) = prop_name {
                             let obj_props = self.get_object(obj_idx);
                             let exists = obj_props
-                                .map(|props| props.properties.iter().any(|(k, _)| k == &name))
+                                .map(|props| {
+                                    props.properties.iter().any(|(k, _)| k == &name)
+                                        || props.accessors.iter().any(|a| a.key == name)
+                                })
                                 .unwrap_or(false);
                             Value::bool(exists)
                         } else {
@@ -4761,9 +5020,14 @@ impl Interpreter {
                         // Delete property from object
                         if let Some(name) = prop_name {
                             if let Some(obj_props) = self.get_object_mut(obj_idx) {
-                                let orig_len = obj_props.properties.len();
+                                let orig_props_len = obj_props.properties.len();
+                                let orig_accessors_len = obj_props.accessors.len();
                                 obj_props.properties.retain(|(k, _)| k != &name);
-                                Value::bool(obj_props.properties.len() < orig_len)
+                                obj_props.accessors.retain(|a| a.key != name);
+                                Value::bool(
+                                    obj_props.properties.len() < orig_props_len
+                                        || obj_props.accessors.len() < orig_accessors_len,
+                                )
                             } else {
                                 Value::bool(false)
                             }
@@ -4862,7 +5126,13 @@ impl Interpreter {
                     // Create iterator based on value type
                     let iter = if let Some(obj_idx) = obj.to_object_idx() {
                         if let Some(obj_instance) = self.get_object(obj_idx) {
-                            ForInIterator::from_object_idx(obj_idx, obj_instance.properties.len())
+                            let mut keys = Vec::with_capacity(obj_instance.properties.len());
+                            let prop_names: Vec<String> =
+                                obj_instance.properties.iter().map(|(k, _)| k.clone()).collect();
+                            for key in &prop_names {
+                                keys.push(self.create_runtime_string_for_in_key(key)?);
+                            }
+                            ForInIterator::from_object_keys(keys)
                         } else {
                             ForInIterator::empty()
                         }
@@ -4878,6 +5148,7 @@ impl Interpreter {
                     };
 
                     // Store iterator and push reference
+                    self.maybe_gc();
                     let (iter_idx, is_new) = self.gc.alloc_slot(&mut self.gen_for_in_iterators);
                     if is_new {
                         self.for_in_iterators.push(iter);
@@ -4895,8 +5166,7 @@ impl Interpreter {
                         if self.for_in_iterators.get(iter_idx as usize).is_some() {
                             if let Some(key) = self.for_in_next_key(iter_idx as usize) {
                                 // Push key and false (not done)
-                                let key_val = self.create_runtime_string_for_in_key(&key)?;
-                                self.stack.push(key_val);
+                                self.stack.push(key);
                                 self.stack.push(Value::bool(false)); // not done
                             } else {
                                 // Push undefined and true (done)
@@ -4938,6 +5208,7 @@ impl Interpreter {
                     };
 
                     // Store iterator and push reference
+                    self.maybe_gc();
                     let (iter_idx, is_new) = self.gc.alloc_slot(&mut self.gen_for_of_iterators);
                     if is_new {
                         self.for_of_iterators.push(iter);
@@ -4950,7 +5221,6 @@ impl Interpreter {
                 // ForOfNext - Get next for-of value: iter -> value done
                 op if op == OpCode::ForOfNext as u8 => {
                     let iter_val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
-
                     let branch = {
                         let frame = self.call_stack.last_mut().unwrap();
                         let bytecode = unsafe { &*frame.bytecode };
@@ -5103,17 +5373,13 @@ impl Interpreter {
         let idx = self.native_functions.len() as u32;
         self.native_functions
             .push(NativeFunction { name, func, arity });
+        self.native_func_index.insert(name, idx);
         idx
     }
 
     /// Get a native function value by name
     pub fn get_native_func(&self, name: &str) -> Option<Value> {
-        for (idx, nf) in self.native_functions.iter().enumerate() {
-            if nf.name == name {
-                return Some(Value::native_func(idx as u32));
-            }
-        }
-        None
+        self.native_func_index.get(name).copied().map(Value::native_func)
     }
 
     // Native function dispatch and registration moved to src/vm/natives.rs

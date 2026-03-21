@@ -6,7 +6,7 @@
 use crate::runtime::FunctionBytecode;
 use crate::value::{float_to_value, Value};
 use crate::vm::stack::Stack;
-use alloc::{string::String, vec, vec::Vec};
+use alloc::{collections::BTreeMap, string::String, vec, vec::Vec};
 use core::cell::UnsafeCell;
 
 // Builtin object indices
@@ -96,6 +96,17 @@ pub struct ObjectInstance {
     pub constructor: Option<Value>,
     /// Object properties as key-value pairs
     pub properties: Vec<(String, Value)>,
+    /// Accessor properties defined via Object.defineProperty({ get, set }).
+    /// These are treated as non-enumerable by default.
+    pub accessors: Vec<ObjectAccessor>,
+}
+
+/// Accessor property storage for the VM object model.
+#[derive(Debug, Clone)]
+pub struct ObjectAccessor {
+    pub key: String,
+    pub getter: Value,
+    pub setter: Value,
 }
 
 impl Default for ObjectInstance {
@@ -110,6 +121,7 @@ impl ObjectInstance {
         ObjectInstance {
             constructor: None,
             properties: Vec::new(),
+            accessors: Vec::new(),
         }
     }
 
@@ -118,6 +130,7 @@ impl ObjectInstance {
         ObjectInstance {
             constructor: Some(constructor),
             properties: Vec::new(),
+            accessors: Vec::new(),
         }
     }
 }
@@ -125,12 +138,8 @@ impl ObjectInstance {
 /// For-in iterator state
 #[derive(Debug, Clone)]
 pub enum ForInIterator {
-    /// Iterate object keys by index with snapshot length
-    Object {
-        obj_idx: u32,
-        len: usize,
-        index: usize,
-    },
+    /// Iterate over a snapshot of already-materialized object keys
+    ObjectKeys { keys: Vec<Value>, index: usize },
     /// Iterate array indices with snapshot length
     Array { len: usize, index: usize },
     /// Empty iterator
@@ -138,13 +147,9 @@ pub enum ForInIterator {
 }
 
 impl ForInIterator {
-    /// Create a new for-in iterator from an object index and property count snapshot
-    pub fn from_object_idx(obj_idx: u32, len: usize) -> Self {
-        ForInIterator::Object {
-            obj_idx,
-            len,
-            index: 0,
-        }
+    /// Create a new for-in iterator from a snapshot of object keys
+    pub fn from_object_keys(keys: Vec<Value>) -> Self {
+        ForInIterator::ObjectKeys { keys, index: 0 }
     }
 
     /// Create a new for-in iterator from an array length snapshot
@@ -486,6 +491,8 @@ pub struct Interpreter {
     pub(crate) for_of_iterators: Vec<ForOfIterator>,
     /// Native function registry
     pub(crate) native_functions: Vec<NativeFunction>,
+    /// Name → index lookup cache for O(1) native function dispatch
+    pub(crate) native_func_index: BTreeMap<&'static str, u32>,
     /// Cached native index for Array.prototype.push
     pub(crate) native_array_push_idx: Option<u32>,
     /// Cached native index for Array.prototype.map
@@ -494,8 +501,12 @@ pub struct Interpreter {
     pub(crate) native_array_filter_idx: Option<u32>,
     /// Cached native index for Array.prototype.reduce
     pub(crate) native_array_reduce_idx: Option<u32>,
+    /// Cached native index for JSON.parse
+    pub(crate) native_json_parse_idx: Option<u32>,
+    /// Cached runtime strings for repeated for-in keys
+    pub(crate) for_in_key_cache: Vec<(String, Value)>,
     /// Global variables set by top-level function declarations (SetGlobal opcode)
-    pub(crate) global_vars: Vec<(String, Value)>,
+    pub(crate) global_vars: BTreeMap<String, Value>,
     /// Error objects created during execution
     /// Stores (error_type, message) pairs
     pub(crate) error_objects: Vec<ErrorObject>,

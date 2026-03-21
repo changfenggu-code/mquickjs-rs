@@ -225,7 +225,7 @@ impl Interpreter {
                 }
                 "stack" => {
                     // Return a simple stack trace (just error type and message for now)
-                    let stack = format!("{}:{}", err.name, err.message);
+                    let stack = format!("{}: {}", err.name, err.message);
                     self.create_runtime_string(stack)
                 }
                 "toString" => self
@@ -362,7 +362,10 @@ impl Interpreter {
                 // JSON object properties
                 match prop_name {
                     "stringify" => self.get_native_func("JSON.stringify").unwrap_or_default(),
-                    "parse" => self.get_native_func("JSON.parse").unwrap_or_default(),
+                    "parse" => self
+                        .native_json_parse_idx
+                        .map(Value::native_func)
+                        .unwrap_or_else(|| self.get_native_func("JSON.parse").unwrap_or_default()),
                     _ => Value::undefined(),
                 }
             }

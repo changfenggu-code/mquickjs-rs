@@ -435,27 +435,53 @@ mquickjs-rs/
 
 ---
 
-### 垃圾回收 (src/gc/)
+### 垃圾回收
 
-#### **[src/gc/mod.rs](../src/gc/mod.rs)**
+#### 活跃 GC：Plan B（src/vm/gc.rs）
+
+**[src/vm/gc.rs](../src/vm/gc.rs)**
+- **功能**：代际式标记-清除（generation-based mark-sweep）垃圾回收器
+- **设计**：
+  - 所有堆对象存储在 Vec 中，通过索引引用
+  - 使用 `gen[]` 代际数组标记活跃/空闲槽位
+  - 迭代式标记（堆分配工作队列，无栈溢出）
+  - 空闲槽位复用（free-list allocation）
+  - 自适应触发阈值调整
+- **GC 托管容器**：
+  - closures, var_cells, arrays, objects
+  - for_in_iterators, for_of_iterators
+  - error_objects, regex_objects
+  - typed_arrays, array_buffers, timers
+- **根集合**：
+  - 值栈 / 活跃调用帧
+  - 全局变量
+  - 通过 var_cells 捕获的闭包
+  - timers.callback
+- **特性**：
+  - 支持循环引用回收
+  - `no_std` 兼容（仅使用 `alloc`）
+  - 详见 `docs/GC_PROGRESS.md`
+
+#### Plan C 预备（src/gc/）
+
+**[src/gc/mod.rs](../src/gc/mod.rs)**
 - GC 模块入口
 
-#### **[src/gc/allocator.rs](../src/gc/allocator.rs)**
+**[src/gc/allocator.rs](../src/gc/allocator.rs)**
 - **功能**：竞技场分配器（Arena allocator）
 - **设计**：
   - 基于内存块的连续分配
   - 快速分配和释放
   - 适用于嵌入式环境
+- **用途**：被 `Context` 用于内存统计，同时是 Plan C arena 的预备代码
 
-#### **[src/gc/collector.rs](../src/gc/collector.rs)**
-- **功能**：标记-压缩垃圾回收器
-- **算法**：
-  - 标记阶段：从根集合遍历可达对象
-  - 压缩阶段：移动存活对象，消除碎片
-- **特性**：
-  - 增量收集（可选）
-  - 可配置的收集阈值
-  - 内存统计
+**[src/gc/collector.rs](../src/gc/collector.rs)**
+- **状态**：占位符 stub — `collect()` 调用保守的 `mark_all()`
+- **目的**：Plan C（完整标记-压缩 GC）的起点代码
+- **未来工作**：
+  - 完成 `mark_object()` 对所有类型的支持
+  - 实现压缩阶段的指针更新逻辑
+  - `Value` 从索引编码改为指针编码（影响约 20 个文件、1850 行）
 
 ---
 

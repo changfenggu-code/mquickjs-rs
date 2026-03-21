@@ -88,9 +88,9 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 - 旧的 2026 年 3 月 16 日 Criterion 数值因此不能直接与当前口径对比
 - 因此 benchmark 基线清理应重新视为进行中工作，而不是已关闭工作
 
-### 当前工作树的重验证快照（2026-03-17）
+### 历史重验证快照（2026-03-17）
 
-下表来自当前工作树上的重新测量，使用的是更新后的“编译一次、重复测执行”Criterion 口径，应视为主 benchmark 集合的当前可信快照。
+下表来自 compile-once 执行期 Criterion 口径落地后的第一轮重跑。它们仍然有历史参考价值，但已经不应继续被视为当前 head 的“当前可信快照”。
 
 | Benchmark | 当前本地快照 |
 |-----------|--------------|
@@ -104,57 +104,86 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 | `for_of_array 20k` | `1.796–1.959 ms` |
 | `deep_property 200k` | `14.925–15.235 ms` |
 
-### 次级跟踪 benchmark（2026-03-17 尚未重跑，沿用上次记录）
+### 当前 head 的最新 broad rerun（2026-03-21）
 
-这些数值仍然有参考意义，但截至 2026 年 3 月 17 日，它们还没有在新的“编译一次、重复测执行”Criterion 口径下重新验证。
+这轮重跑的重要结论，不是“这就是新的黄金基线”，而是当前 head 相对 2026-03-17 那组历史快照已经出现了广泛漂移；因此 benchmark baseline correctness 必须重新视为打开状态。
 
-| Benchmark | 上次记录的快照 |
-|-----------|----------------|
-| `switch 1k` | `0.132–0.136 ms` |
-| `try_catch 5k` | `0.341–0.349 ms` |
-| `for_in_object 20x2000` | `3.743–3.804 ms` |
+| Benchmark | 最新 broad rerun |
+|-----------|------------------|
+| `array push 10k` | `766.00–946.17 µs` |
+| `string concat 1k` | `164.20–205.55 µs` |
+| `json parse 1k` | `1.8986–2.3272 ms` |
+| `sieve 10k` | `2.3860–2.8523 ms` |
+| `method_chain 5k` | `1.4008–1.7708 ms` |
+| `runtime_string_pressure 4k` | `1.4943–1.8702 ms` |
+| `for_of_array 20k` | `2.1365–2.5288 ms` |
+| `deep_property 200k` | `19.605–23.419 ms` |
+
+当前解读：
+
+- 这已经不是“继续挑下一个微热点”的阶段；
+- 当前 head 的 broad rerun 说明，多条 headline benchmark 相比 3 月 17 日那组历史快照都已经明显漂移；
+- 因此接下来的优化轮次，应该先以“重新校准 benchmark 基线”为前提，而不是继续直接拿 3 月 17 日那组快照做判断。
+
+### 次级跟踪 benchmark
+
+这些数值现在应拆开看：
+
+- 一组是 2026-03-17 的历史快照
+- 另一组是 2026-03-21 在当前稳定工作树上的重跑结果
+
+这样可以明确区分哪些数字只是历史参考，哪些数字已经真正对当前 head 做过复测。
+
+| Benchmark | 历史快照 | 当前 head 重跑 |
+|-----------|----------|----------------|
+| `switch 1k` | `0.132–0.136 ms` | `0.282–0.337 ms` |
+| `try_catch 5k` | `0.341–0.349 ms` | `0.433–0.544 ms` |
+| `for_in_object 20x2000` | `3.743–3.804 ms` | `9.911–11.992 ms` |
 
 ## 当前基线（本地 Rust vs C，含进程启动）
 
 以下数据基于本地多次进程执行的平均值，适用于跨实现对比。包含进程启动成本。
 
-### 启动基线
+### 启动基线（最新本地重跑，2026-03-21）
 
 | 场景 | Rust | C | 比率 |
 |------|------|---|------|
-| `mqjs -e "0"` | `18.130 ms` | `17.407 ms` | `1.042x` |
+| `mqjs -e "0"` | `41.300 ms` | `51.700 ms` | `0.799x` |
 
-### 脚本对比
+### 脚本对比（最新本地重跑，2026-03-21）
 
 | Benchmark | Rust | C | 比率 | 备注 |
 |-----------|------|---|------|------|
-| `fib` | `183.099 ms` | `118.815 ms` | `1.541x` | C 更快 |
-| `loop` | `127.598 ms` | `86.453 ms` | `1.476x` | C 更快 |
-| `array` | `17.673 ms` | `16.467 ms` | `1.073x` | C 略快 |
-| `json` | `44.048 ms` | `64.280 ms` | `0.685x` | Rust 更快 |
-| `sieve` | `37.343 ms` | `27.791 ms` | `1.344x` | C 更快 |
-| `method_chain` | `15.795 ms` | `14.109 ms` | `1.119x` | C 略快 |
-| `runtime_string_pressure` | `22.470 ms` | `19.185 ms` | `1.171x` | C 更快 |
-| `for_of_array` | `19.509 ms` | `17.358 ms` | `1.124x` | C 更快 |
-| `deep_property` | `32.465 ms` | `24.001 ms` | `1.353x` | C 更快 |
-| `switch_case` | `18.495 ms` | `16.856 ms` | `1.097x` | C 略快 |
-| `try_catch` | `16.097 ms` | `14.508 ms` | `1.110x` | C 略快 |
-| `for_in_object` | `22.356 ms` | `17.633 ms` | `1.268x` | C 更快 |
+| `fib` | `63.200 ms` | `49.900 ms` | `1.266x` | C 更快 |
+| `loop` | `38.900 ms` | `34.800 ms` | `1.119x` | C 更快 |
+| `array` | `35.300 ms` | `31.100 ms` | `1.135x` | C 更快 |
+| `json` | `51.600 ms` | `44.500 ms` | `1.159x` | C 更快 |
+| `sieve` | `55.500 ms` | `47.600 ms` | `1.166x` | C 更快 |
+| `method_chain` | `31.700 ms` | `26.700 ms` | `1.191x` | C 更快 |
+| `runtime_string_pressure` | `29.700 ms` | `25.500 ms` | `1.162x` | C 更快 |
+| `for_of_array` | `39.900 ms` | `47.600 ms` | `0.840x` | Rust 更快 |
+| `deep_property` | `53.500 ms` | `72.400 ms` | `0.739x` | Rust 更快 |
+| `switch_case` | `72.300 ms` | `43.400 ms` | `1.666x` | C 更快 |
+| `try_catch` | `41.900 ms` | `61.300 ms` | `0.684x` | Rust 更快 |
+| `for_in_object` | `58.200 ms` | `64.900 ms` | `0.897x` | Rust 更快 |
 
 ## 解读说明
 
 ### 当前最强信号
 
-- `json` 仍然是 Rust 引擎的相对优势项。
-- 更新后的执行期口径重跑说明，`fib` 和 `loop` 仍然是调用路径与 dispatch 的有效观察窗。
-- `array` 和 `sieve` 仍然是 dense array 与 builtin 调用成本的重要观察窗。
-- `runtime_string_pressure` 和 `method_chain` 仍然是高价值的运行时目标。最新一轮字符串专项重跑里，`runtime_string_pressure` 落在 `0.87–0.89 ms` 量级，`method_chain` 落在 `0.72–0.73 ms` 量级。
-- 更新后的窄范围语句级局部自拼接 lowering（`AppendConstStringToLoc0`）已经把专门的 `string concat 1k` 微基准明显拉下来了，并把它的运行时字符串创建次数降到了 `1`；与此同时，更广义的 `runtime_string_pressure` 仍然保持在同一个亚毫秒量级。
-- 在这之上，`AddConstStringSurroundValue` 又把最热的 `const + value + const + value` 形状继续合并了一层，使 `runtime_string_pressure` 的 concat 运行时字符串创建次数从 `8001` 进一步降到 `4001`。
-- 对当前这一轮优化来说，字符串主线已经达到了可接受的阶段目标：专门的 `string concat 1k` 路径已修好，`runtime_string_pressure` 仍然保持在亚毫秒量级，同时 `method_chain` 没有再被字符串优化拖坏。后续如果继续做字符串线，更适合视为一个更广义的字符串表示改造项目。
-- `for_of_array` 在 `ForOfNext` 分支融合之后又有一轮明显改善，现在健康得多，但仍然是有价值的迭代器/控制流观察窗。
-- `deep_property` 仍然是高价值的对象属性访问 benchmark，而且当前看起来比迭代器/字符串压力这组路径更健康。
-- `switch_case` 现已作为次要控制流 benchmark 被跟踪，最新的 `StrictEq` 热路径优化已显示出可测量的改善。
+- `json parse` 仍然是当前最明确的活动主线，因为它确实拿到过稳定的定向收益；但它也正好说明了为什么现在必须先重建 benchmark 基线，再继续解释后续微优化结果。
+- 最新一轮本地 Rust vs C 对比里，`json` 已经不再是 Rust 的相对强项；在当前 head 的进程级重跑里，它又回到了 C 更快的一侧。
+- `for_of_array`、`deep_property` 和 `try_catch` 在最新的本地进程级对比里则反过来表现为 Rust 更快，而当前 benchmark 集合里的多数其余项目仍然是 C 更快。
+- `array push`、`sieve`、`for_of_array`、`deep_property`、`method_chain`、`runtime_string_pressure` 这些 benchmark 仍然重要，但在最新 broad rerun 已明显漂移的前提下，旧的“当前健康区间”说法现在都应该先降级为历史参考，而不是继续当作当前真相。
+- 字符串主线、迭代器主线、对象属性主线都确实有过真实收益，但这些收益在当前 head 上需要重新放回新的 baseline 口径里解释，而不是直接沿用旧结论。
+- 次级控制流 / 异常 benchmark（`switch_case`、`try_catch`）在当前 head 的重跑里也明显抬高了，这进一步说明 baseline cleanup 仍然没有关单。
+- `for_in_object` 当前应视为混合状态：
+  - 结构性 key 复用修复已经让 Rust 侧能稳定跑完，不再耗尽 runtime string table；
+  - 本地进程级 Rust vs C 对比现在也已经变成 Rust 略快；
+  - 但它的当前 Criterion 时间仍远高于更早的历史快照，所以目前更适合解读为“正确性修复已落地，性能基线仍待清理”。
+- `switch_case` 现已作为次要控制流 benchmark 被跟踪，并且在当前 head 上又拿到了一条新的结构收益：
+  - `SwitchCaseI8` 把最热的整数 case-chain 比较路径收短后，`switch 1k` 已经进到 `223–277 µs` 区间；
+  - 但本地 Rust vs C 对比里当前仍然是 C 更快（`1.666x`），所以这条线更适合被视为“局部字节码形状收益”，而不是整个控制流基线已经恢复健康的证明。
 - `try_catch` 现已作为次要异常控制 benchmark 被跟踪，已记录清理后的基线。
 - `for_in_object` 现已作为次要迭代器/控制流 benchmark 被跟踪，迭代器初始化清理后记录了第一个基线。
 
@@ -224,7 +253,7 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 当前 dump 模式探测显示：
 
 - `runtime_string_pressure` 几乎完全由拼接驱动。
-- `for_in_object` 主要由重复的 for-in key 创建请求主导。
+- `for_in_object` 现在主要由重复的 for-in key 处理，以及 key 值上的 `GetLength` 路径主导。
 - `deep_property` 基本不产生运行时字符串。
 - `json_parse` 目前大多落入通用的 other 类别。
 
@@ -235,6 +264,98 @@ CI 结果在 GitHub 上有用且可见，但本地 Criterion 和本地 Rust vs C
 更新后的 9.3.3 结论：
 
 - `runtime_string_pressure` 仍然完全由 concat 驱动。
-- `for_in_object` 在当前“无复用”路径下仍会耗尽 runtime string 表，但现在会以可控引擎错误失败，而不是 panic。
+- 当前稳定工作树上的 `for_in_object` 已经不会再耗尽 runtime string 表，因为 `for-in` key 路径现在会复用重复 key 的 runtime string。
 - object_keys 已经确认是一个独立的 runtime string 来源桶。
 - json_parse 目前仍然落在通用 other 桶里，如果继续推进这条主线，下一步应继续把它拆细。
+
+## 2026-03-21 UTF-8 补充：下一条大主线建议
+
+- 当前这轮结构 cleanup 之后，`json parse`、`switch_case`、`for_in_object` 都应先视为阶段性收住：
+  - `json parse`：稳定收益已拿到，后续实验开始进入高噪声区；
+  - `switch_case`：`SwitchCaseI8` 已经是可保留的结构收益；
+  - `for_in_object`：结构/正确性修复已完成，但性能解释继续留在 baseline cleanup 上下文里。
+- 当前 broad rerun 和最新 Rust vs C 更像在提醒我们：
+  - 下一条值得深做的，不再是 parser 内部或次级控制流小形状；
+  - 而是 `loop` / `sieve` 共享的比较与循环骨架。
+- 当前最像值得继续打的共享路径是：
+  - `GetLoc*`
+  - `Lt` / `Lte`
+  - `IfFalse`
+  - `Goto`
+- 这样选的原因是：
+  - `loop` 和 `sieve` 在最新本地 Rust vs C 里都还是 Rust 落后；
+  - 它们都是 headline benchmark；
+  - 同时这条线还能继续做，而不用重新打开已经冻结的 dense-array 读侧微优化。
+- 所以，当前 baseline cleanup 收到足够可信的阶段后，推荐的下一条正式主线是：
+  - `loop/sieve` 的 comparison-and-branch skeleton tightening
+
+## 2026-03-21 UTF-8 补充：fib / switch_case 复查结论
+
+- 后续又补跑了一轮更窄的定向 benchmark：
+  - `fib_iter 1k`：`5.3292–6.2708 ms`
+  - `switch 1k`：`281.10–345.33 µs`
+- 当前结论应更新为：
+  - `switch_case` 仍然算“结构收益已落地”：
+    - `SwitchCaseI8` 仍在发码；
+    - 它不是当前最值得重开的回归线。
+  - 真正更重的当前回归信号是 `fib_iter`：
+    - 它相比更早的 `2.330–2.379 ms` 历史区间漂移得更厉害；
+    - 这说明下一条大主线里，`fib` / call-recursion overhead 的优先级应高于继续重开 `switch_case`。
+- 所以当前更实用的优先级应读成：
+  - 第一层：`fib` / call-recursion overhead
+  - 第二层：`loop/sieve` 的 comparison-and-branch skeleton
+  - `switch_case` 继续冻结，除非后面 profiling 出现新的 switch 专属热点形状
+- dump-mode 热点现在也更直接支持这个判断：
+  - `fib_iter`
+    - 当前主要仍然花在“调用邻近的小循环骨架 + 局部槽位流量”上；
+    - 内层迭代 fib 本体最显眼的是：
+      - `GetLoc3`
+      - `Drop`
+      - `Dup`
+      - `GetLoc0`
+      - `Lte`
+      - `GetLoc2`
+      - `PutLoc2`
+      - `Goto`
+      - `Add`
+      - `GetLoc4`
+      - `PutLoc3`
+      - `GetLoc8`
+      - `PutLoc8`
+      - `IncLoc4Drop`
+    - 这更像“调用/递归开销叠加小循环与局部更新骨架”的问题，而不是单纯算术本身慢。
+  - `switch_case`
+    - `SwitchCaseI8` 在最新 dump 快照里仍然执行了 `108000` 次；
+    - 所以它当前剩余成本更像是 switch 外围的 loop/add/update 骨架，而不是旧的整数 case 比较链。
+- 实际结论：
+  - `fib_iter` 现在是更清楚的下一条目标；
+  - `switch_case` 继续保持冻结更合理，除非后续出现新的 switch 专属热点形状。
+- `fib_iter` 这条线现在也已经拿到了第一条稳定收益：
+  - 自动 GC trigger 记账不再挂在每一次通用 JS 调用路径上；
+  - 而是改成挂在真实的 GC-managed allocation path 上。
+- 结果：
+  - 定向重跑：`fib_iter 1k` 下降到 `3.5469–4.1842 ms`
+  - 后续复跑仍在同一档：`3.5909–4.2369 ms`
+- 当前解读：
+  - 这更像是在说明：前面那轮 `fib_iter` 大回退，不是“算术本身突然变慢”，而是 GC trigger bookkeeping 被放进了热调用路径；
+  - 现在这条成本被挪回真正的 allocation path 之后，`fib_iter` 已经明显回来了；
+  - 对应的 GC 自动触发回归仍然通过，所以这不是拿 GC 功能换来的 benchmark 数字。
+- 当前稳定树上的后续重跑又给出了一组更适合收口的数字：
+  - `fib_iter 1k`：`3.0507–3.6993 ms`
+  - `loop 10k`：`690.21–846.31 µs`
+  - `sieve 10k`：`2.9538–3.5064 ms`
+- 当前解读应更新为：
+  - `fib_iter` 这条线的第一条稳定收益仍然成立；
+  - 后续那条会拖慢 `loop` 的跟进实验已经撤回，说明这条线已经进入“再往下做就开始高噪声 / 高误伤”的区域；
+-  - 所以按当前 stop rule，更合理的做法不是继续硬抠 `fib_iter`，而是把它视为当前阶段基本收口，然后把主线切回 `loop/sieve`。
+- 回到 `loop/sieve` 主线之后，又拿到了一条共享结构收益：
+  - 非字符串 `Add / Mul` 在后面紧跟语句级 `PutLoc0..4` / `PutLoc8 <idx>` 时，现在会直接完成本地存储，不再先把结果压栈再立刻被本地存储弹掉。
+- 结果：
+  - `fib_iter 1k`：`2.2286–2.6849 ms`
+  - `loop 10k`：`455.86–559.99 µs`
+  - `sieve 10k`：`1.8323–2.1708 ms`
+- 当前解读：
+  - 这说明当前真正值钱的共享热点，确实是语句级本地算术结果物化；
+  - 它不只帮了 `sieve`，也把 `loop` 和 `fib_iter` 一起往下拉了一截；
+  - 因此这条收益应记为“回到 loop/sieve 主线后的第一条共享稳定收益”。
+  - 到现在为止，`fib_iter` 已经拿到两条稳定收益，按当前 stop rule，可以把它视为本阶段基本完成，然后把主线切回 `loop/sieve`。

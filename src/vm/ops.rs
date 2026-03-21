@@ -61,7 +61,7 @@ fn to_int32(interp: &Interpreter, val: Value) -> Option<i32> {
 
 /// Extract both operands as Float via ToNumber.
 #[inline]
-fn to_numeric_pair(interp: &Interpreter, a: Value, b: Value) -> Option<(Float, Float)> {
+pub(crate) fn to_numeric_pair(interp: &Interpreter, a: Value, b: Value) -> Option<(Float, Float)> {
     Some((to_numeric(interp, a)?, to_numeric(interp, b)?))
 }
 

@@ -52,6 +52,7 @@ mod dump_main {
             x if x == OpCode::Goto as u8 => "Goto",
             x if x == OpCode::IfFalse as u8 => "IfFalse",
             x if x == OpCode::IfTrue as u8 => "IfTrue",
+            x if x == OpCode::SwitchCaseI8 as u8 => "SwitchCaseI8",
             x if x == OpCode::Lt as u8 => "Lt",
             x if x == OpCode::Lte as u8 => "Lte",
             x if x == OpCode::Mul as u8 => "Mul",
@@ -155,6 +156,11 @@ mod dump_main {
             include_str!("../../benches/scripts/dense_array_loop_only_hot.js");
         let dense_array_false_write_then_read_hot =
             include_str!("../../benches/scripts/dense_array_false_write_then_read_hot.js");
+        let json_parse_only = include_str!("../../benches/scripts/json_parse_only.js");
+        let json_parse_property_read =
+            include_str!("../../benches/scripts/json_parse_property_read.js");
+        let fib_iter = include_str!("../../benches/scripts/fib_iter.js");
+        let switch_case = include_str!("../../benches/scripts/switch_case.js");
         let sieve = include_str!("../../benches/scripts/sieve.js");
         let runtime_string_pressure =
             include_str!("../../benches/scripts/runtime_string_pressure.js");
@@ -226,6 +232,14 @@ mod dump_main {
             dense_array_false_write_then_read_hot,
             256 * 1024,
         );
+        run_case("json_parse_only", json_parse_only, 256 * 1024);
+        run_case(
+            "json_parse_property_read",
+            json_parse_property_read,
+            256 * 1024,
+        );
+        run_case("fib_iter", fib_iter, 256 * 1024);
+        run_case("switch_case", switch_case, 256 * 1024);
         run_case("sieve", sieve, 256 * 1024);
         run_case(
             "runtime_string_pressure",

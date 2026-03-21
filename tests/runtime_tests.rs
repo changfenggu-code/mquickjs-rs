@@ -164,6 +164,11 @@ fn test_array_set_length() {
     arr.set_length(1);
     assert_eq!(arr.len(), 1);
     assert_eq!(arr.get(0), Some(Value::int(1)));
+
+    arr.set_length(3);
+    assert_eq!(arr.len(), 3);
+    assert!(arr.get(1).unwrap().is_undefined());
+    assert!(arr.get(2).unwrap().is_undefined());
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +219,24 @@ fn test_function_bytecode() {
 
     let idx = fb.add_constant(Value::int(42));
     assert_eq!(fb.get_constant(idx), Some(Value::int(42)));
+}
+
+#[test]
+#[should_panic(expected = "constant pool overflow")]
+fn test_function_bytecode_add_constant_panics_on_overflow() {
+    let mut fb = FunctionBytecode::new(0, 0);
+    for _ in 0..=u16::MAX {
+        let _ = fb.add_constant(Value::int(1));
+    }
+}
+
+#[test]
+#[should_panic(expected = "string constant pool overflow")]
+fn test_function_bytecode_add_string_panics_on_overflow() {
+    let mut fb = FunctionBytecode::new(0, 0);
+    for _ in 0..=u16::MAX {
+        let _ = fb.add_string("x".to_string());
+    }
 }
 
 #[test]
@@ -287,6 +310,8 @@ fn test_class_id_function() {
 fn test_property_type() {
     let mut prop = Property::new(Value::null(), Value::int(42));
     assert_eq!(prop.prop_type(), PropertyType::Normal);
+    assert!(prop.getter.is_undefined());
+    assert!(prop.setter.is_undefined());
 
     prop.set_prop_type(PropertyType::GetSet);
     assert_eq!(prop.prop_type(), PropertyType::GetSet);
@@ -419,4 +444,54 @@ fn test_property_table_keys_iterator() {
 
     let keys: Vec<_> = table.keys().collect();
     assert_eq!(keys.len(), 3);
+}
+
+#[test]
+fn test_property_table_define_accessor_inserts_and_stores_getter_setter() {
+    let mut table = PropertyTable::new();
+    let key = Value::int(7);
+    let getter = Value::int(11);
+    let setter = Value::int(22);
+
+    assert!(table.define_accessor(key, getter, setter));
+    let prop = table.get(key).unwrap();
+    assert_eq!(prop.prop_type(), PropertyType::GetSet);
+    assert_eq!(prop.getter, getter);
+    assert_eq!(prop.setter, setter);
+}
+
+#[test]
+fn test_property_table_define_accessor_updates_existing_property() {
+    let mut table = PropertyTable::new();
+    let key = Value::int(9);
+    table.set(key, Value::int(1));
+
+    assert!(!table.define_accessor(key, Value::int(2), Value::int(3)));
+    let prop = table.get(key).unwrap();
+    assert_eq!(prop.prop_type(), PropertyType::GetSet);
+    assert_eq!(prop.getter, Value::int(2));
+    assert_eq!(prop.setter, Value::int(3));
+}
+
+#[test]
+fn test_property_table_tombstones_do_not_force_unnecessary_resize() {
+    let mut table = PropertyTable::with_capacity(4);
+
+    for i in 0..24 {
+        table.set(Value::int(i), Value::int(i));
+    }
+
+    for i in 1..24 {
+        assert!(table.delete(Value::int(i)));
+    }
+
+    let before = format!("{:?}", table);
+    assert!(before.contains("hash_mask: 31"));
+
+    table.set(Value::int(1000), Value::int(1000));
+
+    let after = format!("{:?}", table);
+    assert!(after.contains("hash_mask: 31"));
+    assert!(table.has(Value::int(0)));
+    assert!(table.has(Value::int(1000)));
 }
