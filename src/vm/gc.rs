@@ -217,12 +217,6 @@ pub struct GcMarkRoots<'a> {
 /// safe for embedded targets with small stacks (8KB or less).
 ///
 /// Slots are marked via `mark_slot()` only when unvisited (read phase, write new phase).
-/// Iteratively mark all values reachable from the given root set.
-///
-/// Uses a `Vec<Value>` worklist allocated on the heap — no call-stack overflow,
-/// safe for embedded targets with small stacks (8KB or less).
-///
-/// Slots are marked via `mark_slot()` only when unvisited (read phase, write new phase).
 #[allow(clippy::too_many_arguments)]
 pub fn gc_mark_roots_iterative(
     roots: &[Value],
