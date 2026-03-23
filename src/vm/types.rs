@@ -493,16 +493,6 @@ pub struct Interpreter {
     pub(crate) native_functions: Vec<NativeFunction>,
     /// Name → index lookup cache for O(1) native function dispatch
     pub(crate) native_func_index: BTreeMap<&'static str, u32>,
-    /// Cached native index for Array.prototype.push
-    pub(crate) native_array_push_idx: Option<u32>,
-    /// Cached native index for Array.prototype.map
-    pub(crate) native_array_map_idx: Option<u32>,
-    /// Cached native index for Array.prototype.filter
-    pub(crate) native_array_filter_idx: Option<u32>,
-    /// Cached native index for Array.prototype.reduce
-    pub(crate) native_array_reduce_idx: Option<u32>,
-    /// Cached native index for JSON.parse
-    pub(crate) native_json_parse_idx: Option<u32>,
     /// Cached runtime strings for repeated for-in keys
     pub(crate) for_in_key_cache: Vec<(String, Value)>,
     /// Global variables set by top-level function declarations (SetGlobal opcode)

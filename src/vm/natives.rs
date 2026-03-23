@@ -3335,7 +3335,9 @@ pub(crate) fn native_performance_now(
     _this: Value,
     _args: &[Value],
 ) -> Result<Value, String> {
-    let now = interp.current_time_millis().unwrap_or(interp.time_origin_millis);
+    let now = interp
+        .current_time_millis()
+        .unwrap_or(interp.time_origin_millis);
     let elapsed = now.saturating_sub(interp.time_origin_millis) as Float;
     Ok(Value::float(elapsed))
 }
@@ -3770,30 +3772,30 @@ pub(crate) fn native_object_define_property(
 
     if let Some(obj_idx) = obj.to_object_idx() {
         if let Some(desc_idx) = descriptor.to_object_idx() {
-            let (value, getter, setter) = if let Some(desc_obj) = interp.objects.get(desc_idx as usize)
-            {
-                let value = desc_obj
-                    .properties
-                    .iter()
-                    .find(|(k, _)| k == "value")
-                    .map(|(_, v)| *v)
-                    .unwrap_or(Value::undefined());
-                let getter = desc_obj
-                    .properties
-                    .iter()
-                    .find(|(k, _)| k == "get")
-                    .map(|(_, v)| *v)
-                    .unwrap_or(Value::undefined());
-                let setter = desc_obj
-                    .properties
-                    .iter()
-                    .find(|(k, _)| k == "set")
-                    .map(|(_, v)| *v)
-                    .unwrap_or(Value::undefined());
-                (value, getter, setter)
-            } else {
-                (Value::undefined(), Value::undefined(), Value::undefined())
-            };
+            let (value, getter, setter) =
+                if let Some(desc_obj) = interp.objects.get(desc_idx as usize) {
+                    let value = desc_obj
+                        .properties
+                        .iter()
+                        .find(|(k, _)| k == "value")
+                        .map(|(_, v)| *v)
+                        .unwrap_or(Value::undefined());
+                    let getter = desc_obj
+                        .properties
+                        .iter()
+                        .find(|(k, _)| k == "get")
+                        .map(|(_, v)| *v)
+                        .unwrap_or(Value::undefined());
+                    let setter = desc_obj
+                        .properties
+                        .iter()
+                        .find(|(k, _)| k == "set")
+                        .map(|(_, v)| *v)
+                        .unwrap_or(Value::undefined());
+                    (value, getter, setter)
+                } else {
+                    (Value::undefined(), Value::undefined(), Value::undefined())
+                };
 
             if !getter.is_undefined() || !setter.is_undefined() {
                 interp.object_define_accessor(obj_idx, prop_name, getter, setter);
@@ -3918,8 +3920,10 @@ pub(crate) fn native_function_bind(
     } else {
         interp.arrays[arr_idx] = bound_args;
     }
-    obj.properties
-        .push(("__bound_args__".to_string(), Value::array_idx(arr_idx as u32)));
+    obj.properties.push((
+        "__bound_args__".to_string(),
+        Value::array_idx(arr_idx as u32),
+    ));
 
     // Mark as bound function
     obj.properties
@@ -4282,14 +4286,10 @@ impl Interpreter {
     /// Register built-in native functions
     pub(crate) fn register_builtins(&mut self) {
         // Array methods
-        self.native_array_push_idx =
-            Some(self.register_native("Array.prototype.push", native_array_push, 0));
-        self.native_array_map_idx =
-            Some(self.register_native("Array.prototype.map", native_array_map, 1));
-        self.native_array_filter_idx =
-            Some(self.register_native("Array.prototype.filter", native_array_filter, 1));
-        self.native_array_reduce_idx =
-            Some(self.register_native("Array.prototype.reduce", native_array_reduce, 1));
+        self.register_native("Array.prototype.push", native_array_push, 0);
+        self.register_native("Array.prototype.map", native_array_map, 1);
+        self.register_native("Array.prototype.filter", native_array_filter, 1);
+        self.register_native("Array.prototype.reduce", native_array_reduce, 1);
         self.register_native("Array.prototype.pop", native_array_pop, 0);
         self.register_native("Array.prototype.length", native_array_length, 0);
         self.register_native("Array.prototype.shift", native_array_shift, 0);
@@ -4423,7 +4423,7 @@ impl Interpreter {
 
         // JSON methods
         self.register_native("JSON.stringify", native_json_stringify, 1);
-        self.native_json_parse_idx = Some(self.register_native("JSON.parse", native_json_parse, 1));
+        self.register_native("JSON.parse", native_json_parse, 1);
 
         // Date methods
         self.register_native("Date.now", native_date_now, 0);

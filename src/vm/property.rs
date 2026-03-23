@@ -14,14 +14,11 @@ use alloc::format;
 impl Interpreter {
     #[inline]
     fn cached_array_method(&self, prop_name: &str) -> Option<Value> {
-        let idx = match prop_name {
-            "push" => self.native_array_push_idx,
-            "map" => self.native_array_map_idx,
-            "filter" => self.native_array_filter_idx,
-            "reduce" => self.native_array_reduce_idx,
+        // Cache removed - dynamically lookup native functions
+        match prop_name {
+            "push" | "map" | "filter" | "reduce" => None, // Force dynamic lookup
             _ => None,
-        }?;
-        Some(Value::native_func(idx))
+        }
     }
 
     /// Get a property from an array (Array.prototype methods or length)
@@ -36,9 +33,9 @@ impl Interpreter {
                 }
                 Value::undefined()
             }
-            "push" | "map" | "filter" | "reduce" => {
-                self.cached_array_method(prop_name).unwrap_or_default()
-            }
+            "push" | "map" | "filter" | "reduce" => self
+                .get_native_func(&format!("Array.prototype.{}", prop_name))
+                .unwrap_or_default(),
             "pop" => self
                 .get_native_func("Array.prototype.pop")
                 .unwrap_or_default(),
@@ -362,10 +359,7 @@ impl Interpreter {
                 // JSON object properties
                 match prop_name {
                     "stringify" => self.get_native_func("JSON.stringify").unwrap_or_default(),
-                    "parse" => self
-                        .native_json_parse_idx
-                        .map(Value::native_func)
-                        .unwrap_or_else(|| self.get_native_func("JSON.parse").unwrap_or_default()),
+                    "parse" => self.get_native_func("JSON.parse").unwrap_or_default(),
                     _ => Value::undefined(),
                 }
             }

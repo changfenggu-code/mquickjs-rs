@@ -270,7 +270,8 @@ pub fn gc_mark_roots_iterative(
             if mark_slot(mark.gen_closures, idx, phase) && idx < closures.len() {
                 for &cell_idx in &closures[idx].cell_indices {
                     let cell_idx = cell_idx as usize;
-                    if mark_slot(mark.gen_var_cells, cell_idx, phase) && cell_idx < var_cells.len() {
+                    if mark_slot(mark.gen_var_cells, cell_idx, phase) && cell_idx < var_cells.len()
+                    {
                         worklist.push(var_cells[cell_idx]);
                     }
                 }
@@ -282,7 +283,8 @@ pub fn gc_mark_roots_iterative(
         if val.is_iterator() {
             if let Some(idx) = val.to_iterator_idx() {
                 let idx = idx as usize;
-                if mark_slot(mark.gen_for_in_iterators, idx, phase) && idx < for_in_iterators.len() {
+                if mark_slot(mark.gen_for_in_iterators, idx, phase) && idx < for_in_iterators.len()
+                {
                     match &for_in_iterators[idx] {
                         ForInIterator::ObjectKeys { keys, .. } => {
                             for key in keys {
@@ -300,11 +302,13 @@ pub fn gc_mark_roots_iterative(
         if val.is_for_of_iterator() {
             if let Some(idx) = val.to_for_of_iterator_idx() {
                 let idx = idx as usize;
-                if mark_slot(mark.gen_for_of_iterators, idx, phase) && idx < for_of_iterators.len() {
+                if mark_slot(mark.gen_for_of_iterators, idx, phase) && idx < for_of_iterators.len()
+                {
                     match &for_of_iterators[idx] {
                         ForOfIterator::Array { arr_idx, .. } => {
                             let arr_idx = *arr_idx as usize;
-                            if mark_slot(mark.gen_arrays, arr_idx, phase) && arr_idx < arrays.len() {
+                            if mark_slot(mark.gen_arrays, arr_idx, phase) && arr_idx < arrays.len()
+                            {
                                 for elem in &arrays[arr_idx] {
                                     worklist.push(*elem);
                                 }
@@ -321,4 +325,3 @@ pub fn gc_mark_roots_iterative(
         }
     }
 }
-

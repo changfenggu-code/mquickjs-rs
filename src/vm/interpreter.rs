@@ -39,11 +39,6 @@ impl Interpreter {
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
             native_func_index: BTreeMap::new(),
-            native_array_push_idx: None,
-            native_array_map_idx: None,
-            native_array_filter_idx: None,
-            native_array_reduce_idx: None,
-            native_json_parse_idx: None,
             for_in_key_cache: Vec::new(),
             global_vars: BTreeMap::new(),
             error_objects: Vec::new(),
@@ -96,11 +91,6 @@ impl Interpreter {
             for_of_iterators: Vec::new(),
             native_functions: Vec::new(),
             native_func_index: BTreeMap::new(),
-            native_array_push_idx: None,
-            native_array_map_idx: None,
-            native_array_filter_idx: None,
-            native_array_reduce_idx: None,
-            native_json_parse_idx: None,
             for_in_key_cache: Vec::new(),
             global_vars: BTreeMap::new(),
             error_objects: Vec::new(),
@@ -267,73 +257,63 @@ impl Interpreter {
     fn gc_sweep(&mut self) {
         // Sweep closures
         self.gc.sweep_closures = self.closures.len();
-        self.gc.live_closures = self.gc.sweep_container(
-            &mut self.gen_closures,
-            self.closures.len(),
-        );
+        self.gc.live_closures = self
+            .gc
+            .sweep_container(&mut self.gen_closures, self.closures.len());
 
         // Sweep var_cells
         self.gc.sweep_var_cells = self.var_cells.len();
-        self.gc.live_var_cells = self.gc.sweep_container(
-            &mut self.gen_var_cells,
-            self.var_cells.len(),
-        );
+        self.gc.live_var_cells = self
+            .gc
+            .sweep_container(&mut self.gen_var_cells, self.var_cells.len());
 
         // Sweep arrays
         self.gc.sweep_arrays = self.arrays.len();
-        self.gc.live_arrays = self.gc.sweep_container(
-            &mut self.gen_arrays,
-            self.arrays.len(),
-        );
+        self.gc.live_arrays = self
+            .gc
+            .sweep_container(&mut self.gen_arrays, self.arrays.len());
 
         // Sweep objects
         self.gc.sweep_objects = self.objects.len();
-        self.gc.live_objects = self.gc.sweep_container(
-            &mut self.gen_objects,
-            self.objects.len(),
-        );
+        self.gc.live_objects = self
+            .gc
+            .sweep_container(&mut self.gen_objects, self.objects.len());
 
         // Sweep for-in iterators
         self.gc.sweep_for_in_iterators = self.for_in_iterators.len();
-        self.gc.live_for_in_iterators = self.gc.sweep_container(
-            &mut self.gen_for_in_iterators,
-            self.for_in_iterators.len(),
-        );
+        self.gc.live_for_in_iterators = self
+            .gc
+            .sweep_container(&mut self.gen_for_in_iterators, self.for_in_iterators.len());
 
         // Sweep for-of iterators
         self.gc.sweep_for_of_iterators = self.for_of_iterators.len();
-        self.gc.live_for_of_iterators = self.gc.sweep_container(
-            &mut self.gen_for_of_iterators,
-            self.for_of_iterators.len(),
-        );
+        self.gc.live_for_of_iterators = self
+            .gc
+            .sweep_container(&mut self.gen_for_of_iterators, self.for_of_iterators.len());
 
         // Sweep error objects
         self.gc.sweep_error_objects = self.error_objects.len();
-        self.gc.live_error_objects = self.gc.sweep_container(
-            &mut self.gen_error_objects,
-            self.error_objects.len(),
-        );
+        self.gc.live_error_objects = self
+            .gc
+            .sweep_container(&mut self.gen_error_objects, self.error_objects.len());
 
         // Sweep regex objects
         self.gc.sweep_regex_objects = self.regex_objects.len();
-        self.gc.live_regex_objects = self.gc.sweep_container(
-            &mut self.gen_regex_objects,
-            self.regex_objects.len(),
-        );
+        self.gc.live_regex_objects = self
+            .gc
+            .sweep_container(&mut self.gen_regex_objects, self.regex_objects.len());
 
         // Sweep typed arrays
         self.gc.sweep_typed_arrays = self.typed_arrays.len();
-        self.gc.live_typed_arrays = self.gc.sweep_container(
-            &mut self.gen_typed_arrays,
-            self.typed_arrays.len(),
-        );
+        self.gc.live_typed_arrays = self
+            .gc
+            .sweep_container(&mut self.gen_typed_arrays, self.typed_arrays.len());
 
         // Sweep array buffers
         self.gc.sweep_array_buffers = self.array_buffers.len();
-        self.gc.live_array_buffers = self.gc.sweep_container(
-            &mut self.gen_array_buffers,
-            self.array_buffers.len(),
-        );
+        self.gc.live_array_buffers = self
+            .gc
+            .sweep_container(&mut self.gen_array_buffers, self.array_buffers.len());
 
         // Sweep timers: remove cancelled or dead timers
         self.gc.sweep_timers = self.timers.len();
@@ -408,11 +388,7 @@ impl Interpreter {
             .iter()
             .filter(|&&g| g != SLOT_FREE)
             .count();
-        let arrays = self
-            .gen_arrays
-            .iter()
-            .filter(|&&g| g != SLOT_FREE)
-            .count();
+        let arrays = self.gen_arrays.iter().filter(|&&g| g != SLOT_FREE).count();
         let array_elements = self
             .arrays
             .iter()
@@ -420,11 +396,7 @@ impl Interpreter {
             .filter(|(_, &g)| g != SLOT_FREE)
             .map(|(a, _)| a.len())
             .sum();
-        let objects = self
-            .gen_objects
-            .iter()
-            .filter(|&&g| g != SLOT_FREE)
-            .count();
+        let objects = self.gen_objects.iter().filter(|&&g| g != SLOT_FREE).count();
         let object_properties = self
             .objects
             .iter()
@@ -1047,7 +1019,8 @@ impl Interpreter {
         self.maybe_gc();
         let (idx, is_new) = self.gc.alloc_slot(&mut self.gen_objects);
         if is_new {
-            self.objects.push(ObjectInstance::with_constructor(constructor));
+            self.objects
+                .push(ObjectInstance::with_constructor(constructor));
         } else {
             self.objects[idx] = ObjectInstance::with_constructor(constructor);
         }
@@ -2669,7 +2642,8 @@ impl Interpreter {
                         if let Some((branch_on_true, offset)) = branch {
                             let result = if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
                                 va < vb
-                            } else if let Some((fa, fb)) = crate::vm::ops::to_numeric_pair(self, a, b)
+                            } else if let Some((fa, fb)) =
+                                crate::vm::ops::to_numeric_pair(self, a, b)
                             {
                                 !fa.is_nan() && !fb.is_nan() && fa < fb
                             } else {
@@ -2747,7 +2721,8 @@ impl Interpreter {
                         if let Some((branch_on_true, offset)) = branch {
                             let result = if let (Some(va), Some(vb)) = (a.to_i32(), b.to_i32()) {
                                 va <= vb
-                            } else if let Some((fa, fb)) = crate::vm::ops::to_numeric_pair(self, a, b)
+                            } else if let Some((fa, fb)) =
+                                crate::vm::ops::to_numeric_pair(self, a, b)
                             {
                                 !fa.is_nan() && !fb.is_nan() && fa <= fb
                             } else {
@@ -3446,8 +3421,8 @@ impl Interpreter {
 
                     if this_val.to_array_idx().is_some() {
                         let args = [callback];
-                        let native_result =
-                            native_array_map(self, this_val, &args).map_err(InterpreterError::TypeError);
+                        let native_result = native_array_map(self, this_val, &args)
+                            .map_err(InterpreterError::TypeError);
                         if let Some(result) = self.try_op(native_result)? {
                             self.stack.push(result);
                         }
@@ -3582,7 +3557,8 @@ impl Interpreter {
                             };
 
                             // Create and store the error object
-                            let (error_idx, is_new) = self.gc.alloc_slot(&mut self.gen_error_objects);
+                            let (error_idx, is_new) =
+                                self.gc.alloc_slot(&mut self.gen_error_objects);
                             let obj = ErrorObject {
                                 name: error_name.to_string(),
                                 message,
@@ -3650,7 +3626,8 @@ impl Interpreter {
                             match regex::Regex::new(&regex_pattern) {
                                 Ok(regex) => {
                                     self.maybe_gc();
-                                    let (regex_idx, is_new) = self.gc.alloc_slot(&mut self.gen_regex_objects);
+                                    let (regex_idx, is_new) =
+                                        self.gc.alloc_slot(&mut self.gen_regex_objects);
                                     let obj = RegExpObject {
                                         regex,
                                         pattern,
@@ -3731,7 +3708,8 @@ impl Interpreter {
                             }
 
                             self.maybe_gc();
-                            let (typed_idx, is_new) = self.gc.alloc_slot(&mut self.gen_typed_arrays);
+                            let (typed_idx, is_new) =
+                                self.gc.alloc_slot(&mut self.gen_typed_arrays);
                             if is_new {
                                 self.typed_arrays.push(typed_arr);
                             } else {
@@ -3884,12 +3862,12 @@ impl Interpreter {
 
                     // Check if this is a native function call
                     if let Some(native_idx) = method_val.to_native_func_idx() {
-                        if Some(native_idx) == self.native_json_parse_idx
-                            && argc == 1
+                        // Check for JSON.parse (cached for performance)
+                        if argc == 1
                             && this_val.to_builtin_object_idx() == Some(BUILTIN_JSON)
+                            && self.native_func_index.get("JSON.parse") == Some(&native_idx)
                         {
-                            let a0 =
-                                self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                            let a0 = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
                             let args = [a0];
                             let result = native_json_parse(self, this_val, &args)
                                 .map_err(Interpreter::classify_native_error);
@@ -3899,7 +3877,11 @@ impl Interpreter {
                             continue;
                         }
 
-                        if Some(native_idx) == self.native_array_push_idx {
+                        // Check for Array methods (cached for performance)
+                        if argc == 0
+                            && self.native_func_index.get("Array.prototype.push")
+                                == Some(&native_idx)
+                        {
                             if let Some(arr_idx) = this_val.to_array_idx() {
                                 let discard_result = {
                                     let frame = self.call_stack.last_mut().unwrap();
@@ -4698,20 +4680,20 @@ impl Interpreter {
                     }
 
                     // Get property name from string constants
-                      let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
-                          InterpreterError::InternalError(format!(
-                              "invalid string index: {}",
-                              str_idx
-                          ))
-                      })?;
+                    let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
+                        InterpreterError::InternalError(format!(
+                            "invalid string index: {}",
+                            str_idx
+                        ))
+                    })?;
 
-                      let val = if let Some(obj_idx) = obj.to_object_idx() {
-                          self.object_get_property(obj_idx, prop_name)?
-                      } else {
-                          self.get_field_value(obj, prop_name)?
-                      };
-                      self.stack.push(val);
-                  }
+                    let val = if let Some(obj_idx) = obj.to_object_idx() {
+                        self.object_get_property(obj_idx, prop_name)?
+                    } else {
+                        self.get_field_value(obj, prop_name)?
+                    };
+                    self.stack.push(val);
+                }
 
                 // GetField2 - get object property but keep object: obj -> obj value
                 // Used for method calls where we need the object as 'this'
@@ -4741,18 +4723,18 @@ impl Interpreter {
                     }
 
                     // Get property name from string constants
-                      let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
-                          InterpreterError::InternalError(format!(
-                              "invalid string index: {}",
-                              str_idx
-                          ))
-                      })?;
+                    let prop_name = bytecode.string_constants.get(str_idx).ok_or_else(|| {
+                        InterpreterError::InternalError(format!(
+                            "invalid string index: {}",
+                            str_idx
+                        ))
+                    })?;
 
-                      let val = if let Some(obj_idx) = obj.to_object_idx() {
-                          self.object_get_property(obj_idx, prop_name)?
-                      } else {
-                          self.get_field_value(obj, prop_name)?
-                      };
+                    let val = if let Some(obj_idx) = obj.to_object_idx() {
+                        self.object_get_property(obj_idx, prop_name)?
+                    } else {
+                        self.get_field_value(obj, prop_name)?
+                    };
 
                     // Push the property value (object is still on stack below it)
                     self.stack.push(val);
@@ -4785,11 +4767,17 @@ impl Interpreter {
                     macro_rules! step {
                         ($prop:expr) => {{
                             if current.is_null() || current.is_undefined() {
-                                let type_name = if current.is_null() { "null" } else { "undefined" };
-                                self.try_handle_runtime_error(InterpreterError::TypeError(format!(
-                                    "Cannot read properties of {} (reading '{}')",
-                                    type_name, $prop
-                                )))?;
+                                let type_name = if current.is_null() {
+                                    "null"
+                                } else {
+                                    "undefined"
+                                };
+                                self.try_handle_runtime_error(InterpreterError::TypeError(
+                                    format!(
+                                        "Cannot read properties of {} (reading '{}')",
+                                        type_name, $prop
+                                    ),
+                                ))?;
                                 continue;
                             }
 
@@ -4851,9 +4839,12 @@ impl Interpreter {
                     }
 
                     let val = if obj.is_array() {
-                        self.native_array_push_idx
-                            .map(Value::native_func)
-                            .unwrap_or_else(|| self.get_field_value(obj, "push").unwrap_or_default())
+                        // Try to get native function from cache
+                        if let Some(&idx) = self.native_func_index.get("Array.prototype.push") {
+                            Value::native_func(idx)
+                        } else {
+                            self.get_field_value(obj, "push").unwrap_or_default()
+                        }
                     } else {
                         self.get_field_value(obj, "push")?
                     };
@@ -5127,8 +5118,11 @@ impl Interpreter {
                     let iter = if let Some(obj_idx) = obj.to_object_idx() {
                         if let Some(obj_instance) = self.get_object(obj_idx) {
                             let mut keys = Vec::with_capacity(obj_instance.properties.len());
-                            let prop_names: Vec<String> =
-                                obj_instance.properties.iter().map(|(k, _)| k.clone()).collect();
+                            let prop_names: Vec<String> = obj_instance
+                                .properties
+                                .iter()
+                                .map(|(k, _)| k.clone())
+                                .collect();
                             for key in &prop_names {
                                 keys.push(self.create_runtime_string_for_in_key(key)?);
                             }
@@ -5379,7 +5373,10 @@ impl Interpreter {
 
     /// Get a native function value by name
     pub fn get_native_func(&self, name: &str) -> Option<Value> {
-        self.native_func_index.get(name).copied().map(Value::native_func)
+        self.native_func_index
+            .get(name)
+            .copied()
+            .map(Value::native_func)
     }
 
     // Native function dispatch and registration moved to src/vm/natives.rs
@@ -5481,8 +5478,8 @@ impl Default for Interpreter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vm::natives::native_gc;
     use crate::vm::gc::SLOT_FREE;
+    use crate::vm::natives::native_gc;
 
     #[test]
     fn test_recursion_limit() {

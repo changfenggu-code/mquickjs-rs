@@ -305,7 +305,6 @@ fn test_compile_switch_integer_cases_use_switch_case_i8() {
     assert!(!func.bytecode.contains(&(OpCode::StrictEq as u8)));
 }
 
-
 #[test]
 fn test_compile_adjacent_string_concat_folds_to_const() {
     let func = compile_expr("'a' + 'b'").unwrap();

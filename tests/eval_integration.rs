@@ -1,4 +1,4 @@
-﻿//! Integration tests for Context::eval()
+//! Integration tests for Context::eval()
 //
 //! Tests the full pipeline: source -> lexer -> compiler -> bytecode -> VM -> result.
 
@@ -5931,7 +5931,9 @@ fn test_error_stack_property() {
 #[test]
 fn test_error_stack_format_matches_error_to_string_spacing() {
     let mut ctx = Context::new(64 * 1024);
-    let result = ctx.eval("var e = new Error('test'); return e.stack;").unwrap();
+    let result = ctx
+        .eval("var e = new Error('test'); return e.stack;")
+        .unwrap();
     assert_eq!(ctx.string_value(result).as_deref(), Some("Error: test"));
 }
 
@@ -7248,4 +7250,3 @@ fn test_error_instanceof() {
         Some(true)
     );
 }
-
