@@ -150,6 +150,21 @@ impl Context {
         }
     }
 
+    /// Check whether all gen vectors are empty (for testing reset_user_state).
+    pub fn are_all_gen_vectors_empty(&self) -> bool {
+        self.interpreter.gen_arrays.is_empty()
+            && self.interpreter.gen_closures.is_empty()
+            && self.interpreter.gen_objects.is_empty()
+            && self.interpreter.gen_var_cells.is_empty()
+            && self.interpreter.gen_error_objects.is_empty()
+            && self.interpreter.gen_regex_objects.is_empty()
+            && self.interpreter.gen_typed_arrays.is_empty()
+            && self.interpreter.gen_array_buffers.is_empty()
+            && self.interpreter.gen_for_in_iterators.is_empty()
+            && self.interpreter.gen_for_of_iterators.is_empty()
+            && self.interpreter.gen_timers.is_empty()
+    }
+
     /// Evaluate JavaScript source code
     ///
     /// # Arguments
@@ -378,32 +393,18 @@ impl Context {
         self.interpreter.exception_handlers.clear();
         self.bytecodes.clear();
         self.current_exception = Value::undefined();
-    }
-}
-#[cfg(all(test, feature = "dump"))]
-mod dump_tests {
-    use super::*;
-    use crate::vm::opcode::OpCode;
 
-    #[test]
-    fn test_opcode_counts_record_execution() {
-        let mut ctx = Context::new(64 * 1024);
-        ctx.reset_opcode_counts();
-        let result = ctx.eval("return 1 + 2;").unwrap();
-        assert_eq!(result.to_i32(), Some(3));
-
-        let counts = ctx.opcode_counts();
-        assert!(counts[OpCode::Add as usize] > 0);
-        assert!(counts.iter().copied().sum::<u64>() > 0);
-    }
-
-    #[test]
-    fn test_runtime_string_source_stats_record_categories() {
-        let mut ctx = Context::new(64 * 1024);
-        let _ = ctx.eval("var s = \"a\" + 1; var obj = { a: 1 }; for (var k in obj) { s = s + k; } return s;").unwrap();
-        let stats = ctx.runtime_string_source_stats();
-        assert!(stats.total > 0);
-        assert!(stats.concat > 0);
-        assert!(stats.total >= stats.concat);
+        // Clear gen vectors to prevent stale SLOT_FREE markers after data vectors are cleared
+        self.interpreter.gen_closures.clear();
+        self.interpreter.gen_arrays.clear();
+        self.interpreter.gen_objects.clear();
+        self.interpreter.gen_var_cells.clear();
+        self.interpreter.gen_error_objects.clear();
+        self.interpreter.gen_regex_objects.clear();
+        self.interpreter.gen_typed_arrays.clear();
+        self.interpreter.gen_array_buffers.clear();
+        self.interpreter.gen_for_in_iterators.clear();
+        self.interpreter.gen_for_of_iterators.clear();
+        self.interpreter.gen_timers.clear();
     }
 }

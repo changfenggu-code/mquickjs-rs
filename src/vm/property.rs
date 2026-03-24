@@ -12,15 +12,6 @@ use crate::value::Value;
 use alloc::format;
 
 impl Interpreter {
-    #[inline]
-    fn cached_array_method(&self, prop_name: &str) -> Option<Value> {
-        // Cache removed - dynamically lookup native functions
-        match prop_name {
-            "push" | "map" | "filter" | "reduce" => None, // Force dynamic lookup
-            _ => None,
-        }
-    }
-
     /// Get a property from an array (Array.prototype methods or length)
     pub(crate) fn get_array_property(&self, arr: Value, prop_name: &str) -> Value {
         match prop_name {
@@ -255,7 +246,7 @@ impl Interpreter {
     }
 
     /// Get a property from a RegExp object
-    pub(crate) fn get_regexp_property(&self, regex_idx: u32, prop_name: &str) -> Value {
+    pub(crate) fn get_regexp_property(&mut self, regex_idx: u32, prop_name: &str) -> Value {
         if let Some(re) = self.regex_objects.get(regex_idx as usize) {
             match prop_name {
                 "test" => self
@@ -267,11 +258,7 @@ impl Interpreter {
                 "global" => Value::bool(re.global),
                 "ignoreCase" => Value::bool(re.ignore_case),
                 "multiline" => Value::bool(re.multiline),
-                "source" => {
-                    // Return pattern as a string - but we need mutable access for runtime strings
-                    // For now, just return undefined
-                    Value::undefined()
-                }
+                "source" => self.create_runtime_string(re.pattern.clone()),
                 _ => Value::undefined(),
             }
         } else {

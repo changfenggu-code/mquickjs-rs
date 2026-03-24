@@ -4235,6 +4235,21 @@ fn test_regexp_exec_no_match() {
 }
 
 #[test]
+fn test_regexp_source_property_returns_pattern() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var re = new RegExp('abc', 'gi');
+        return re.source === 'abc' && typeof re.source === 'string';
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_bool(), Some(true));
+}
+
+#[test]
 fn test_regexp_digit_pattern() {
     let mut ctx = Context::new(64 * 1024);
 
@@ -4738,6 +4753,28 @@ fn test_object_define_property_accessor_getter_and_setter() {
             get: function () { return hidden; },
             set: function (v) { hidden = v; }
         });
+        obj.value = 7;
+        return hidden * 10 + obj.value;
+    ",
+        )
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(77));
+}
+
+#[test]
+fn test_object_define_property_accessor_survives_gc() {
+    let mut ctx = Context::new(64 * 1024);
+
+    let result = ctx
+        .eval(
+            "
+        var hidden = 1;
+        var obj = {};
+        Object.defineProperty(obj, 'value', {
+            get: function () { return hidden; },
+            set: function (v) { hidden = v; }
+        });
+        gc();
         obj.value = 7;
         return hidden * 10 + obj.value;
     ",
@@ -7248,5 +7285,23 @@ fn test_error_instanceof() {
             .unwrap()
             .to_bool(),
         Some(true)
+    );
+}
+
+#[test]
+fn test_reset_user_state_clears_gen_vectors() {
+    let mut ctx = Context::new(64 * 1024);
+
+    // Create some objects to populate gen vectors
+    ctx.eval("var a = [1,2,3]; function f() { return 1; }")
+        .unwrap();
+
+    // Call reset_user_state — it must clear gen_* vectors too
+    ctx.reset_user_state();
+
+    // Verify all gen vectors are empty after reset
+    assert!(
+        ctx.are_all_gen_vectors_empty(),
+        "all gen vectors should be cleared after reset_user_state"
     );
 }

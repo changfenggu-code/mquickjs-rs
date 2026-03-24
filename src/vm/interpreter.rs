@@ -23,7 +23,6 @@ impl Interpreter {
     const DEFAULT_MAX_RECURSION: usize = 512;
 
     /// Create a new interpreter
-    /// Create a new interpreter
     pub fn new() -> Self {
         let mut interp = Interpreter {
             stack: Stack::new(Self::DEFAULT_STACK_SIZE),
@@ -1128,7 +1127,6 @@ impl Interpreter {
                     *index += 1;
                     Some(current)
                 };
-                let _ = iter;
                 current.and_then(|i| self.create_runtime_string_for_in_key(&i.to_string()).ok())
             }
             ForInIterator::Empty => None,

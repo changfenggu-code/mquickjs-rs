@@ -935,7 +935,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Common implementation for var/let/const (supports comma-separated declarators)
-    fn var_declaration_impl(&mut self, _keyword: &str) -> Result<(), CompileError> {
+    fn var_declaration_impl(&mut self, keyword: &str) -> Result<(), CompileError> {
         self.advance(); // consume keyword
 
         loop {
@@ -949,6 +949,11 @@ impl<'a> Compiler<'a> {
 
             if self.match_token(&Token::Eq) {
                 self.expression()?;
+            } else if keyword == "const" {
+                return Err(self.syntax_error(format!(
+                    "Missing initializer in const declaration '{}'",
+                    name
+                )));
             } else {
                 self.emit_op(OpCode::Undefined);
             }

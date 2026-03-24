@@ -260,6 +260,15 @@ pub fn gc_mark_roots_iterative(
                 if let Some(constructor) = objects[idx].constructor {
                     worklist.push(constructor);
                 }
+                // Also mark accessor getter/setter closures
+                for accessor in &objects[idx].accessors {
+                    if !accessor.getter.is_undefined() {
+                        worklist.push(accessor.getter);
+                    }
+                    if !accessor.setter.is_undefined() {
+                        worklist.push(accessor.setter);
+                    }
+                }
             }
             continue;
         }

@@ -60,6 +60,11 @@ fn test_compile_error_reserved_word_as_var() {
 }
 
 #[test]
+fn test_compile_error_const_requires_initializer() {
+    assert_compile_error("const x;", "Missing initializer");
+}
+
+#[test]
 fn test_compile_error_undeclared_variable() {
     let msg = eval_err("return undeclaredVariable;");
     assert!(
