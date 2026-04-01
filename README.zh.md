@@ -267,7 +267,7 @@ MQuickJS-RS（Rust）与原版 MQuickJS（C）的性能对比。
 ```bash
 # 构建原版 C 实现
 git submodule update --init
-make -C vendor/mquickjs
+make -C contrib/mquickjs
 
 # 运行对比测试
 ./benches/compare.sh

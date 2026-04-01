@@ -7,7 +7,7 @@
 #
 # Requirements:
 #   - Rust toolchain (cargo)
-#   - Optional: vendor/mquickjs submodule for C comparison
+#   - Optional: contrib/mquickjs submodule for C comparison
 #   - Optional: GCC (for building C version on Windows)
 
 set -e
@@ -43,14 +43,14 @@ ORIGINAL_MQJS=""
 if [ -n "$1" ]; then
     # User provided path
     ORIGINAL_MQJS="$1"
-elif [ -x "$PROJECT_DIR/vendor/mquickjs/bin/mqjs${EXE}" ]; then
-    ORIGINAL_MQJS="$PROJECT_DIR/vendor/mquickjs/bin/mqjs${EXE}"
-elif [ -x "$PROJECT_DIR/vendor/mquickjs/mqjs${EXE}" ]; then
-    ORIGINAL_MQJS="$PROJECT_DIR/vendor/mquickjs/mqjs${EXE}"
-elif [ -f "$PROJECT_DIR/vendor/mquickjs/mquickjs.c" ]; then
+elif [ -x "$PROJECT_DIR/contrib/mquickjs/bin/mqjs${EXE}" ]; then
+    ORIGINAL_MQJS="$PROJECT_DIR/contrib/mquickjs/bin/mqjs${EXE}"
+elif [ -x "$PROJECT_DIR/contrib/mquickjs/mqjs${EXE}" ]; then
+    ORIGINAL_MQJS="$PROJECT_DIR/contrib/mquickjs/mqjs${EXE}"
+elif [ -f "$PROJECT_DIR/contrib/mquickjs/mquickjs.c" ]; then
     # Submodule exists but binary not built — try to build it
     echo "[*] C source found but no binary. Attempting to build..."
-    VENDOR_DIR="$PROJECT_DIR/vendor/mquickjs"
+    VENDOR_DIR="$PROJECT_DIR/contrib/mquickjs"
 
     if command -v make &> /dev/null && [ "$IS_WIN" = false ]; then
         # Unix: use Makefile

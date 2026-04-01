@@ -153,7 +153,7 @@ See also: `docs/ENGINE_OPTIMIZATION_TASKLIST.md` for the current engine-only opt
 
 **Stage 9 Status**:
 - Benchmark scripts: Ready (`benches/compare.sh`, auto-detects and builds C version)
-- C version: Compiled on Windows (`vendor/mquickjs/bin/mqjs.exe`, needs `-lpthread` for MinGW64)
+- C version: Compiled on Windows (`contrib/mquickjs/bin/mqjs.exe`, needs `-lpthread` for MinGW64)
 - Performance: Rust ~50-66% slower than C on compute-heavy benchmarks, 8% faster on JSON
 - Optimizations applied: `#[inline]` on all ops, Call opcode zero-alloc path
 - Analysis: See `docs/BENCHMARK_ANALYSIS.md`

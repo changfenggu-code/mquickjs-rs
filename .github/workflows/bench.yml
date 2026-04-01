@@ -49,16 +49,16 @@ jobs:
             fi
           }
 
-          try_bin "vendor/mquickjs/bin/mqjs"
+          try_bin "contrib/mquickjs/bin/mqjs"
           if [ -z "$C_BIN" ]; then
-            try_bin "vendor/mquickjs/mqjs"
+            try_bin "contrib/mquickjs/mqjs"
           fi
-          if [ -z "$C_BIN" ] && [ -f vendor/mquickjs/mquickjs.c ]; then
+          if [ -z "$C_BIN" ] && [ -f contrib/mquickjs/mquickjs.c ]; then
             echo "C source found but no runnable binary; building..."
-            make -C vendor/mquickjs -j"$(nproc 2>/dev/null || echo 4)" mqjs
-            try_bin "vendor/mquickjs/bin/mqjs"
+            make -C contrib/mquickjs -j"$(nproc 2>/dev/null || echo 4)" mqjs
+            try_bin "contrib/mquickjs/bin/mqjs"
             if [ -z "$C_BIN" ]; then
-              try_bin "vendor/mquickjs/mqjs"
+              try_bin "contrib/mquickjs/mqjs"
             fi
           fi
 
@@ -197,16 +197,16 @@ jobs:
             fi
           }
 
-          try_bin "vendor/mquickjs/bin/mqjs"
+          try_bin "contrib/mquickjs/bin/mqjs"
           if [ -z "$C_BIN" ]; then
-            try_bin "vendor/mquickjs/mqjs"
+            try_bin "contrib/mquickjs/mqjs"
           fi
-          if [ -z "$C_BIN" ] && [ -f vendor/mquickjs/mquickjs.c ]; then
+          if [ -z "$C_BIN" ] && [ -f contrib/mquickjs/mquickjs.c ]; then
             echo "C source found but no runnable binary; building..."
-            make -C vendor/mquickjs mqjs
-            try_bin "vendor/mquickjs/bin/mqjs"
+            make -C contrib/mquickjs mqjs
+            try_bin "contrib/mquickjs/bin/mqjs"
             if [ -z "$C_BIN" ]; then
-              try_bin "vendor/mquickjs/mqjs"
+              try_bin "contrib/mquickjs/mqjs"
             fi
           fi
 

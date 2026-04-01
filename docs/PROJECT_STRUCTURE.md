@@ -883,13 +883,13 @@ mquickjs-rs/
 
 **[.gitmodules](../.gitmodules)**
 - Git 子模块配置
-- 包含：vendor/mquickjs（原始 C 实现）
+- 包含：contrib/mquickjs（原始 C 实现）
 
 ---
 
 ## 第三方依赖 (vendor/)
 
-**[vendor/mquickjs/](../vendor/mquickjs/)**
+**[contrib/mquickjs/](../contrib/mquickjs/)**
 - **来源**：Fabrice Bellard 的原始 MQuickJS C 实现
 - **用途**：参考实现，用于对比和验证
 
