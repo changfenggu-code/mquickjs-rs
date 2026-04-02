@@ -2662,6 +2662,88 @@ fn test_array_element_length_property() {
     assert_eq!(result.to_i32(), Some(4));
 }
 
+// Regression tests for dynamic property access (bracket notation on objects)
+// Previously obj[key] used GetArrayEl which only worked for arrays, not objects.
+
+#[test]
+fn test_object_bracket_read_single() {
+    let mut ctx = Context::new(64 * 1024);
+    // Single property read with bracket notation
+    let result = ctx.eval("var obj = {x:1}; return obj['x'];").unwrap();
+    assert_eq!(result.to_i32(), Some(1));
+}
+
+#[test]
+fn test_object_bracket_write() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval("var obj = {x:1}; obj['y'] = 2; return obj['y'];")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(2));
+}
+
+#[test]
+fn test_object_bracket_dynamic_key() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval("var k = 'foo'; var obj = {}; obj[k] = 42; return obj[k];")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(42));
+}
+
+#[test]
+fn test_array_bracket_numeric_read() {
+    let mut ctx = Context::new(64 * 1024);
+    // Test individual array element reads via bracket notation
+    let r1 = ctx
+        .eval("var arr = [10, 20, 30]; return arr['0'];")
+        .unwrap();
+    let r2 = ctx
+        .eval("var arr = [10, 20, 30]; return arr['1'];")
+        .unwrap();
+    let r3 = ctx
+        .eval("var arr = [10, 20, 30]; return arr['2'];")
+        .unwrap();
+    assert_eq!(r1.to_i32(), Some(10));
+    assert_eq!(r2.to_i32(), Some(20));
+    assert_eq!(r3.to_i32(), Some(30));
+}
+
+#[test]
+fn test_array_bracket_numeric_write() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval("var arr = [1, 2]; arr['2'] = 3; return arr[0] + arr[1] + arr[2];")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(6));
+}
+
+#[test]
+fn test_typed_array_bracket_read() {
+    let mut ctx = Context::new(64 * 1024);
+    let r1 = ctx
+        .eval(
+            "var arr = new Uint8Array(3); arr[0] = 10; arr[1] = 20; arr[2] = 30; return arr['0'];",
+        )
+        .unwrap();
+    let r2 = ctx
+        .eval(
+            "var arr = new Uint8Array(3); arr[0] = 10; arr[1] = 20; arr[2] = 30; return arr['1'];",
+        )
+        .unwrap();
+    assert_eq!(r1.to_i32(), Some(10));
+    assert_eq!(r2.to_i32(), Some(20));
+}
+
+#[test]
+fn test_typed_array_bracket_write() {
+    let mut ctx = Context::new(64 * 1024);
+    let result = ctx
+        .eval("var arr = new Uint8Array(3); arr['0'] = 10; arr['1'] = 20; arr['2'] = 30; return arr[0] + arr[1] + arr[2];")
+        .unwrap();
+    assert_eq!(result.to_i32(), Some(60));
+}
+
 #[test]
 fn test_array_push_multiple_args_order() {
     let mut ctx = Context::new(64 * 1024);

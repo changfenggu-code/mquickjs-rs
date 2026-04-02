@@ -1,0 +1,4 @@
+method_chain|method_chain 5k
+runtime_string_pressure|runtime_string_pressure 4k
+for_of_array|for_of_array 20k
+deep_property|deep_property 200k

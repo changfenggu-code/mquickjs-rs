@@ -1136,13 +1136,33 @@ impl Interpreter {
     #[inline]
     fn get_field_value(&mut self, obj: Value, prop_name: &str) -> InterpreterResult<Value> {
         if obj.is_array() {
-            Ok(self.get_array_property(obj, prop_name))
+            let arr_val = self.get_array_property(obj, prop_name);
+            // If not a special property, try numeric index on dense array
+            if arr_val.is_undefined() {
+                if let Some(arr_idx) = obj.to_array_idx() {
+                    if let Ok(index) = prop_name.parse::<usize>() {
+                        if let Some(arr_data) = self.arrays.get(arr_idx as usize) {
+                            return Ok(arr_data.get(index).copied().unwrap_or_default());
+                        }
+                    }
+                }
+            }
+            Ok(arr_val)
         } else if let Some(obj_idx) = obj.to_object_idx() {
             self.object_get_property(obj_idx, prop_name)
         } else if let Some(builtin_idx) = obj.to_builtin_object_idx() {
             Ok(self.get_builtin_property(builtin_idx, prop_name))
         } else if let Some(typed_idx) = obj.to_typed_array_idx() {
-            Ok(self.get_typed_array_property(typed_idx, prop_name))
+            let ta_val = self.get_typed_array_property(typed_idx, prop_name);
+            // If not a special property, try numeric index on typed array
+            if ta_val.is_undefined() {
+                if let Ok(index) = prop_name.parse::<usize>() {
+                    if let Some(ta) = self.typed_arrays.get(typed_idx as usize) {
+                        return Ok(ta.get(index).unwrap_or_default());
+                    }
+                }
+            }
+            Ok(ta_val)
         } else if let Some(ab_idx) = obj.to_array_buffer_idx() {
             Ok(self.get_array_buffer_property(ab_idx, prop_name))
         } else if let Some(err_idx) = obj.to_error_object_idx() {
@@ -4793,6 +4813,76 @@ impl Interpreter {
                     step!(p3);
 
                     self.stack.push(current);
+                }
+
+                // GetFieldDyn - get property by dynamic key: obj key -> val
+                op if op == OpCode::GetFieldDyn as u8 => {
+                    let key = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let obj = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+
+                    let prop_name = if let Some(idx) = key.to_string_idx() {
+                        if idx >= Self::RUNTIME_STRING_OFFSET {
+                            let runtime_idx = (idx - Self::RUNTIME_STRING_OFFSET) as usize;
+                            self.runtime_string_as_str(runtime_idx)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        } else {
+                            self.get_string_by_idx(idx)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        }
+                    } else {
+                        key.to_string()
+                    };
+
+                    let val = self.get_field_value(obj, &prop_name)?;
+                    self.stack.push(val);
+                }
+
+                // PutFieldDyn - set property by dynamic key: obj key val -> val
+                op if op == OpCode::PutFieldDyn as u8 => {
+                    let val = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let key = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+                    let obj = self.stack.pop().ok_or(InterpreterError::StackUnderflow)?;
+
+                    let prop_name = if let Some(idx) = key.to_string_idx() {
+                        if idx >= Self::RUNTIME_STRING_OFFSET {
+                            let runtime_idx = (idx - Self::RUNTIME_STRING_OFFSET) as usize;
+                            self.runtime_string_as_str(runtime_idx)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        } else {
+                            self.get_string_by_idx(idx)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        }
+                    } else {
+                        key.to_string()
+                    };
+
+                    if obj.is_array() {
+                        if let Some(arr_idx) = obj.to_array_idx() {
+                            if let Ok(index) = prop_name.parse::<usize>() {
+                                if let Some(arr_data) = self.arrays.get_mut(arr_idx as usize) {
+                                    if index >= arr_data.len() {
+                                        arr_data.resize(index + 1, Value::undefined());
+                                    }
+                                    arr_data[index] = val;
+                                }
+                            }
+                            // Non-numeric keys on arrays are silently ignored
+                        }
+                    } else if let Some(typed_idx) = obj.to_typed_array_idx() {
+                        if let Ok(index) = prop_name.parse::<usize>() {
+                            if let Some(ta) = self.typed_arrays.get_mut(typed_idx as usize) {
+                                ta.set(index, val);
+                            }
+                        }
+                        // Non-numeric keys on typed arrays are silently ignored
+                    } else if let Some(obj_idx) = obj.to_object_idx() {
+                        self.object_set_property(obj_idx, prop_name, val)?;
+                    }
+                    self.stack.push(val);
                 }
 
                 op if op == OpCode::SwitchCaseI8 as u8 => {

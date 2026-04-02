@@ -2462,7 +2462,8 @@ impl<'a> Compiler<'a> {
                     self.emit_u16(arg_count);
                 }
 
-                // Array access: a[b] or a[b] = c
+                // Property access: a[b] or a[b] = c
+                // Uses dynamic lookup (works for both arrays and objects)
                 Token::LBracket => {
                     self.last_expr_string_const = None;
                     self.last_expr_bool_const = None;
@@ -2475,9 +2476,9 @@ impl<'a> Compiler<'a> {
                     if self.match_token(&Token::Eq) {
                         // arr[idx] = value
                         self.expression()?;
-                        self.emit_op(OpCode::PutArrayEl);
+                        self.emit_op(OpCode::PutFieldDyn);
                     } else {
-                        self.emit_op(OpCode::GetArrayEl);
+                        self.emit_op(OpCode::GetFieldDyn);
                     }
                 }
 

@@ -714,28 +714,43 @@ mquickjs-rs/
 
 ## 性能基准测试 (benches/)
 
-**[benches/js_benchmarks.rs](../benches/js_benchmarks.rs)**
-- **功能**：使用 criterion 的性能基准测试
-- **基准场景**：
-  - 数组操作
-  - 函数调用
-  - 字符串处理
-  - JSON 操作
-  - 数学运算
-- **运行**：`cargo bench`
+**[benches/README.md](../benches/README.md)**
+- `benches/` 目录总导航
+- 说明入口脚本、驱动代码、manifest 和 workload 的职责分层
 
-**[benches/scripts/](../benches/scripts/)**
-- **[fib.js](../benches/scripts/fib.js)** - 斐波那契数列基准
-- **[sieve.js](../benches/scripts/sieve.js)** - 质数筛法基准
-- **[array.js](../benches/scripts/array.js)** - 数组操作基准
-- **[string.js](../benches/scripts/string.js)** - 字符串操作基准
-- **[object.js](../benches/scripts/object.js)** - 对象操作基准
-- **[closure.js](../benches/scripts/closure.js)** - 闭包基准
-- **[loop.js](../benches/scripts/loop.js)** - 循环基准
-- **[json.js](../benches/scripts/json.js)** - JSON 操作基准
+**[benches/drivers/](../benches/drivers/)**
+- benchmark 驱动代码目录
+- `criterion_benchmarks.rs`
+  - Rust Criterion 基准入口
+  - 运行：`cargo bench --bench js_benchmarks`
+- `bench_exec_helper.rs`
+  - Rust execution-only 对比 helper
+- `bench_exec_helper.c`
+  - C execution-only 对比 helper
+
+**[benches/manifests/](../benches/manifests/)**
+- 机器可读 benchmark 清单目录
+- `canary_benchmarks.txt`
+  - 规范 canary 集合
+- `benchmark_tiers.txt`
+  - 分层 benchmark 集合
+
+**[benches/workloads/](../benches/workloads/)**
+- JavaScript benchmark workload 目录
+- `README.md`
+  - workload 命名和 tier 说明
+- 代表性脚本：
+  - `method_chain.js` / `runtime_string_pressure.js` / `for_of_array.js` / `deep_property.js`
+  - `fib_iter.js` / `array_push_10k.js` / `json_parse_only.js` / `json_parse_property_read.js`
+  - `math_max_3arg_10k.js` / `gc_transient_arrays_2500.js`
+  - `fib.js` / `loop.js` / `array.js` / `string.js` / `object.js` / `closure.js` / `sieve.js` / `switch_case.js`
 
 **[benches/compare.sh](../benches/compare.sh)**
-- 与原始 C 实现的性能对比脚本
+- Rust-vs-C benchmark 对比入口
+- 支持端到端和 `--execution-only` 两种口径
+
+**[benches/run_canaries.sh](../benches/run_canaries.sh)**
+- 规范 canary 重跑入口
 
 ---
 

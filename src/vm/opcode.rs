@@ -168,10 +168,10 @@ pub enum OpCode {
     GetLength2,
     /// Define property: obj val -> obj
     DefineField,
-    /// Define getter: obj val -> obj
-    DefineGetter,
-    /// Define setter: obj val -> obj
-    DefineSetter,
+    /// Get property by dynamic key: obj key -> val
+    GetFieldDyn,
+    /// Set property by dynamic key: obj key val ->
+    PutFieldDyn,
     /// Set prototype: obj proto -> obj
     SetProto,
 
@@ -531,10 +531,10 @@ pub static OPCODE_INFO: [OpCodeInfo; OpCode::COUNT] = [
     OpCodeInfo::new(1, 1, 2, OpFormat::None),
     // DefineField
     OpCodeInfo::new(3, 2, 1, OpFormat::Const16),
-    // DefineGetter
-    OpCodeInfo::new(3, 2, 1, OpFormat::Const16),
-    // DefineSetter
-    OpCodeInfo::new(3, 2, 1, OpFormat::Const16),
+    // GetFieldDyn
+    OpCodeInfo::new(1, 2, 1, OpFormat::None),
+    // PutFieldDyn
+    OpCodeInfo::new(1, 3, 0, OpFormat::None),
     // SetProto
     OpCodeInfo::new(1, 2, 1, OpFormat::None),
     // GetLoc

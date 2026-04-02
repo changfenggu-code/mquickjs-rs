@@ -1,0 +1,47 @@
+# tier|script_name|display_name
+
+0|method_chain|method_chain 5k
+0|runtime_string_pressure|runtime_string_pressure 4k
+0|for_of_array|for_of_array 20k
+0|deep_property|deep_property 200k
+
+1|fib_iter|fib_iter 1k
+1|loop_10k|loop 10k
+1|array_push_10k|array push 10k
+1|object_create_1k|object create 1k
+1|closure_1k|closure 1k
+1|string_concat_1k|string concat 1k
+1|json_parse_property_read|json parse property read 1k
+1|json_parse_only|json parse only 1k
+1|sieve_10k|sieve 10k
+
+2|string_concat_local_update_only|string local update only 1k
+2|string_concat_ephemeral|string concat ephemeral 1k
+2|try_catch|try_catch 5k
+2|for_in_object|for_in_object 20x2000
+2|switch_1k|switch 1k
+2|do_while_10k|do...while 10k
+2|recursion_100x100|recursion 100x100
+2|math_max_3arg_10k|math max 3arg 10k
+2|gc_transient_arrays_2500|gc transient arrays 2500
+
+3|dense_array_bool_read_branch_10k|dense array bool read branch 10k
+3|dense_array_false_write_only_10k|dense array false write only 10k
+3|dense_array_bool_read_hot|dense array bool read hot
+3|dense_array_bool_condition_only_hot|dense array bool condition only hot
+3|dense_array_bool_condition_only_hot_arg0|dense array bool condition only hot arg0
+3|dense_array_bool_condition_only_hot_local1|dense array bool condition only hot local1
+3|dense_array_read_only_hot|dense array read only hot
+3|dense_array_read_only_hot_arg0|dense array read only hot arg0
+3|dense_array_read_only_hot_local1|dense array read only hot local1
+3|dense_array_loop_only_hot|dense array loop only hot
+3|dense_array_false_write_then_read_hot|dense array false write then read hot
+
+4|fib|fib
+4|loop|loop
+4|array|array
+4|object|object
+4|closure|closure
+4|string|string
+4|sieve|sieve
+4|switch_case|switch_case

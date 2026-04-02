@@ -260,17 +260,21 @@ fn test_compile_append_const_string_to_loc0_specialization() {
 }
 
 #[test]
-fn test_compile_put_array_false_drop_specialization() {
-    let source = "var arr = [true]; arr[0] = false;";
-    let func = Compiler::new(source).compile().unwrap();
-    assert!(func.bytecode.contains(&(OpCode::PutArrayElFalseDrop as u8)));
-}
+fn test_compile_bracket_access_uses_dynamic_opcodes() {
+    // Bracket notation now uses dynamic field opcodes (works for both arrays and objects)
+    let source_read = "var arr = [1]; arr[0];";
+    let func_read = Compiler::new(source_read).compile().unwrap();
+    assert!(
+        func_read.bytecode.contains(&(OpCode::GetFieldDyn as u8)),
+        "bracket read should use GetFieldDyn"
+    );
 
-#[test]
-fn test_compile_discarded_array_read_specialization() {
-    let source = "var arr = [1]; arr[0];";
-    let func = Compiler::new(source).compile().unwrap();
-    assert!(func.bytecode.contains(&(OpCode::GetArrayElDiscard as u8)));
+    let source_write = "var arr = [true]; arr[0] = false;";
+    let func_write = Compiler::new(source_write).compile().unwrap();
+    assert!(
+        func_write.bytecode.contains(&(OpCode::PutFieldDyn as u8)),
+        "bracket write should use PutFieldDyn"
+    );
 }
 
 #[test]

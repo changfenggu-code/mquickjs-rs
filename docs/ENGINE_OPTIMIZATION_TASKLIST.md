@@ -1093,7 +1093,7 @@ This optimization task list is considered substantially complete when:
     - treat `switch_case` as frozen unless a new switch-specific hotspot shape appears.
 - 2026-03-21 diagnostic follow-up:
   - `fib_iter` and `switch_case` are now wired into the local bytecode/hotspot tools:
-    - `benches/scripts/fib_iter.js`
+    - `benches/workloads/fib_iter.js`
     - `src/bin/dump_bytecode.rs`
     - `src/bin/profile_hotspots.rs`
   - current hotspot snapshots on the stable tree show:
@@ -1178,3 +1178,4 @@ This optimization task list is considered substantially complete when:
     - it still sits materially above its earlier best execution-focused local tier,
       while the just-closed `fib_iter` and `loop` / `sieve` lines are now in much
       healthier ranges.
+
